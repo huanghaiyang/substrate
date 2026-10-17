@@ -3,12 +3,42 @@ import { reactive, markRaw } from 'vue'
 import { NODE_MAP, defaultParams, resolveParams } from './nodes/index.js'
 import { buildDemo, DEMOS } from './demos.js'
 import { PAINT_SIZE, createPaintCanvas, rasterizeAll } from './paint.js'
+import { BRUSHES, DEFAULT_BRUSH_ID } from './brushes.js'
 import { hexToRgb } from './color.js'
 import { t, trNode, trLabel, trText, localizeDef } from '../i18n/index.js'
 
 let seq = 0
 const uid = (p) => `${p}-${(++seq).toString(36)}${Math.random().toString(36).slice(2, 6)}`
 const AUTOSAVE_KEY = 'substrate.autosave.v1'
+
+const BRUSH_STORAGE_KEY = 'substrate.brush'
+
+function loadSavedBrush() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(BRUSH_STORAGE_KEY) || 'null')
+    if (!raw || typeof raw !== 'object') return {}
+    const out = {}
+    if (typeof raw.brushId === 'string' && BRUSHES.some((b) => b.id === raw.brushId)) out.brushId = raw.brushId
+    if (typeof raw.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(raw.color)) out.color = raw.color
+    for (const key of ['size', 'opacity', 'hardness', 'flow', 'spacing']) {
+      if (raw[key] !== undefined && raw[key] !== null && Number.isFinite(Number(raw[key]))) out[key] = Number(raw[key])
+    }
+    for (const key of ['erase', 'symmetryX', 'symmetryY']) {
+      if (typeof raw[key] === 'boolean') out[key] = raw[key]
+    }
+    return out
+  } catch (e) {
+    return {}
+  }
+}
+
+export function savePaintBrush() {
+  try {
+    localStorage.setItem(BRUSH_STORAGE_KEY, JSON.stringify(state.paintBrush))
+  } catch (e) {
+    /* storage may be unavailable */
+  }
+}
 
 export const state = reactive({
   engine: null,
@@ -43,7 +73,11 @@ export const state = reactive({
     hardness: 0.7,
     erase: false,
     symmetryX: false,
-    symmetryY: false
+    symmetryY: false,
+    brushId: DEFAULT_BRUSH_ID,
+    flow: null,
+    spacing: null,
+    ...loadSavedBrush()
   },
   showMaps: false,
   mode: 'graph', // graph | paint

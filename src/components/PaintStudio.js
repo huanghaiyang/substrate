@@ -6,9 +6,11 @@ import {
   commitStroke,
   clearPaint,
   undo,
-  requestEval
+  requestEval,
+  savePaintBrush
 } from '../engine/store.js'
 import { drawStroke } from '../engine/paint.js'
+import { BRUSHES, brushById, brushPreview } from '../engine/brushes.js'
 import { trNode } from '../i18n/index.js'
 
 export default defineComponent({
@@ -20,7 +22,33 @@ export default defineComponent({
     const wrapRef = ref(null)
     const cursor = ref(null)
     const brush = state.paintBrush
+    const brushes = BRUSHES
     const node = computed(() => nodeById(props.nodeId))
+    const currentBrush = computed(() => brushById(brush.brushId))
+    const brushValue = (key) => {
+      const v = brush[key]
+      return v === undefined || v === null ? currentBrush.value[key] : v
+    }
+    const thumbCache = new Map()
+    function brushThumbFor(b) {
+      if (!thumbCache.has(b.id)) thumbCache.set(b.id, brushPreview(b))
+      return thumbCache.get(b.id)
+    }
+    function selectBrush(b) {
+      brush.brushId = b.id
+      brush.hardness = b.hardness
+      brush.flow = b.flow
+      brush.spacing = b.spacing
+    }
+    let brushSaveTimer = null
+    watch(
+      () => ({ ...brush }),
+      () => {
+        if (brushSaveTimer) clearTimeout(brushSaveTimer)
+        brushSaveTimer = setTimeout(savePaintBrush, 250)
+      },
+      { deep: true }
+    )
     const title = computed(() => node.value?.data?.title || trNode('Paint Layer'))
     const strokes = computed(() => node.value?.data?.strokes || [])
     let painting = false
@@ -82,7 +110,10 @@ export default defineComponent({
         color: brush.color,
         size: brush.size,
         opacity: brush.opacity,
-        hardness: brush.hardness,
+        hardness: brushValue('hardness'),
+        flow: brushValue('flow'),
+        spacing: brushValue('spacing'),
+        brushId: brush.brushId,
         erase: brush.erase,
         symmetry: { x: brush.symmetryX, y: brush.symmetryY },
         points: []
@@ -167,6 +198,11 @@ export default defineComponent({
       wrapRef,
       cursor,
       brush,
+      brushes,
+      currentBrush,
+      brushThumbFor,
+      selectBrush,
+      brushValue,
       node,
       title,
       strokes,
@@ -196,6 +232,23 @@ export default defineComponent({
       <div class="paint-main" @pointermove="onMove" @pointerup="onUp">
         <div class="paint-tools">
           <div class="brush-preview"><div class="brush-dot" :style="brushDotStyle"></div></div>
+          <div class="brush-head">
+            <span>{{ $t('paint.brushes') }}</span>
+            <span class="dim small">{{ $t(currentBrush.nameKey) }}</span>
+          </div>
+          <div class="brush-grid">
+            <button
+              v-for="b in brushes"
+              :key="b.id"
+              class="brush-item"
+              :class="{ on: brush.brushId === b.id }"
+              :title="$t(b.nameKey)"
+              @click="selectBrush(b)"
+            >
+              <img :src="brushThumbFor(b)" alt="" draggable="false" />
+              <span>{{ $t(b.nameKey) }}</span>
+            </button>
+          </div>
           <div class="param">
             <div class="param-label"><span>{{ $t('paint.color') }}</span><span class="val">{{ brush.color }}</span></div>
             <div class="param-row">
@@ -216,6 +269,14 @@ export default defineComponent({
           <div class="param">
             <div class="param-label"><span>{{ $t('paint.hardness') }}</span><span class="val">{{ brush.hardness.toFixed(2) }}</span></div>
             <input type="range" min="0" max="0.98" step="0.01" v-model.number="brush.hardness" style="width: 100%" />
+          </div>
+          <div class="param">
+            <div class="param-label"><span>{{ $t('paint.flow') }}</span><span class="val">{{ brushValue('flow').toFixed(2) }}</span></div>
+            <input type="range" min="0.02" max="1" step="0.01" :value="brushValue('flow')" @input="brush.flow = Number($event.target.value)" style="width: 100%" />
+          </div>
+          <div class="param">
+            <div class="param-label"><span>{{ $t('paint.spacing') }}</span><span class="val">{{ brushValue('spacing').toFixed(2) }}</span></div>
+            <input type="range" min="0.02" max="0.5" step="0.005" :value="brushValue('spacing')" @input="brush.spacing = Number($event.target.value)" style="width: 100%" />
           </div>
           <div class="param">
             <div class="param-label"><span>{{ $t('paint.symmetry') }}</span></div>

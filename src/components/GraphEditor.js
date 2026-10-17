@@ -173,7 +173,8 @@ export default defineComponent({
       const x1 = node.x + W
       const y1 = node.y + outputYRel(node)
       inter = { kind: 'link', fromNode: node.id, x1, y1 }
-      rubber.value = { d: bezier(x1, y1, start.x, start.y) }
+      const end = { x: start.x + OFFSET, y: start.y + OFFSET }
+      rubber.value = { d: bezier(x1 + OFFSET, y1 + OFFSET, end.x, end.y), ex: end.x, ey: end.y }
       listen()
     }
 
@@ -210,9 +211,9 @@ export default defineComponent({
         }
       } else if (inter.kind === 'link') {
         const to = toWorld(e.clientX, e.clientY)
-        rubber.value = { d: bezier(inter.x1, inter.y1, to.x, to.y) }
         // geometric hit test on input ports
         let hit = null
+        let snap = null
         for (const node of state.graph.nodes) {
           const def = defOf(node)
           if (!def) continue
@@ -222,10 +223,18 @@ export default defineComponent({
             const d = Math.hypot(ix - to.x, iy - to.y)
             if (d < 26 / view.scale + 10) {
               hit = node.id + ':' + def.inputs[i].name
+              snap = { x: ix + OFFSET, y: iy + OFFSET }
               break
             }
           }
           if (hit) break
+        }
+        const end = snap || { x: to.x + OFFSET, y: to.y + OFFSET }
+        rubber.value = {
+          d: bezier(inter.x1 + OFFSET, inter.y1 + OFFSET, end.x, end.y),
+          ex: end.x,
+          ey: end.y,
+          snapped: !!snap
         }
         hoverInput.value = hit
       }
@@ -465,6 +474,7 @@ export default defineComponent({
             <path class="edge" :class="{ selected: e.selected }" :d="e.d" @pointerdown.stop="selectEdge(e.id)"></path>
           </g>
           <path v-if="rubber" class="edge rubber" :d="rubber.d"></path>
+      <circle v-if="rubber" class="rubber-dot" :class="{ snapped: rubber.snapped }" :cx="rubber.ex" :cy="rubber.ey" r="4.5"></circle>
         </svg>
 
         <div

@@ -11,13 +11,16 @@ paint on them by hand, preview the result as a lit 3D material, and export an in
 
 ## Highlights
 
-- **Node graph editor** — pan/zoom canvas, drag-to-connect, marquee select, undo/redo, node thumbnails rendered
-  from the actual GPU result, right-click node creation with search.
+- **Node graph editor** — pan/zoom canvas, drag-to-connect with a live **curved link preview that snaps to input
+  ports**, marquee select, undo/redo, node thumbnails rendered from the actual GPU result, right-click node creation
+  with search.
 - **36 GPU nodes** — tileable fBm Perlin, Worley/cellular, grunge, patterns, SDF shapes, gradients, blurs, warps,
   normal/AO/curvature generators, blend modes, channel packing helpers.
-- **Hand painting** — a real Paint Studio with pressure-sensitive brushes, hardness/opacity/size, eraser, fill,
-  X/Y symmetry, stroke-level undo. Paint is rasterised to a canvas texture and composited through the node graph,
-  so painted strokes can drive base colour, roughness, height, masks — anything.
+- **Hand painting** — a real Paint Studio with **10 built-in brushes** (soft/hard round, pencil, ink, airbrush,
+  marker, chalk, spray, sponge, flat) driven by grain, scatter, flow and spacing, plus pressure-sensitive size/flow,
+  hardness/opacity, eraser, fill, X/Y symmetry and stroke-level undo. The chosen brush and its settings are
+  remembered between sessions. Paint is rasterised to a canvas texture and composited through the node graph, so
+  painted strokes can drive base colour, roughness, height, masks — anything.
 - **Live PBR preview** — Three.js `MeshStandardMaterial` with procedural IBL, ACES tone mapping, five preview
   meshes, tiling, displacement and auto-spin.
 - **2D channel inspection** — all eight PBR channels with colour-space labels, one-click full-size zoom.
@@ -68,7 +71,7 @@ PORT=3001 npm start  # custom port
 ```
 
 The first launch loads a built-in demo material in the browser language (add `?lang=zh` or `?lang=en` to force one).
-Press **? → Run self-test** at any time to execute the built-in 2,220-check audit.
+Press **? → Run self-test** at any time to execute the built-in 2,227-check audit.
 Edit, paint, export — everything is persisted to the browser (local autosave) and can be saved as named projects
 on the Node server.
 
@@ -86,8 +89,11 @@ preference the UI follows `navigator.language`. Switching is instant and does no
 ### Graph editing
 
 - **Add nodes** — click an entry in the Node Library, or right-click the canvas for the searchable quick-add menu.
-- **Connect** — drag from a node's right-hand port onto an input dot. Connections are type-less RGBA streams;
+- **Connect** — drag from a node's right-hand port onto an input dot. While dragging, a curved preview link follows
+  the cursor and snaps to the nearest input port (with an endpoint marker). Connections are type-less RGBA streams;
   every node returns a linear-light RGBA texture.
+
+![Live curved connection preview](docs/screenshots/09-connection-curve.png)
 - **Select / move** — click, shift-click, or marquee-drag on empty canvas. Drag nodes to rearrange.
 - **Delete** — `Del` removes selected nodes or a selected link. Right-click a node for duplicate/disconnect/delete.
 - **Undo / redo** — `Ctrl/Cmd+Z`, `Ctrl/Cmd+Shift+Z` (also in the toolbar).
@@ -101,8 +107,14 @@ colour pickers, 2D vectors, and a multi-stop gradient editor (click the ramp to 
 
 Double-click a **Paint Layer** node (or select it and press *Open Paint Studio*).
 
-- Brush colour, size, opacity, hardness, eraser, and X/Y mirror symmetry.
-- Pen pressure (Pointer Events `pressure`) modulates brush size and opacity.
+- **Brush library** — ten built-in presets with distinct character:
+  *Soft Round* (airbrush falloff), *Hard Round*, *Pencil* (grainy, pressure-driven), *Ink* (tight, opaque),
+  *Airbrush* (low flow, builds up slowly), *Marker* (angled flat head), *Chalk* (heavy grain + scatter),
+  *Spray* (scattered droplets), *Sponge* (sparse porous texture) and *Flat Brush*.
+- **Brush dynamics** — size, opacity, hardness, **flow** and **spacing** are adjustable per brush; grain, scatter and
+  stamp shape come from the preset. All brushes respond to pressure for size/flow where appropriate.
+- The selected brush, its settings and colour are persisted in the browser and restored next time you paint.
+- Eraser (destination-out), fill, and X/Y mirror symmetry work with every brush.
 - Strokes are stored as data, rasterised at 1024², uploaded as a texture, and composited into the node stream;
   downstream maps and the 3D preview update live.
 - Keep strokes inside the canvas border — the paint texture is sampled with wrap for seamless tiling.
@@ -141,6 +153,8 @@ per-file downloads, the zip, and copyable manifest/README text.
 │  engine/png.js        PNG encoder: 8/16-bit, grey/RGB/RGBA, adaptive row filters, sRGB     │
 │  engine/exporter.js   channel packing, PNG planning, manifest/README generation            │
 │  engine/selftest.js   shader audit + graph/normal/seam validation + export test            │
+│  engine/paint.js       brush stamp rasteriser (spacing / grain / scatter / symmetry)          │
+│  engine/brushes.js     built-in brush presets + preview thumbnails                        │
 │  engine/webmcp.js     WebMCP tool surface for agent-driven verification                    │
 │  i18n/                bilingual UI catalogue + localized node/parameter definitions         │
 └───────────────────────────────────────────┬───────────────────────────────────────────────┘
@@ -318,7 +332,7 @@ wrapped-edge seam ratios, manifest structure, README sections, and every zip ent
 Latest run after the audit fixes: **4/4 demo packages passed** (all PNGs CRC-valid, correct colour spaces,
 seam ratios well below 1.0 with the percentile metric, clean zip entries each).
 
-### 3. Full application audit (2,220 checks + 89 opt-in UI checks)
+### 3. Full application audit (2,227 checks + 100 opt-in UI checks)
 
 `src/engine/audit.js` is a browser-side test harness that exercises the whole product, not just exports:
 
@@ -330,18 +344,18 @@ seam ratios well below 1.0 with the percentile metric, clean zip entries each).
 | **actions** | add every node type, delete/duplicate/undo/redo, cycle rejection, output uniqueness, parameter coalescing, move/rename, resolution & proxy switching, loading all demos, project save/load/delete (including non-ASCII names), image input round-trip, paint stroke/undo/clear, all five export presets, DirectX normal flip, 16-bit height and alpha plans |
 | **dom** | real UI interactions: palette search (EN+ZH), palette add, graph context menu, node context menu, node drag + undo, marquee selection, Delete/Undo/Redo keys, help/projects/export dialogs, demo dropdown, map zoom, preview shape & sliders, Paint Studio drawing + undo, language switching, New button, console-error watch. Includes live-preview regression tests: the 3D material and the 2D map panel must refresh on demo switches and on parameter edits |
 | **i18n** | EN/ZH key parity, node/parameter/option dictionary coverage, runtime language switching, raw-key/missing-key scans |
-| **ui** *(opt-in)* | 89 deep toolbar + right-panel checks: project-name edit, New, all four demo switches, save/open round-trip, undo/redo buttons, resolution & proxy selects, help dialog, language switch, export dialog defaults/height toggle/real export; preview shapes, tiling & displacement sliders, pause/reset, badge, 8 map cards + normal-convention note + zoom, inspector widgets (slider↔number, bool, gradient add/remove stops), Paint Studio open/close and live thumbnail |
+| **ui** *(opt-in)* | 100 deep toolbar/right-panel/paint checks: project-name edit, New, all four demo switches, save/open round-trip, undo/redo buttons, resolution & proxy selects, help dialog, language switch, export dialog defaults/height toggle/real export; preview shapes, tiling & displacement sliders, pause/reset, badge, 8 map cards + normal-convention note + zoom, inspector widgets (slider↔number, bool, gradient add/remove stops), Paint Studio open/close, brush library (10 presets, unique thumbnails, per-brush rendering coverage, stroke records the preset, brush persistence, eraser, flow/spacing sliders) and live thumbnail |
 
 Run it either from the in-app help dialog (**Run self-test**), with the URL, or from the command line:
 
 ```bash
-node scripts/cdp.mjs audit all        # or: npm run audit   (2,220 checks, ~40 s)
-npm run audit:ui                      # deep toolbar/right-panel pass (89 checks)
+node scripts/cdp.mjs audit all        # or: npm run audit   (2,227 checks, ~40 s)
+npm run audit:ui                      # deep toolbar/right-panel/paint pass (100 checks)
 npm run audit:quick                   # schema only
 ```
 
-It prints a per-section PASS/FAIL summary and returns a non-zero exit code on failure. Latest run: **2,220 checks, 0 failures**
-(schema 1,278 · render 628 · values 46 · actions 198 · dom 53 · i18n 17), plus the opt-in UI pass (89 checks). The same run is available as
+It prints a per-section PASS/FAIL summary and returns a non-zero exit code on failure. Latest run: **2,227 checks, 0 failures**
+(schema 1,278 · render 628 · values 46 · actions 198 · dom 56 · i18n 21), plus the opt-in UI pass (100 checks). The same run is available as
 `?audit=1` (all sections), `?audit=1&auditsection=render` or `?audit=1&auditsection=ui`, with the report available as `window.__AUDIT__`
 and POSTed to `/api/debug/report` for CI.
 
@@ -400,8 +414,11 @@ src/engine/demos.js        three authored demo graphs + paint strokes
 src/engine/png.js          PNG encoder (adaptive filters, 8/16-bit)
 src/engine/exporter.js     presets, channel packing, manifest/README
 src/engine/selftest.js     automated pipeline validation
+src/engine/paint.js        brush stamp rasteriser (spacing, grain, scatter, symmetry)
+src/engine/brushes.js      10 built-in brush presets + preview thumbnails
 src/engine/webmcp.js       WebMCP tool registration
 src/engine/audit.js        browser-side full audit: nodes, values, actions, DOM, i18n
+src/engine/ui-check.js     deep toolbar / right panel / paint interaction checks
 exports/                   generated material packages (git-ignored; produced by Export)
 docs/screenshots/          documentation images
 ```

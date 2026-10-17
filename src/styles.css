@@ -1547,3 +1547,73 @@ code {
 .lang-switch button:hover { color: var(--text); background: var(--bg3); }
 .lang-switch button.on { background: var(--accent); color: #14171c; }
 .lang-switch button + button { border-left: 1px solid var(--line); }
+
+.rubber-dot {
+  fill: var(--blue);
+  stroke: #0d0f13;
+  stroke-width: 1.5;
+  pointer-events: none;
+}
+.rubber-dot.snapped {
+  fill: var(--accent);
+  r: 6;
+}
+
+/* ---- built-in brush picker ---- */
+.brush-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 9px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin: 8px 0 5px;
+}
+.brush-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 2px;
+  margin-bottom: 10px;
+}
+.brush-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 5px 4px 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg1);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 9.5px;
+  transition: border-color 0.12s, background 0.12s, color 0.12s;
+}
+.brush-item img {
+  width: 40px;
+  height: 40px;
+  border-radius: 4px;
+  background: radial-gradient(circle at 50% 50%, var(--bg3), var(--bg1));
+  pointer-events: none;
+}
+.brush-item span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.brush-item:hover {
+  border-color: var(--line);
+  background: var(--bg2);
+  color: var(--text);
+}
+.brush-item.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}

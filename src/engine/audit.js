@@ -1133,6 +1133,32 @@ async function auditDom(ctx) {
       ctx.add('dom: ctrl+z undo drag', state.graph.nodes[0].x === x0, `${state.graph.nodes[0].x} vs ${x0}`)
     }
 
+    // connection rubber-band curve must be visible on screen while dragging
+    try {
+      const outPort = q('.gnode .port.output')
+      if (outPort) {
+        const pr = outPort.getBoundingClientRect()
+        const cx = pr.left + pr.width / 2
+        const cy = pr.top + pr.height / 2
+        outPort.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy, pointerId: 21, button: 0, buttons: 1 }))
+        await sleepMs(120)
+        window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: cx + 180, clientY: cy + 140, pointerId: 21, buttons: 1 }))
+        await sleepMs(180)
+        const rub = q('.edge.rubber')
+        const dot = q('.rubber-dot')
+        const rb = rub ? rub.getBoundingClientRect() : null
+        const gr = q('.graph').getBoundingClientRect()
+        const onScreen = rb && rb.width > 5 && rb.height > 5 && rb.right > gr.left && rb.left < gr.right && rb.bottom > gr.top && rb.top < gr.bottom
+        ctx.add('dom: connection curve visible while dragging', !!rub && !!rb && onScreen, rub ? JSON.stringify({ w: Math.round(rb.width), h: Math.round(rb.height), graph: [Math.round(gr.left), Math.round(gr.top)] }) : 'no rubber path')
+        ctx.add('dom: connection curve endpoint dot', !!dot, 'no endpoint dot')
+        window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, clientX: cx + 180, clientY: cy + 140, pointerId: 21, buttons: 0 }))
+        await sleepMs(200)
+        ctx.add('dom: connection curve cleared on release', !q('.edge.rubber'))
+      }
+    } catch (e) {
+      ctx.add('dom: connection curve visible while dragging', false, e?.message || String(e))
+    }
+
     // marquee selection
     const graphEl = q('.graph')
     const gb = graphEl.getBoundingClientRect()

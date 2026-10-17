@@ -18,8 +18,13 @@ async function getTargets() {
 function pickTarget(targets, targetId) {
   const pages = targets.filter((t) => t.type === 'page' && t.webSocketDebuggerUrl)
   if (targetId) return pages.find((t) => t.id === targetId) || pages[0]
-  const substrate = pages.find((t) => (t.url || '').includes('127.0.0.1:3000'))
-  return substrate || pages[0]
+  // never grab an unrelated page: prefer the Substrate app tab (dev or dist server), then by title
+  return (
+    pages.find((t) => /:3000\//.test(t.url || '')) ||
+    pages.find((t) => /:3001\//.test(t.url || '')) ||
+    pages.find((t) => /Substrate|程序化贴图/.test(t.title || '')) ||
+    pages[0]
+  )
 }
 
 function connect(wsUrl, onEvent) {

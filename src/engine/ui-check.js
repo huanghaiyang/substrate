@@ -406,6 +406,67 @@ export async function runUiCheck() {
     await sleep(600)
     r.add('right: paint studio opens from inspector', !!q('.paint-studio'))
     if (q('.paint-studio')) {
+      // ---- built-in brushes ----
+      const brushItems = qa('.brush-item')
+      r.add('paint: brush library lists 10 presets', brushItems.length === 10, String(brushItems.length))
+      const thumbUrls = brushItems.map((b) => b.querySelector('img')?.src).filter(Boolean)
+      r.add('paint: brush thumbnails render', thumbUrls.length === brushItems.length && new Set(thumbUrls).size === brushItems.length, `${thumbUrls.length} thumbs, ${new Set(thumbUrls).size} unique`)
+      const paintNodeB = state.graph.nodes.find((n) => n.type === 'paint')
+      const strokeCount0 = (paintNodeB.data.strokes || []).length
+      const canvasB = q('.paint-canvas')
+      const rr = canvasB.getBoundingClientRect()
+      const pev = (type, x, y) => canvasB.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, pointerId: 31, pressure: 0.85, buttons: 1 }))
+      for (const item of brushItems) {
+        const id = item.getAttribute('title') ? null : null
+        click(item)
+        await sleep(120)
+        const selId = state.paintBrush.brushId
+        const name = item.querySelector('span')?.textContent || ''
+        if (!selId) r.add('paint: brush selection ' + name, false, 'no brushId')
+      }
+      r.add('paint: brush selection changes state', !!state.paintBrush.brushId, String(state.paintBrush.brushId))
+      // draw with the chalk brush (select by its position in the list: id order matches BRUSHES)
+      click(brushItems[6])
+      await sleep(150)
+      r.add('paint: chalk selected', state.paintBrush.brushId === 'chalk', state.paintBrush.brushId)
+      pev('pointerdown', rr.left + rr.width * 0.35, rr.top + rr.height * 0.4)
+      pev('pointermove', rr.left + rr.width * 0.5, rr.top + rr.height * 0.45)
+      pev('pointerup', rr.left + rr.width * 0.5, rr.top + rr.height * 0.45)
+      await sleep(500)
+      const strokesB = nodeById(paintNodeB.id).data.strokes || []
+      const lastB = strokesB[strokesB.length - 1]
+      r.add('paint: stroke records brush preset', lastB?.brushId === 'chalk', JSON.stringify({ brushId: lastB?.brushId, flow: lastB?.flow, spacing: lastB?.spacing }))
+      r.add('paint: stroke committed', strokesB.length === strokeCount0 + 1, `${strokesB.length} vs ${strokeCount0 + 1}`)
+      const savedBrush = (() => { try { return JSON.parse(localStorage.getItem('substrate.brush') || 'null') } catch (e) { return null } })()
+      r.add('paint: brush setting persisted', savedBrush && savedBrush.brushId === 'chalk', JSON.stringify(savedBrush))
+      // brush rasterisation characteristics (headless canvas)
+      const { drawStroke } = await import('../engine/paint.js')
+      const { BRUSHES, brushPreview } = await import('../engine/brushes.js')
+      const coverage = (opts) => {
+        const c = document.createElement('canvas')
+        c.width = c.height = 96
+        const cx2 = c.getContext('2d')
+        drawStroke(cx2, { color: '#ffffff', size: 30, opacity: 1, brushId: 'hard-round', symmetry: {}, points: [{ x: 0.2, y: 0.5, p: 1 }, { x: 0.8, y: 0.5, p: 1 }], ...opts }, 96, 96)
+        const d = cx2.getImageData(0, 0, 96, 96).data
+        let sum = 0
+        for (let i = 3; i < d.length; i += 4) sum += d[i]
+        return sum / (96 * 96 * 255)
+      }
+      const perBrush = BRUSHES.map((b) => coverage({ brushId: b.id }))
+      r.add('paint: every brush renders', perBrush.every((v) => v > 0.01), JSON.stringify(perBrush.map((v) => +v.toFixed(3))))
+      r.add('paint: every brush differs', new Set(perBrush.map((v) => v.toFixed(3))).size >= 7, JSON.stringify(perBrush.map((v) => +v.toFixed(3))))
+      r.add('paint: brush previews unique', new Set(BRUSHES.map((b) => brushPreview(b))).size === BRUSHES.length)
+      // eraser removes coverage
+      const c3 = document.createElement('canvas')
+      c3.width = c3.height = 96
+      const cx3 = c3.getContext('2d')
+      cx3.fillStyle = '#fff'
+      cx3.fillRect(0, 0, 96, 96)
+      drawStroke(cx3, { color: '#000', size: 24, opacity: 1, brushId: 'hard-round', erase: true, symmetry: {}, points: [{ x: 0.2, y: 0.5, p: 1 }, { x: 0.8, y: 0.5, p: 1 }] }, 96, 96)
+      const d3 = cx3.getImageData(0, 0, 96, 96).data
+      let transparent = 0
+      for (let i = 3; i < d3.length; i += 4) if (d3[i] === 0) transparent++
+      r.add('paint: eraser removes pixels', transparent > 100, String(transparent))
       const liveImg = q('.paint-side img')
       r.add('right: paint live thumb', !!liveImg && !!liveImg.src)
       click(qa('.paint-head .btn').find((b) => /Graph|节点图/.test(b.textContent)))
