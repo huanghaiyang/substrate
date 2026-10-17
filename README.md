@@ -32,7 +32,25 @@ paint on them by hand, preview the result as a lit 3D material, and export an in
 
 ---
 
-## Quick start
+## Bilingual UI / 双语界面
+
+The whole interface is available in **English** and **简体中文** — switch with the `EN / 中文` control in the
+top bar, or with `?lang=zh` / `?lang=en` in the URL. The choice is remembered in the browser; on first launch the
+UI follows the browser language.
+
+Node names, node descriptions, parameter labels, select-menu options, tooltips, status bar, history actions,
+dialogs, error messages and the help text are all translated. Your data (project name, material name, custom node
+titles) is never rewritten — material names are additionally kept ASCII-friendly for export file names.
+
+| 中文界面 · 节点图 | 中文界面 · 导出对话框 |
+| --- | --- |
+| ![中文节点图](docs/screenshots/05-zh-graph.png) | ![中文导出](docs/screenshots/08-zh-export.png) |
+
+![中文界面 · 2D 通道贴图](docs/screenshots/06-zh-maps.png)
+
+![中文界面 · 绘制工作室](docs/screenshots/07-zh-paint.png)
+
+---
 
 Requirements: **Node.js 18+** and a **WebGL2** browser (Chrome/Edge/Firefox/Safari 16+).
 
@@ -49,12 +67,19 @@ npm run serve:dist   # serve the built dist/ on port 3000
 PORT=3001 npm start  # custom port
 ```
 
-The first launch loads a built-in demo material. Edit, paint, export — everything is persisted to the browser
-(local autosave) and can be saved as named projects on the Node server.
+The first launch loads a built-in demo material in the browser language (add `?lang=zh` or `?lang=en` to force one).
+Edit, paint, export — everything is persisted to the browser (local autosave) and can be saved as named projects
+on the Node server.
 
 ---
 
 ## Using the app
+
+### Language / 语言
+
+Toggle **EN / 中文** in the top bar (or use `?lang=zh` / `?lang=en`). The setting is stored in `localStorage`;
+without a stored preference the UI follows `navigator.language`. Switching is instant and does not reload the page
+or touch the node graph.
 
 ### Graph editing
 
@@ -115,6 +140,7 @@ per-file downloads, the zip, and copyable manifest/README text.
 │  engine/exporter.js   channel packing, PNG planning, manifest/README generation            │
 │  engine/selftest.js   shader audit + graph/normal/seam validation + export test            │
 │  engine/webmcp.js     WebMCP tool surface for agent-driven verification                    │
+│  i18n/                bilingual UI catalogue + localized node/parameter definitions         │
 └───────────────────────────────────────────┬───────────────────────────────────────────────┘
                                             │ /api (JSON, base64 PNG payloads)
 ┌───────────────────────────────────────────▼───────────────────────────────────────────────┐
@@ -264,6 +290,16 @@ You can also run the same test through the page's **WebMCP** tools (registered o
 | `substrate_load_demo` | Switch between the built-in demos. |
 | `substrate_paint` | Add brush strokes programmatically and re-evaluate (painting pipeline test). |
 
+### URL parameters
+
+| Parameter | Purpose |
+| --- | --- |
+| `?lang=zh` / `?lang=en` | Force the interface language (also persisted). |
+| `?demo=<id>` | Load a demo: `weathered-steel`, `mossy-rock`, `painted-sign`, `blank`. |
+| `?fresh=1` | Skip session restore and load the default demo. |
+| `?selftest=1[&export=1][&res=512]` | Run the automated self-test (and export) on load. |
+| `?redact=1` | Hide the GPU/driver fingerprint in the status bar (used for documentation screenshots). |
+
 ### 2. Independent package verifier (Node)
 
 ```bash
@@ -320,6 +356,8 @@ scripts/cdp.mjs            Chrome DevTools Protocol helper (eval/screenshot/logs
 src/main.js                boot: mount app, create engine, restore session, self-test hook
 src/App.js                 layout, toolbar, dialogs, shortcuts, preview scheduling
 src/styles.css             dark studio theme
+src/i18n/                  bilingual UI: messages.js (UI strings), text.zh.js (node/param/option dictionary),
+                           index.js (locale state, t()/tr() helpers, localized node definitions)
 src/components/            GraphEditor, Inspector, NodePalette, Preview3D, MapPanel,
                            PaintStudio, ExportDialog, GradientEditor
 src/engine/engine.js       WebGL2 graph evaluator, caches, readback, thumbnails
@@ -339,6 +377,9 @@ docs/screenshots/          documentation images
 ---
 
 ## Limitations & possible next steps
+
+- **Export file names are ASCII.** Material names are sanitized for portable file names (non-ASCII characters are
+  dropped), so a Chinese material name exports as `Material_BaseColor.png`; the UI labels themselves are localized.
 
 - **WebGL2 + float render targets required.** Without `EXT_color_buffer_float` the engine falls back to 8-bit
   targets (visible warning in the status bar) and 16-bit height export is up-sampled from 8-bit.

@@ -167,7 +167,7 @@ export async function runExportTest(engine, opts = {}) {
     graph: state.graph,
     resolution,
     preset,
-    materialName: 'SelfTest_' + (demo || 'Material').replace(/[^A-Za-z0-9]/g, ''),
+    materialName: 'SelfTest_' + (String(demo || '').replace(/[^A-Za-z0-9]/g, '') || 'Material'),
     targetNormal: preset === 'unreal' || preset === 'unity' ? 'dx' : 'gl',
     height16: true,
     normalizeHeight: out?.params?.normalizeHeight !== false,

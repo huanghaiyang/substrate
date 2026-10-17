@@ -25,6 +25,7 @@ import {
 } from './engine/store.js'
 import { buildPreview } from './engine/preview.js'
 import { RESOLUTIONS, PROXIES } from './ui/theme.js'
+import { locale, locales, setLocale, t, trText } from './i18n/index.js'
 
 export default defineComponent({
   name: 'App',
@@ -49,28 +50,29 @@ export default defineComponent({
 
     function onPaletteAdd(type) {
       const node = graphRef.value?.addAtCenter(type)
-      if (!node) notify('Could not add node — only one PBR Output is allowed', 'error')
+      if (!node) notify(t('toast.addFail'), 'error')
     }
 
     function doNew() {
       newProject()
       nextTick(() => graphRef.value?.fit())
-      notify('New material created')
+      notify(t('toast.newMaterial'))
     }
 
     function doDemo(id) {
       loadDemo(id)
       showDemos.value = false
       nextTick(() => graphRef.value?.fit())
-      notify('Loaded demo: ' + (state.demos.find((d) => d.id === id)?.name || id))
+      const demo = state.demos.find((d) => d.id === id)
+      notify(t('toast.demoLoaded', { name: trText(demo?.name) || id }))
     }
 
     async function doSave() {
       try {
         const res = await saveProject(state.projectName)
-        notify('Saved projects/' + res.file)
+        notify(t('toast.saved', { file: res.file }))
       } catch (e) {
-        notify('Save failed: ' + e.message, 'error')
+        notify(t('toast.saveFail', { msg: e.message }), 'error')
       }
     }
 
@@ -90,9 +92,9 @@ export default defineComponent({
         await loadProject(name)
         showProjects.value = false
         nextTick(() => graphRef.value?.fit())
-        notify('Loaded ' + name)
+        notify(t('toast.loaded', { name }))
       } catch (e) {
-        notify('Load failed: ' + e.message, 'error')
+        notify(t('toast.loadFail', { msg: e.message }), 'error')
       }
     }
 
@@ -184,7 +186,7 @@ export default defineComponent({
 
     const selectedInfo = computed(() => {
       const n = nodeById(state.activeNodeId)
-      if (!n) return 'No selection'
+      if (!n) return t('status.noSelection')
       return defOf(n)?.name + ' · ' + n.id
     })
     const historyLabel = computed(() => state.historyLabel)
@@ -205,6 +207,9 @@ export default defineComponent({
       toast,
       RESOLUTIONS,
       PROXIES,
+      locale,
+      locales,
+      setLocale,
       selectedInfo,
       historyLabel,
       canvasSize,
@@ -229,36 +234,39 @@ export default defineComponent({
           <div class="brand-mark"></div>
           <div>
             <div class="brand-name">SUBSTRATE</div>
-            <div class="brand-sub">Procedural Texture Studio</div>
+            <div class="brand-sub">{{ $t('brand.sub') }}</div>
           </div>
         </div>
         <div class="divider"></div>
-        <input class="project-name" v-model="state.projectName" title="Material / project name" />
-        <button class="btn" @click="doNew">New</button>
+        <input class="project-name" v-model="state.projectName" :title="$t('top.projectName')" />
+        <button class="btn" @click="doNew">{{ $t('top.new') }}</button>
         <div class="dropdown">
-          <button class="btn" @click="showDemos = !showDemos">Demos ▾</button>
+          <button class="btn" @click="showDemos = !showDemos">{{ $t('top.demos') }} ▾</button>
           <div v-if="showDemos" class="dropdown-menu" @click.stop>
             <button v-for="d in state.demos" :key="d.id" class="dd-item" @click="doDemo(d.id)">
-              <span class="dd-name">{{ d.name }}</span>
-              <span class="dd-desc">{{ d.desc }}</span>
+              <span class="dd-name">{{ $tr(d.name) }}</span>
+              <span class="dd-desc">{{ $tr(d.desc) }}</span>
             </button>
           </div>
         </div>
-        <button class="btn" @click="doSave" title="Save project (Ctrl+S)">Save</button>
-        <button class="btn" @click="openProjects">Open</button>
+        <button class="btn" @click="doSave" :title="$t('top.saveTitle')">{{ $t('top.save') }}</button>
+        <button class="btn" @click="openProjects">{{ $t('top.open') }}</button>
         <div class="divider"></div>
-        <button class="icon-btn" title="Undo (Ctrl+Z)" @click="undo">↺</button>
-        <button class="icon-btn" title="Redo (Ctrl+Shift+Z)" @click="redo">↻</button>
+        <button class="icon-btn" :title="$t('top.undo')" @click="undo">↺</button>
+        <button class="icon-btn" :title="$t('top.redo')" @click="redo">↻</button>
         <div class="divider"></div>
-        <select class="top-select" :value="state.resolution" @change="onResolution" title="Document resolution">
+        <select class="top-select" :value="state.resolution" @change="onResolution" :title="$t('top.resolution')">
           <option v-for="r in RESOLUTIONS" :key="r" :value="r">{{ r }}²</option>
         </select>
-        <select class="top-select" :value="state.proxy" @change="onProxy" title="Proxy resolution while editing">
-          <option v-for="p in PROXIES" :key="p.value" :value="p.value">Proxy {{ p.label }}</option>
+        <select class="top-select" :value="state.proxy" @change="onProxy" :title="$t('top.proxy')">
+          <option v-for="p in PROXIES" :key="p.value" :value="p.value">{{ $t('top.proxyValue', { p: p.label }) }}</option>
         </select>
         <div class="spacer"></div>
-        <button class="icon-btn" title="Shortcuts & help" @click="showHelp = true">?</button>
-        <button class="btn primary" @click="showExport = true">Export Material</button>
+        <div class="lang-switch" :title="$t('lang.label')">
+          <button v-for="l in locales" :key="l.id" :class="{ on: locale.value === l.id }" @click="setLocale(l.id)">{{ l.label }}</button>
+        </div>
+        <button class="icon-btn" :title="$t('top.help')" @click="showHelp = true">?</button>
+        <button class="btn primary" @click="showExport = true">{{ $t('top.export') }}</button>
       </header>
 
       <main class="workspace">
@@ -277,8 +285,8 @@ export default defineComponent({
         </section>
         <aside class="right-col">
           <div class="right-tabs">
-            <button :class="{ on: !state.showMaps }" @click="state.showMaps = false">3D View</button>
-            <button :class="{ on: state.showMaps }" @click="state.showMaps = true">2D Maps</button>
+            <button :class="{ on: !state.showMaps }" @click="state.showMaps = false">{{ $t('tabs.3d') }}</button>
+            <button :class="{ on: state.showMaps }" @click="state.showMaps = true">{{ $t('tabs.maps') }}</button>
             <span class="spacer"></span>
             <span class="chip">{{ canvasSize }}</span>
           </div>
@@ -289,10 +297,10 @@ export default defineComponent({
       </main>
 
       <footer class="statusbar">
-        <span :class="state.engine ? 'ok' : 'err'">{{ state.engine ? '● GPU' : '○ GPU offline' }}</span>
-        <span>{{ state.engineInfo || 'initialising…' }}</span>
-        <span>{{ state.evalNodes }} nodes · {{ state.evalPasses }} passes · {{ state.lastEvalMs.toFixed(1) }} ms</span>
-        <span>cache {{ state.cacheHits }} hits</span>
+        <span :class="state.engine ? 'ok' : 'err'">{{ state.engine ? $t('status.gpu') : $t('status.offline') }}</span>
+        <span>{{ state.engineInfo || $t('status.initialising') }}</span>
+        <span>{{ $t('status.eval', { nodes: state.evalNodes, passes: state.evalPasses, ms: state.lastEvalMs.toFixed(1) }) }}</span>
+        <span>{{ $t('status.cache', { n: state.cacheHits }) }}</span>
         <span>{{ historyLabel }}</span>
         <span class="spacer"></span>
         <span>{{ selectedInfo }}</span>
@@ -304,24 +312,24 @@ export default defineComponent({
       <div v-if="showProjects" class="modal-backdrop" @click.self="showProjects = false">
         <div class="modal">
           <div class="modal-head">
-            <div class="modal-title">Open Material</div>
+            <div class="modal-title">{{ $t('projects.title') }}</div>
             <button class="icon-btn" @click="showProjects = false">✕</button>
           </div>
           <div class="modal-body">
-            <div class="hint" style="margin-bottom: 10px">Projects are stored as JSON in the <code>projects/</code> folder on the Node server.</div>
+            <div class="hint" style="margin-bottom: 10px">{{ $t('projects.hint') }}</div>
             <div class="project-list">
-              <div v-if="loadingProjects" class="hint">Loading…</div>
-              <div v-else-if="!projects.length" class="hint">No saved projects yet — use Save to create one.</div>
+              <div v-if="loadingProjects" class="hint">{{ $t('projects.loading') }}</div>
+              <div v-else-if="!projects.length" class="hint">{{ $t('projects.empty') }}</div>
               <button v-for="p in projects" :key="p.file" class="project-row" @click="openProject(p.name)">
                 <span class="pr-name">{{ p.name }}</span>
-                <span class="pr-meta">{{ p.resolution }}² · {{ p.nodes }} nodes</span>
+                <span class="pr-meta">{{ $t('projects.meta', { res: p.resolution, nodes: p.nodes }) }}</span>
                 <span class="pr-meta">{{ new Date(p.savedAt).toLocaleString() }}</span>
               </button>
             </div>
           </div>
           <div class="modal-foot">
-            <span class="hint">Tip: the current session is auto-saved to your browser storage.</span>
-            <button class="btn" @click="showProjects = false">Close</button>
+            <span class="hint">{{ $t('projects.tip') }}</span>
+            <button class="btn" @click="showProjects = false">{{ $t('common.close') }}</button>
           </div>
         </div>
       </div>
@@ -329,36 +337,22 @@ export default defineComponent({
       <div v-if="showHelp" class="modal-backdrop" @click.self="showHelp = false">
         <div class="modal">
           <div class="modal-head">
-            <div class="modal-title">Workflow & Shortcuts</div>
+            <div class="modal-title">{{ $t('help.title') }}</div>
             <button class="icon-btn" @click="showHelp = false">✕</button>
           </div>
           <div class="modal-body">
-            <div class="side-title">Graph</div>
-            <div class="hint" style="line-height: 1.9">
-              Drag from a node's right port to an input to connect. Drag on empty canvas for a selection box.
-              Alt-drag or middle-drag pans, the wheel zooms, right-click adds nodes.
-              Right-click a node for duplicate / disconnect / delete.
-            </div>
-            <div class="side-title">Shortcuts</div>
-            <div class="hint" style="line-height: 1.9">
-              ⌘/Ctrl+Z undo · ⌘/Ctrl+Shift+Z redo · ⌘/Ctrl+D duplicate selection · Del delete ·
-              ⌘/Ctrl+S save · ⌘/Ctrl+E export · Esc leave paint studio / close dialogs
-            </div>
-            <div class="side-title">Painting</div>
-            <div class="hint" style="line-height: 1.9">
-              Double-click a Paint Layer node (or use its properties button) to open Paint Studio.
-              Brush colour, size, opacity, hardness and X/Y symmetry are stored per stroke, so undo works.
-            </div>
-            <div class="side-title">Standards</div>
-            <div class="hint" style="line-height: 1.9">
-              All processing happens in linear light on RGBA16F targets. Base colour and emissive are sRGB-encoded on
-              export; normal / roughness / metallic / AO / height stay linear. Export presets pack ORM (glTF/Unreal) and
-              Mask Map (Unity), with manifest.json + README.md describing colour spaces and normal convention.
-            </div>
+            <div class="side-title">{{ $t('help.graphTitle') }}</div>
+            <div class="hint" style="line-height: 1.9">{{ $t('help.graphBody') }}</div>
+            <div class="side-title">{{ $t('help.shortcutTitle') }}</div>
+            <div class="hint" style="line-height: 1.9">{{ $t('help.shortcutBody') }}</div>
+            <div class="side-title">{{ $t('help.paintTitle') }}</div>
+            <div class="hint" style="line-height: 1.9">{{ $t('help.paintBody') }}</div>
+            <div class="side-title">{{ $t('help.stdTitle') }}</div>
+            <div class="hint" style="line-height: 1.9">{{ $t('help.stdBody') }}</div>
           </div>
           <div class="modal-foot">
-            <span class="hint">Substrate 1.0 · Vue 3 + Three.js + Node (zero-bundler ESM)</span>
-            <button class="btn" @click="showHelp = false">Got it</button>
+            <span class="hint">{{ $t('help.foot') }}</span>
+            <button class="btn" @click="showHelp = false">{{ $t('help.ok') }}</button>
           </div>
         </div>
       </div>

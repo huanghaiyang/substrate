@@ -4,6 +4,7 @@ import { NODE_MAP, defaultParams, resolveParams } from './nodes/index.js'
 import { buildDemo, DEMOS } from './demos.js'
 import { PAINT_SIZE, createPaintCanvas, rasterizeAll } from './paint.js'
 import { hexToRgb } from './color.js'
+import { t, trNode, trLabel, trText, localizeDef } from '../i18n/index.js'
 
 let seq = 0
 const uid = (p) => `${p}-${(++seq).toString(36)}${Math.random().toString(36).slice(2, 6)}`
@@ -21,7 +22,7 @@ export const state = reactive({
   activePaintId: null,
   undoStack: [],
   redoStack: [],
-  historyLabel: 'New material',
+  historyLabel: t('history.new'),
   dirty: true,
   error: '',
   previewNonce: 0,
@@ -55,7 +56,7 @@ let coalesce = { key: '', at: 0 }
 
 // ------------------------------------------------------------------ helpers
 export function defOf(node) {
-  return node ? NODE_MAP[node.type] : null
+  return node ? localizeDef(NODE_MAP[node.type]) : null
 }
 export function nodeById(id) {
   return state.graph.nodes.find((n) => n.id === id)
@@ -79,7 +80,7 @@ export function setEngine(engine) {
     ? `WebGL2 · ${engine.isFloat ? 'RGBA16F' : '8-bit fallback'}`
     : `${rendererName}${engine.isFloat ? ' · RGBA16F' : ' · 8-bit fallback'}`
   if (!engine.isFloat) {
-    state.error = 'Floating point render targets unavailable — precision degraded. Enable hardware acceleration.'
+    state.error = t('error.floatTargets')
   }
 }
 export function setResolution(res) {
@@ -194,10 +195,10 @@ export function addNode(type, pos) {
   const def = NODE_MAP[type]
   if (!def) return null
   if (def.isOutput && outputNode()) {
-    state.error = 'Only one PBR Output node is allowed per material.'
+    state.error = t('error.oneOutput')
     return null
   }
-  pushHistory('Add ' + def.name)
+  pushHistory(t('history.add', { name: trNode(def.name) }))
   const node = {
     id: uid(type),
     type,
@@ -222,7 +223,7 @@ export function deleteSelected() {
     return n && !defOf(n)?.isOutput
   }))
   if (!ids.size) return
-  pushHistory('Delete nodes')
+  pushHistory(t('history.delete'))
   for (const id of ids) state.engine?.removePaint(id)
   state.graph.nodes = state.graph.nodes.filter((n) => !ids.has(n.id))
   state.graph.connections = state.graph.connections.filter((c) => !ids.has(c.from.node) && !ids.has(c.to.node))
@@ -235,7 +236,7 @@ export function duplicateSelected() {
   const ids = new Set(state.selectedIds)
   const nodes = state.graph.nodes.filter((n) => ids.has(n.id))
   if (!nodes.length) return
-  pushHistory('Duplicate nodes')
+  pushHistory(t('history.duplicate'))
   const map = new Map()
   const created = []
   for (const n of nodes) {
@@ -271,7 +272,7 @@ export function canConnect(fromId, toId) {
   const seen = new Set()
   while (stack.length) {
     const id = stack.pop()
-    if (id === toId) return { ok: false, reason: 'Would create a cycle' }
+    if (id === toId) return { ok: false, reason: t('error.cycle') }
     if (seen.has(id)) continue
     seen.add(id)
     const node = nodeById(id)
@@ -291,14 +292,14 @@ export function addConnection(fromId, fromPort, toId, toPort) {
     state.error = check.reason
     return false
   }
-  pushHistory('Connect nodes')
+  pushHistory(t('history.connect'))
   state.graph.connections = state.graph.connections.filter((c) => !(c.to.node === toId && c.to.port === toPort))
   state.graph.connections.push({ id: uid('link'), from: { node: fromId, port: fromPort || 'out' }, to: { node: toId, port: toPort } })
   requestEval()
   return true
 }
 export function removeConnection(id) {
-  pushHistory('Disconnect')
+  pushHistory(t('history.disconnect'))
   state.graph.connections = state.graph.connections.filter((c) => c.id !== id)
   requestEval()
 }
@@ -310,7 +311,9 @@ export function disconnectInput(nodeId, port) {
 export function setParam(nodeId, key, value, opts = {}) {
   const node = nodeById(nodeId)
   if (!node) return
-  pushHistory('Edit ' + key, opts.coalesce === false ? '' : nodeId + ':' + key)
+  const editDef = NODE_MAP[node.type]
+  const editParam = (editDef?.params || []).find((p) => p.key === key)
+  pushHistory(t('history.edit', { key: editParam ? trLabel(editParam.label) : key }), opts.coalesce === false ? '' : nodeId + ':' + key)
   node.params[key] = value
   requestEval()
 }
@@ -323,7 +326,7 @@ export function setNodePosition(id, x, y) {
 export function renameNode(id, title) {
   const node = nodeById(id)
   if (!node) return
-  pushHistory('Rename node')
+  pushHistory(t('history.rename'))
   node.data.title = title
 }
 
@@ -418,7 +421,7 @@ export function syncPaintTextures() {
 export function commitStroke(nodeId, stroke) {
   const node = nodeById(nodeId)
   if (!node) return
-  pushHistory('Paint stroke')
+  pushHistory(t('history.paint'))
   if (!Array.isArray(node.data.strokes)) node.data.strokes = []
   node.data.strokes.push(JSON.parse(JSON.stringify(stroke)))
   markPaintDrawn(nodeId)
@@ -428,7 +431,7 @@ export function commitStroke(nodeId, stroke) {
 export function clearPaint(nodeId) {
   const node = nodeById(nodeId)
   if (!node) return
-  pushHistory('Clear paint')
+  pushHistory(t('history.clearPaint'))
   node.data.strokes = []
   const entry = paintEntry(nodeId)
   rasterizeAll(entry.canvas, [])
@@ -441,7 +444,7 @@ export function clearPaint(nodeId) {
 export function setNodeImage(nodeId, dataURL, fileName) {
   const node = nodeById(nodeId)
   if (!node) return
-  pushHistory('Load texture')
+  pushHistory(t('history.texture'))
   node.data.imageSrc = dataURL
   node.data.imageName = fileName || 'texture.png'
   const img = new Image()
@@ -534,7 +537,7 @@ export function loadGraph(graph, opts = {}) {
   state.activeNodeId = outputNode()?.id || null
   state.undoStack.length = 0
   state.redoStack.length = 0
-  state.historyLabel = opts.label || 'Load ' + (opts.name || 'graph')
+  state.historyLabel = opts.label || (opts.name ? t('history.load', { name: opts.name }) : t('history.new'))
   state.activePaintId = null
   syncPaintTextures()
   hydrateImages()
@@ -544,14 +547,15 @@ export function loadGraph(graph, opts = {}) {
 
 export function loadDemo(id) {
   const demo = buildDemo(id)
-  loadGraph(demo.graph, { name: demo.name, resolution: demo.resolution, label: demo.name })
-  state.projectName = demo.name
+  const demoName = trText(demo.name)
+  loadGraph(demo.graph, { name: demoName, resolution: demo.resolution, label: demoName })
+  state.projectName = demoName
   return demo
 }
 
 export function newProject() {
   loadDemo('blank')
-  state.projectName = 'Untitled Project'
+  state.projectName = t('project.untitled')
   schedulePersist()
 }
 
@@ -578,7 +582,7 @@ export async function saveProject(name) {
   })
   if (!res.ok) {
     const text = await res.text()
-    throw new Error('Save failed: ' + (text || res.status))
+    throw new Error(text || String(res.status))
   }
   state.savedAt = Date.now()
   schedulePersist()
@@ -587,9 +591,9 @@ export async function saveProject(name) {
 
 export async function loadProject(name) {
   const res = await fetch('/api/projects/load?name=' + encodeURIComponent(name))
-  if (!res.ok) throw new Error('Project not found')
+  if (!res.ok) throw new Error(t('error.projectNotFound'))
   const data = await res.json()
-  loadGraph(data.graph, { name: data.name, resolution: data.resolution, label: 'Load ' + data.name })
+  loadGraph(data.graph, { name: data.name, resolution: data.resolution, label: t('history.load', { name: data.name }) })
   return data
 }
 
@@ -619,7 +623,7 @@ export function loadAutosave() {
     if (!raw) return false
     const data = JSON.parse(raw)
     if (!data?.graph?.nodes?.length) return false
-    loadGraph(data.graph, { name: data.name || 'Untitled Project', resolution: data.resolution || 1024, label: 'Restore session' })
+    loadGraph(data.graph, { name: data.name || t('project.untitled'), resolution: data.resolution || 1024, label: t('history.restore') })
     return true
   } catch (e) {
     return false

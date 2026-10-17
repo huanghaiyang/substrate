@@ -31,7 +31,7 @@ export default defineComponent({
       items.value = OUTPUT_CHANNELS.map((ch) => ({
         key: ch.key,
         label: ch.label,
-        space: ch.srgb ? 'sRGB' : 'Linear',
+        srgb: !!ch.srgb,
         single: !!ch.single,
         url: makeDataURL(ch.key),
         note:
@@ -60,25 +60,25 @@ export default defineComponent({
   template: `
     <div class="maps panel">
       <div class="panel-head">
-        <span>Channels</span>
-        <span class="dim">click a map to inspect</span>
+        <span>{{ $t('maps.title') }}</span>
+        <span class="dim">{{ $t('maps.hint') }}</span>
       </div>
       <div class="maps-meta">
-        <span class="chip">{{ meta.name }}</span>
+        <span class="chip">{{ $tr(meta.name) }}</span>
         <span class="chip">{{ meta.resolution }}²</span>
-        <span class="chip">{{ meta.nodes }} nodes</span>
-        <span class="chip">seamless</span>
+        <span class="chip">{{ $t('maps.nodes', { n: meta.nodes }) }}</span>
+        <span class="chip">{{ $t('maps.seamless') }}</span>
       </div>
       <div class="maps-grid">
         <button v-for="item in items" :key="item.key" class="map-card" @click="zoom = item">
           <span class="map-thumb" :style="{ backgroundImage: 'url(' + item.url + ')' }"></span>
-          <span class="map-label">{{ item.label }}</span>
-          <span class="map-sub">{{ item.space }} · {{ item.single ? 'grey' : 'RGB' }}{{ item.note ? ' · ' + item.note : '' }}</span>
+          <span class="map-label">{{ $tr(item.label) }}</span>
+          <span class="map-sub">{{ $t(item.srgb ? 'maps.space.srgb' : 'maps.space.linear') }} · {{ item.single ? $t('maps.grey') : 'RGB' }}{{ item.note ? ' · ' + item.note : '' }}</span>
         </button>
       </div>
       <div v-if="zoom" class="map-zoom" @click="zoom = null">
-        <div class="zoom-caption">{{ zoom.label }} — {{ zoom.space }}</div>
-        <img :src="zoom.url" :alt="zoom.label" />
+        <div class="zoom-caption">{{ $tr(zoom.label) }} — {{ $t(zoom.srgb ? 'maps.space.srgb' : 'maps.space.linear') }}</div>
+        <img :src="zoom.url" :alt="$tr(zoom.label)" />
         <button class="zoom-close" @click.stop="zoom = null">×</button>
       </div>
     </div>

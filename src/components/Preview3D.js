@@ -5,6 +5,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { state, outputNode } from '../engine/store.js'
 import { previewStore } from '../engine/preview.js'
 import { SHAPES } from '../ui/theme.js'
+import { t, trText } from '../i18n/index.js'
 
 export default defineComponent({
   name: 'Preview3D',
@@ -30,13 +31,15 @@ export default defineComponent({
 
     const badge = computed(() => {
       const out = outputNode()
+      void state.previewVersion // reactive dependency: refresh the channel count after every bake
       const n = out ? Object.keys(previewStore.maps || {}).length : 0
-      return `${state.resolution}² · ${n} ch · PBR`
+      return t('preview.badge', { res: state.resolution, n })
     })
 
     const materialName = computed(() => {
       const out = outputNode()
-      return out?.params?.materialName || ''
+      const raw = out?.params?.materialName || ''
+      return raw ? trText(raw) : ''
     })
 
     function makeTexture(key, srgb, flipSource) {
@@ -280,9 +283,9 @@ export default defineComponent({
   template: `
     <div class="preview panel">
       <div class="panel-head">
-        <span>Viewport</span>
+        <span>{{ $t('preview.title') }}</span>
         <select v-model="shape" class="shape-select" style="background: var(--bg0); border: 1px solid var(--line); border-radius: 4px; font-size: 10px; padding: 2px 4px; text-transform: none; letter-spacing: 0">
-          <option v-for="s in SHAPES" :key="s.id" :value="s.id">{{ s.label }}</option>
+          <option v-for="s in SHAPES" :key="s.id" :value="s.id">{{ $tr(s.label) }}</option>
         </select>
       </div>
       <div class="preview-body" ref="host">
@@ -294,12 +297,12 @@ export default defineComponent({
           </div>
           <div class="row">
             <div class="preview-tools">
-              <label>Tiling</label>
+              <label>{{ $t('preview.tiling') }}</label>
               <input type="range" min="1" max="4" step="1" v-model.number="tiling" />
-              <label>Displace</label>
+              <label>{{ $t('preview.displace') }}</label>
               <input type="range" min="0" max="0.2" step="0.005" v-model.number="displacement" />
-              <button class="mini" @click="autoRotate = !autoRotate">{{ autoRotate ? 'Pause' : 'Spin' }}</button>
-              <button class="mini" @click="resetView">Reset</button>
+              <button class="mini" @click="autoRotate = !autoRotate">{{ autoRotate ? $t('preview.pause') : $t('preview.spin') }}</button>
+              <button class="mini" @click="resetView">{{ $t('preview.reset') }}</button>
             </div>
           </div>
         </div>

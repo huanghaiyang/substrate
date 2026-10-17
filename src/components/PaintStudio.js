@@ -9,6 +9,7 @@ import {
   requestEval
 } from '../engine/store.js'
 import { drawStroke } from '../engine/paint.js'
+import { trNode } from '../i18n/index.js'
 
 export default defineComponent({
   name: 'PaintStudio',
@@ -20,7 +21,7 @@ export default defineComponent({
     const cursor = ref(null)
     const brush = state.paintBrush
     const node = computed(() => nodeById(props.nodeId))
-    const title = computed(() => node.value?.data?.title || 'Paint Layer')
+    const title = computed(() => node.value?.data?.title || trNode('Paint Layer'))
     const strokes = computed(() => node.value?.data?.strokes || [])
     let painting = false
     let stroke = null
@@ -184,44 +185,44 @@ export default defineComponent({
   template: `
     <div class="paint-studio">
       <div class="paint-head">
-        <button class="btn" @click="emit('close')">← Graph</button>
-        <span class="paint-title">Paint Studio</span>
-        <span class="dim small">{{ title }} · {{ strokes.length }} strokes · {{ node.data.paintSize }}²</span>
+        <button class="btn" @click="emit('close')">{{ $t('paint.back') }}</button>
+        <span class="paint-title">{{ $t('paint.title') }}</span>
+        <span class="dim small">{{ $t('paint.meta', { name: title, n: strokes.length, size: node.data.paintSize }) }}</span>
         <div class="spacer"></div>
-        <button class="btn" @click="undoStroke" title="Undo (Ctrl+Z)">Undo</button>
-        <button class="btn" @click="fill" title="Fill the layer with the brush colour">Fill</button>
-        <button class="btn danger" @click="clear">Clear</button>
+        <button class="btn" @click="undoStroke" :title="$t('paint.undoTitle')">{{ $t('paint.undo') }}</button>
+        <button class="btn" @click="fill" :title="$t('paint.fillTitle')">{{ $t('paint.fill') }}</button>
+        <button class="btn danger" @click="clear">{{ $t('paint.clear') }}</button>
       </div>
       <div class="paint-main" @pointermove="onMove" @pointerup="onUp">
         <div class="paint-tools">
           <div class="brush-preview"><div class="brush-dot" :style="brushDotStyle"></div></div>
           <div class="param">
-            <div class="param-label"><span>Colour</span><span class="val">{{ brush.color }}</span></div>
+            <div class="param-label"><span>{{ $t('paint.color') }}</span><span class="val">{{ brush.color }}</span></div>
             <div class="param-row">
               <input type="color" v-model="brush.color" />
               <label class="check" style="margin-left: 6px">
-                <input type="checkbox" v-model="brush.erase" /> Erase
+                <input type="checkbox" v-model="brush.erase" /> {{ $t('paint.erase') }}
               </label>
             </div>
           </div>
           <div class="param">
-            <div class="param-label"><span>Brush Size</span><span class="val">{{ brush.size }} px</span></div>
+            <div class="param-label"><span>{{ $t('paint.size') }}</span><span class="val">{{ $t('paint.sizeUnit', { n: brush.size }) }}</span></div>
             <input type="range" min="2" max="256" step="1" v-model.number="brush.size" style="width: 100%" />
           </div>
           <div class="param">
-            <div class="param-label"><span>Opacity</span><span class="val">{{ brush.opacity.toFixed(2) }}</span></div>
+            <div class="param-label"><span>{{ $t('paint.opacity') }}</span><span class="val">{{ brush.opacity.toFixed(2) }}</span></div>
             <input type="range" min="0.02" max="1" step="0.01" v-model.number="brush.opacity" style="width: 100%" />
           </div>
           <div class="param">
-            <div class="param-label"><span>Hardness</span><span class="val">{{ brush.hardness.toFixed(2) }}</span></div>
+            <div class="param-label"><span>{{ $t('paint.hardness') }}</span><span class="val">{{ brush.hardness.toFixed(2) }}</span></div>
             <input type="range" min="0" max="0.98" step="0.01" v-model.number="brush.hardness" style="width: 100%" />
           </div>
           <div class="param">
-            <div class="param-label"><span>Symmetry</span></div>
-            <label class="check"><input type="checkbox" v-model="brush.symmetryX" /> Mirror X</label>
-            <label class="check" style="margin-top: 5px"><input type="checkbox" v-model="brush.symmetryY" /> Mirror Y</label>
+            <div class="param-label"><span>{{ $t('paint.symmetry') }}</span></div>
+            <label class="check"><input type="checkbox" v-model="brush.symmetryX" /> {{ $t('paint.mirrorX') }}</label>
+            <label class="check" style="margin-top: 5px"><input type="checkbox" v-model="brush.symmetryY" /> {{ $t('paint.mirrorY') }}</label>
           </div>
-          <div class="hint">Pressure from pen tablets affects stroke width and opacity. Strokes are resolution independent and editable via Undo.</div>
+          <div class="hint">{{ $t('paint.pressureHint') }}</div>
         </div>
         <div class="paint-canvas-wrap" ref="wrapRef">
           <canvas
@@ -233,15 +234,14 @@ export default defineComponent({
           <div v-if="cursor" class="brush-cursor" :style="cursorStyle"></div>
         </div>
         <div class="paint-side">
-          <div class="side-title">Live result</div>
-          <img v-if="node._thumb" :src="node._thumb" alt="painted layer result" />
-          <div class="hint">Painted pixels composite through this node into every downstream map — base colour, roughness, height and the 3D preview all update live.</div>
-          <div class="side-title">Tips</div>
+          <div class="side-title">{{ $t('paint.live') }}</div>
+          <img v-if="node._thumb" :src="node._thumb" :alt="$t('paint.live')" />
+          <div class="hint">{{ $t('paint.liveHint') }}</div>
+          <div class="side-title">{{ $t('paint.tips') }}</div>
           <div class="hint">
-            · Paint in the node's base stream, then use a Threshold / Gradient Map to derive height or gloss from the paint mask.<br />
-            · Keep strokes inside the canvas border — painted layers are sampled with wrap for seamless tiling.<br />
-            · Use Mirror X/Y for herringbone and symmetric detail.<br />
-            · Fill + Erase are stored as strokes, so they undo cleanly.
+            · {{ $t('paint.tip1') }}<br />
+            · {{ $t('paint.tip2') }}<br />
+            · {{ $t('paint.tip3') }}
           </div>
         </div>
       </div>

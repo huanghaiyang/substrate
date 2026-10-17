@@ -19,6 +19,7 @@ import {
 } from '../engine/store.js'
 import { NODE_DEFS, CATEGORIES } from '../engine/nodes/index.js'
 import { catColor } from '../ui/theme.js'
+import { t } from '../i18n/index.js'
 
 const W = 200
 const HEADER = 28
@@ -235,7 +236,7 @@ export default defineComponent({
         if (inter.kind === 'pan') panning.value = false
         if (inter.kind === 'node') {
           root.value.style.cursor = ''
-          if (inter.moved) pushHistoryRaw(inter.snapshot, 'Move nodes')
+          if (inter.moved) pushHistoryRaw(inter.snapshot, t('history.move'))
         }
         if (inter.kind === 'marquee' && inter.moved && marquee.value) {
           const x1 = (marquee.value.left - root.value.getBoundingClientRect().left - view.x) / view.scale
@@ -501,7 +502,7 @@ export default defineComponent({
             v-if="!defOf(node).isOutput"
             class="port output"
             :style="{ top: outputTop(node) + 'px' }"
-            title="Output — drag to an input"
+            :title="$t('graph.outputPort')"
             @pointerdown.stop="onOutputDown($event, node)"
           ></div>
           <div
@@ -509,20 +510,17 @@ export default defineComponent({
             class="gnode-footer"
             style="position: absolute; left: 10px; bottom: 7px; font-family: var(--mono); font-size: 9px; color: var(--text-faint)"
           >
-            PBR SINK
+            {{ $t('graph.pbrSink') }}
           </div>
         </div>
       </div>
 
       <div class="graph-tools">
-        <button class="icon-btn" title="Zoom in" @click="zoomBy(1.25)">+</button>
-        <button class="icon-btn" title="Zoom out" @click="zoomBy(0.8)">−</button>
-        <button class="icon-btn" title="Fit graph to view" @click="fit">⛶</button>
+        <button class="icon-btn" :title="$t('graph.zoomIn')" @click="zoomBy(1.25)">+</button>
+        <button class="icon-btn" :title="$t('graph.zoomOut')" @click="zoomBy(0.8)">−</button>
+        <button class="icon-btn" :title="$t('graph.fit')" @click="fit">⛶</button>
       </div>
-      <div class="graph-hint">
-        Drag ports to connect · wheel zooms · Alt/⌥-drag or middle-drag pans · right-click for the node menu ·
-        Del/⌫ removes the selected node or link · double-click a Paint node to paint
-      </div>
+      <div class="graph-hint">{{ $t('graph.hint') }}</div>
 
       <div v-if="menu.open" class="graph-menu" :style="menuStyle" @pointerdown.stop @contextmenu.prevent>
         <template v-if="menu.mode === 'add'">
@@ -530,30 +528,30 @@ export default defineComponent({
             ref="menuInput"
             v-model="menu.filter"
             class="search"
-            placeholder="Add node… (Enter for first match)"
+            :placeholder="$t('graph.addTitle')"
             @keydown.enter="addFirst"
             @keydown.esc="closeMenu"
           />
           <div class="graph-menu-list">
             <template v-for="group in menuGroups" :key="group.cat">
-              <div class="menu-section">{{ group.cat }}</div>
+              <div class="menu-section">{{ $trNode(group.cat) }}</div>
               <button v-for="def in group.defs" :key="def.type" class="menu-item" @click="addFromMenu(def.type)">
-                <span>{{ def.name }}</span>
-                <span class="dim">{{ def.category }}</span>
+                <span>{{ $trNode(def.name) }}</span>
+                <span class="dim">{{ $trNode(def.category) }}</span>
               </button>
             </template>
-            <div v-if="!menuGroups.length" class="menu-item dim">No match</div>
+            <div v-if="!menuGroups.length" class="menu-item dim">{{ $t('graph.noMatch') }}</div>
           </div>
         </template>
         <template v-else>
           <div class="graph-menu-list">
-            <div class="menu-section">Node actions</div>
+            <div class="menu-section">{{ $t('graph.nodeActions') }}</div>
             <button v-if="menuNode && defOf(menuNode).paintInput" class="menu-item" @click="nodeAction('paint')">
-              <span>Open Paint Studio</span><span class="dim">paint</span>
+              <span>{{ $t('graph.openPaint') }}</span><span class="dim">{{ $t('graph.paintTag') }}</span>
             </button>
-            <button class="menu-item" @click="nodeAction('duplicate')"><span>Duplicate</span><span class="dim">Ctrl+D</span></button>
-            <button class="menu-item" @click="nodeAction('disconnect')"><span>Disconnect inputs</span></button>
-            <button class="menu-item" @click="nodeAction('delete')"><span style="color: var(--red)">Delete node</span></button>
+            <button class="menu-item" @click="nodeAction('duplicate')"><span>{{ $t('graph.duplicate') }}</span><span class="dim">Ctrl+D</span></button>
+            <button class="menu-item" @click="nodeAction('disconnect')"><span>{{ $t('graph.disconnect') }}</span></button>
+            <button class="menu-item" @click="nodeAction('delete')"><span style="color: var(--red)">{{ $t('graph.delete') }}</span></button>
           </div>
         </template>
       </div>

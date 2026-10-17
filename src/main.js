@@ -1,10 +1,15 @@
 import { createApp } from 'vue'
 import App from './App.js'
+import { initLocale, t, tr, trNode } from './i18n/index.js'
 import { TextureEngine } from './engine/engine.js'
 import { setEngine, bootProject, state } from './engine/store.js'
 import { registerTools } from './engine/webmcp.js'
 
+initLocale()
 const app = createApp(App)
+app.config.globalProperties.$t = t
+app.config.globalProperties.$tr = tr
+app.config.globalProperties.$trNode = trNode
 app.mount('#app')
 
 function initEngine() {
@@ -22,7 +27,7 @@ function initEngine() {
     maybeSelfTest(engine)
   } catch (e) {
     console.error('[substrate] engine init failed', e)
-    state.error = 'WebGL2 initialisation failed: ' + (e && e.message ? e.message : e)
+    state.error = t('error.webglInit') + ': ' + (e && e.message ? e.message : e)
     window.__SUBSTRATE__ = { engine: null, state, ready: false }
     window.__SUBSTRATE_READY__ = true
   }

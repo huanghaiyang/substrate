@@ -88,13 +88,13 @@ export default defineComponent({
   template: `
     <div class="inspector panel">
       <div class="panel-head">
-        <span>Properties</span>
+        <span>{{ $t('insp.title') }}</span>
         <span v-if="def" class="dim" :style="{ color: catColor(def.category) }">{{ def.category }}</span>
-        <span v-else class="dim">no selection</span>
+        <span v-else class="dim">{{ $t('insp.noSelection') }}</span>
       </div>
       <div v-if="!node || !def" class="insp-empty">
         <div class="big">◎</div>
-        Select a node to edit its parameters.<br />Drag from a node's right port to an input to connect streams.
+        {{ $t('insp.emptyTitle') }}<br />{{ $t('insp.emptyHint') }}
       </div>
       <div v-else class="insp-body">
         <div class="insp-node">
@@ -114,7 +114,7 @@ export default defineComponent({
             <div class="param-label"><span>{{ p.label }}</span><span class="val">{{ val(p) }}</span></div>
             <div class="param-row">
               <input type="color" :value="val(p)" @input="onColor(p, $event)" />
-              <span class="dim small">sRGB colour picker</span>
+              <span class="dim small">{{ $t('insp.srgb') }}</span>
             </div>
           </template>
 
@@ -165,14 +165,14 @@ export default defineComponent({
 
         <div v-if="def.paintInput" class="insp-actions">
           <button class="btn primary" :disabled="state.mode === 'paint'" @click="openPaintStudio(node.id)">
-            {{ state.mode === 'paint' ? 'Painting — use the canvas' : 'Open Paint Studio' }}
+            {{ state.mode === 'paint' ? $t('insp.painting') : $t('insp.openPaint') }}
           </button>
-          <div class="hint">{{ strokeCount }} stroke{{ strokeCount === 1 ? '' : 's' }} · painted pixels composite through the graph</div>
+          <div class="hint">{{ $t('insp.strokes', { n: strokeCount }) }}</div>
         </div>
 
         <div v-if="def.imageInput" class="insp-actions">
-          <button class="btn" @click="pickFile">Load Image…</button>
-          <div class="hint">{{ node.data.imageName || 'No image loaded — a placeholder grid is used' }}</div>
+          <button class="btn" @click="pickFile">{{ $t('insp.loadImage') }}</button>
+          <div class="hint">{{ node.data.imageName || $t('insp.noImage') }}</div>
           <input type="file" accept="image/*" ref="fileInput" style="display: none" @change="onFile" />
         </div>
 

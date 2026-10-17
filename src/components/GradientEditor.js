@@ -60,7 +60,7 @@ export default defineComponent({
   },
   template: `
     <div class="grad-editor">
-      <div class="grad-bar" :style="barStyle" @click="addStop" title="Click to add a stop">
+      <div class="grad-bar" :style="barStyle" @click="addStop" :title="$t('grad.barTitle')">
         <div
           v-for="(s, i) in list"
           :key="i"
@@ -78,10 +78,9 @@ export default defineComponent({
           :value="activeStop.p"
           @change="updateActive({ p: Math.min(1, Math.max(0, Number($event.target.value) || 0)) })"
         />
-        <span class="dim small" style="flex:1">{{ list.length }} stops</span>
-        <button class="mini" title="Add stop" @click.stop="addStop({ currentTarget: $el.querySelector('.grad-bar'), clientX: 0 })" style="display:none">+</button>
-        <button class="mini" @click="removeStop" title="Remove selected stop">−</button>
-        <button class="mini" @click="active = (active + 1) % list.length" title="Select next stop">↻</button>
+        <span class="dim small" style="flex:1">{{ $t('grad.stops', { n: list.length }) }}</span>
+        <button class="mini" @click="removeStop" :title="$t('grad.remove')">−</button>
+        <button class="mini" @click="active = (active + 1) % list.length" :title="$t('grad.next')">↻</button>
       </div>
     </div>
   `

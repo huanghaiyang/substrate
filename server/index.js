@@ -3,6 +3,7 @@
 import http from 'node:http'
 import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, rmSync } from 'node:fs'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { deflateRawSync } from 'node:zlib'
 
@@ -59,6 +60,19 @@ function slugify(name, fallback = 'material') {
     .replace(/\s+/g, '-')
     .toLowerCase()
   return clean || fallback
+}
+
+// Filenames must stay ASCII, but two different non-ASCII names must not collide,
+// so append a short stable hash whenever characters had to be stripped.
+function nameSlug(name, fallback = 'material') {
+  const base = slugify(name, fallback)
+  const normalized = String(name || '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .toLowerCase()
+  if (base === normalized) return base
+  const hash = createHash('sha1').update(String(name || '')).digest('hex').slice(0, 6)
+  return `${base}-${hash}`
 }
 
 function stamp() {
@@ -207,7 +221,7 @@ function handleProjectSave(req, res) {
       const data = JSON.parse(buf.toString('utf8'))
       if (!data || !data.graph) throw new Error('Invalid project payload')
       const name = String(data.name || 'Untitled').slice(0, 120)
-      const file = `${slugify(name, 'untitled')}.json`
+      const file = `${nameSlug(name, 'untitled')}.json`
       const payload = { ...data, name, savedAt: Date.now() }
       writeFileSync(path.join(PROJECTS_DIR, file), JSON.stringify(payload, null, 2), 'utf8')
       sendJSON(res, 200, { ok: true, file, name, path: path.join('projects', file) })

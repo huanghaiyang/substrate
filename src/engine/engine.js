@@ -2,6 +2,7 @@
 // Every node renders full-screen into RGBA16F render targets (linear light),
 // results are cached by a structural hash so only dirty branches re-render.
 import * as THREE from 'three'
+import { t } from '../i18n/index.js'
 import { VERTEX_SRC, PREVIEW_GLSL, COMMON_GLSL } from './glsl.js'
 import { buildFragmentSource, passesOf, ENCODE_FRAG } from './compiler.js'
 import { NODE_DEFS, NODE_MAP, resolveParams } from './nodes/index.js'
@@ -381,7 +382,7 @@ export class TextureEngine {
 
   // ---------------------------------------------------------------- evaluation
   evaluate(graph, opts = {}) {
-    if (this.contextLost) throw new Error('WebGL context lost — reload the page')
+    if (this.contextLost) throw new Error(t('error.contextLost'))
     const t0 = performance.now()
     const res = Math.max(8, Math.round(opts.res || 1024))
     const streaming = !!opts.streaming
@@ -394,7 +395,7 @@ export class TextureEngine {
 
     const explicitSinks = opts.sinks && opts.sinks.length ? opts.sinks : null
     const sinks = explicitSinks || nodes.filter((n) => NODE_MAP[n.type] && NODE_MAP[n.type].isOutput).map((n) => n.id)
-    if (!sinks.length) throw new Error('Graph has no PBR Output node')
+    if (!sinks.length) throw new Error(t('error.noOutput'))
 
     const state = new Map()
     const order = []
@@ -440,7 +441,7 @@ export class TextureEngine {
     for (const s of sinks) visit(s)
     if (cycle) {
       this.stats.cycle = true
-      throw new Error('Cycle detected in the node graph')
+      throw new Error(t('error.cycle'))
     }
 
     const reachable = new Set(order)
