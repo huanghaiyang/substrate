@@ -185,6 +185,11 @@ export const EN = {
   'toast.loaded': 'Loaded {name}',
   'toast.addFail': 'Could not add node — only one PBR Output is allowed per material',
   'toast.langSwitched': 'Language switched to English',
+  'audit.run': 'Run self-test',
+  'audit.running': 'Running full self-test…',
+  'audit.pass': 'Self-test passed — {n} checks',
+  'audit.fail': 'Self-test failed — {n} problems (see console)',
+  'audit.error': 'Self-test error: {msg}',
 
   'history.new': 'New material',
   'history.add': 'Add {name}',
@@ -395,6 +400,11 @@ export const ZH = {
   'toast.loaded': '已加载 {name}',
   'toast.addFail': '无法添加节点——每个材质只允许一个 PBR 输出节点',
   'toast.langSwitched': '界面语言已切换为中文',
+  'audit.run': '运行自检',
+  'audit.running': '正在运行完整自检…',
+  'audit.pass': '自检通过——共 {n} 项检查',
+  'audit.fail': '自检失败——发现 {n} 个问题（详见控制台）',
+  'audit.error': '自检出错：{msg}',
 
   'history.new': '新建材质',
   'history.add': '添加 {name}',

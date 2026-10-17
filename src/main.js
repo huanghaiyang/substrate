@@ -25,6 +25,7 @@ function initEngine() {
     window.__SUBSTRATE__ = { engine, state, ready: true }
     console.log('[substrate] engine ready:', state.engineInfo)
     maybeSelfTest(engine)
+    maybeAudit(engine)
   } catch (e) {
     console.error('[substrate] engine init failed', e)
     state.error = t('error.webglInit') + ': ' + (e && e.message ? e.message : e)
@@ -62,6 +63,33 @@ async function maybeSelfTest(engine) {
     } catch (err) {
       /* ignore */
     }
+  }
+}
+
+async function maybeAudit(engine) {
+  const params = new URLSearchParams(location.search)
+  if (!params.has('audit')) return
+  try {
+    const { runAudit } = await import('./engine/audit.js')
+    const section = params.get('auditsection') || 'all'
+    const report = await runAudit(engine, section)
+    window.__AUDIT__ = report
+    const summary = report.sections
+      ? report.sections.map((s) => ({ section: s.section, ok: s.ok, passed: s.passed, failed: s.failed }))
+      : { section: report.section, ok: report.ok, passed: report.passed, failed: report.failed }
+    console.log('[substrate] audit ' + (report.ok ? 'PASSED' : 'FAILED'), JSON.stringify(summary))
+    try {
+      await fetch('/api/debug/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: 'audit', summary, report })
+      })
+    } catch (e) {
+      /* report sink is optional */
+    }
+  } catch (e) {
+    console.error('[substrate] audit crashed', e)
+    window.__AUDIT__ = { ok: false, error: String(e && e.message ? e.message : e) }
   }
 }
 

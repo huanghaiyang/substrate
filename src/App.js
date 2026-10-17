@@ -112,6 +112,21 @@ export default defineComponent({
       requestEval(true)
     }
 
+    async function runSelfTest() {
+      showHelp.value = false
+      notify(t('audit.running'))
+      try {
+        const { runAudit } = await import('./engine/audit.js')
+        const report = await runAudit(state.engine, 'all')
+        window.__AUDIT__ = report
+        const passed = report.sections ? report.sections.reduce((n, s) => n + s.passed, 0) : report.passed
+        if (report.ok) notify(t('audit.pass', { n: passed }))
+        else notify(t('audit.fail', { n: report.failed }), 'error')
+      } catch (e) {
+        notify(t('audit.error', { msg: e?.message || String(e) }), 'error')
+      }
+    }
+
     function onResolution(e) {
       setResolution(Number(e.target.value))
     }
@@ -221,6 +236,7 @@ export default defineComponent({
       openProject,
       openPaint,
       closePaint,
+      runSelfTest,
       onResolution,
       onProxy,
       undo,
@@ -352,7 +368,10 @@ export default defineComponent({
           </div>
           <div class="modal-foot">
             <span class="hint">{{ $t('help.foot') }}</span>
-            <button class="btn" @click="showHelp = false">{{ $t('help.ok') }}</button>
+            <div style="display: flex; gap: 8px">
+              <button class="btn" @click="runSelfTest">{{ $t('audit.run') }}</button>
+              <button class="btn" @click="showHelp = false">{{ $t('help.ok') }}</button>
+            </div>
           </div>
         </div>
       </div>

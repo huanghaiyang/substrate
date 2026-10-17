@@ -230,8 +230,20 @@ function handleProjectSave(req, res) {
 }
 
 function handleProjectLoad(res, name) {
-  const file = `${slugify(name, 'untitled')}.json`
-  const full = safeJoin(PROJECTS_DIR, file)
+  // accept either the display name or the already-hashed file slug returned by /api/projects
+  let file = `${nameSlug(name, 'untitled')}.json`
+  if (!/^[A-Za-z0-9 _-]+\.json$/.test(file)) file = `${slugify(name, 'untitled')}.json`
+  let full = safeJoin(PROJECTS_DIR, file)
+  if (!full || !existsSync(full)) {
+    const alt = `${slugify(name, 'untitled')}.json`
+    if (alt !== file) {
+      const altFull = safeJoin(PROJECTS_DIR, alt)
+      if (altFull && existsSync(altFull)) {
+        full = altFull
+        file = alt
+      }
+    }
+  }
   if (!full || !existsSync(full)) return sendJSON(res, 404, { ok: false, error: 'Project not found' })
   send(res, 200, readFileSync(full), { 'Content-Type': 'application/json; charset=utf-8' })
 }
@@ -410,7 +422,7 @@ const server = http.createServer((req, res) => {
     return readBody(req, 1024 * 1024)
       .then((buf) => {
         const data = JSON.parse(buf.toString('utf8'))
-        const file = `${slugify(data.name || '', 'untitled')}.json`
+        const file = `${nameSlug(data.name || '', 'untitled')}.json`
         const full = safeJoin(PROJECTS_DIR, file)
         if (full && existsSync(full)) rmSync(full, { force: true })
         sendJSON(res, 200, { ok: true })

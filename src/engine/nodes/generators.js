@@ -96,7 +96,7 @@ export const generatorDefs = [
       vec4 nodeColor(vec2 uv) {
         float t;
         if (u_mode == 0) {
-          vec2 p = rot2(uv - 0.5, radians(u_angle));
+          vec2 p = rot2(uv - 0.5, u_angle);
           t = p.x * float(u_count);
         } else if (u_mode == 1) {
           t = length(uv - 0.5) * float(u_count) * 2.0;
@@ -126,7 +126,7 @@ export const generatorDefs = [
     body: /* glsl */ `
       vec4 nodeColor(vec2 uv) {
         float s = max(1.0, floor(u_scale + 0.5));
-        vec2 p = rot2(uv - 0.5, radians(u_angle)) * s;
+        vec2 p = rot2(uv - 0.5, u_angle) * s;
         vec2 c = floor(p);
         float v = mod(c.x + c.y, 2.0);
         return mix(u_colorA, u_colorB, v);
@@ -261,7 +261,7 @@ export const generatorDefs = [
     body: /* glsl */ `
       vec4 nodeColor(vec2 uv) {
         vec2 size = max(u_size, vec2(1e-3));
-        vec2 p = rot2(uv - 0.5 - u_offset, radians(-u_rotation)) / size;
+        vec2 p = rot2(uv - 0.5 - u_offset, -u_rotation) / size;
         float d;
         if (u_type == 0) {
           float r = u_roundness * 0.49;
@@ -299,8 +299,8 @@ export const generatorDefs = [
       vec4 nodeColor(vec2 uv) {
         float t;
         if (u_type == 0) {
-          vec2 p = rot2(uv - 0.5, radians(u_angle));
-          t = p.x * float(u_repeat) + 0.5 + u_offset;
+          vec2 p = rot2(uv - 0.5, u_angle);
+          t = p.x + 0.5;
         } else if (u_type == 1) {
           t = length(uv - 0.5) * 2.0;
         } else if (u_type == 2) {
@@ -308,7 +308,7 @@ export const generatorDefs = [
         } else {
           t = abs(uv.x - 0.5) + abs(uv.y - 0.5);
         }
-        t = sat(t * float(u_repeat) + u_offset);
+        t = fract(t * float(u_repeat) + u_offset);
         return sampleGradient(t);
       }`
   },
@@ -361,8 +361,14 @@ export const generatorDefs = [
       vec4 nodeColor(vec2 uv) {
         vec2 p = uv * u_scale + u_offset;
         vec4 c = texture(uImage, p);
-        if (u_channelMode == 1) c = vec4(vec3(c.r), c.a);
-        else if (u_channelMode == 2) c = vec4(vec3(c.a), c.a);
+        if (u_channelMode == 0) {
+          // Color: authored in sRGB, processed in linear light. Grayscale / Alpha stay raw data.
+          c.rgb = srgbToLinear(c.rgb);
+        } else if (u_channelMode == 1) {
+          c = vec4(vec3(c.r), c.a);
+        } else {
+          c = vec4(vec3(c.a), c.a);
+        }
         if (u_invert) c.rgb = 1.0 - c.rgb;
         return c;
       }`

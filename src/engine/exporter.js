@@ -49,7 +49,7 @@ export function sanitizeName(name) {
 
 /** Build the file plan for a preset without touching the GPU (used by the export dialog UI). */
 export function planFiles(opts) {
-  const { preset = 'gltf', name = 'Material', hasEmissive = false, hasOpacity = false, alphaMode = 0 } = opts
+  const { preset = 'gltf', name = 'Material', hasEmissive = false, hasOpacity = false, alphaMode = 0, height16 = true } = opts
   const n = sanitizeName(name)
   const files = []
   const add = (spec) => files.push(spec)
@@ -59,19 +59,19 @@ export function planFiles(opts) {
     add({ kind: 'basecolor', fileName: `T_${n}_BaseColor.png`, colorType: alpha ? 6 : 2, srgb: true, label: 'Base Color' })
     add({ kind: 'normal', fileName: `T_${n}_Normal.png`, colorType: 2, srgb: false, label: 'Normal' })
     add({ kind: 'orm', fileName: `T_${n}_ORM.png`, colorType: 2, srgb: false, label: 'ORM (AO/Rough/Metal)' })
-    add({ kind: 'height', fileName: `T_${n}_Height.png`, colorType: 0, bitDepth: 16, srgb: false, label: 'Height' })
+    add({ kind: 'height', fileName: `T_${n}_Height.png`, colorType: 0, bitDepth: height16 ? 16 : 8, srgb: false, label: 'Height' })
     if (hasEmissive) add({ kind: 'emissive', fileName: `T_${n}_Emissive.png`, colorType: 2, srgb: true, label: 'Emissive' })
   } else if (preset === 'unreal') {
     add({ kind: 'basecolor', fileName: `T_${n}_BC.png`, colorType: alpha ? 6 : 2, srgb: true, label: 'Base Color' })
     add({ kind: 'normal', fileName: `T_${n}_N.png`, colorType: 2, srgb: false, label: 'Normal (DirectX)' })
     add({ kind: 'orm', fileName: `T_${n}_ORM.png`, colorType: 2, srgb: false, label: 'ORM' })
-    add({ kind: 'height', fileName: `T_${n}_H.png`, colorType: 0, bitDepth: 16, srgb: false, label: 'Height' })
+    add({ kind: 'height', fileName: `T_${n}_H.png`, colorType: 0, bitDepth: height16 ? 16 : 8, srgb: false, label: 'Height' })
     if (hasEmissive) add({ kind: 'emissive', fileName: `T_${n}_E.png`, colorType: 2, srgb: true, label: 'Emissive' })
   } else if (preset === 'unity') {
     add({ kind: 'basecolor', fileName: `${n}_AlbedoTransparency.png`, colorType: alpha ? 6 : 2, srgb: true, label: 'Albedo' })
     add({ kind: 'normal', fileName: `${n}_Normal.png`, colorType: 2, srgb: false, label: 'Normal (DirectX)' })
     add({ kind: 'maskmap', fileName: `${n}_MaskMap.png`, colorType: 6, srgb: false, label: 'Mask Map (M/AO/D/S)' })
-    add({ kind: 'height', fileName: `${n}_Height.png`, colorType: 0, bitDepth: 16, srgb: false, label: 'Height' })
+    add({ kind: 'height', fileName: `${n}_Height.png`, colorType: 0, bitDepth: height16 ? 16 : 8, srgb: false, label: 'Height' })
     if (hasEmissive) add({ kind: 'emissive', fileName: `${n}_Emissive.png`, colorType: 2, srgb: true, label: 'Emissive' })
   } else if (preset === 'substance') {
     add({ kind: 'basecolor', fileName: `${n}_basecolor.png`, colorType: alpha ? 6 : 2, srgb: true, label: 'Base Color' })
@@ -79,7 +79,7 @@ export function planFiles(opts) {
     add({ kind: 'roughness', fileName: `${n}_roughness.png`, colorType: 0, srgb: false, label: 'Roughness' })
     add({ kind: 'metallic', fileName: `${n}_metallic.png`, colorType: 0, srgb: false, label: 'Metallic' })
     add({ kind: 'ao', fileName: `${n}_ao.png`, colorType: 0, srgb: false, label: 'AO' })
-    add({ kind: 'height', fileName: `${n}_height.png`, colorType: 0, bitDepth: 16, srgb: false, label: 'Height' })
+    add({ kind: 'height', fileName: `${n}_height.png`, colorType: 0, bitDepth: height16 ? 16 : 8, srgb: false, label: 'Height' })
     if (hasEmissive) add({ kind: 'emissive', fileName: `${n}_emissive.png`, colorType: 2, srgb: true, label: 'Emissive' })
   } else {
     add({ kind: 'basecolor', fileName: `${n}_BaseColor.png`, colorType: alpha ? 6 : 2, srgb: true, label: 'Base Color' })
@@ -87,7 +87,7 @@ export function planFiles(opts) {
     add({ kind: 'roughness', fileName: `${n}_Roughness.png`, colorType: 0, srgb: false, label: 'Roughness' })
     add({ kind: 'metallic', fileName: `${n}_Metallic.png`, colorType: 0, srgb: false, label: 'Metallic' })
     add({ kind: 'ao', fileName: `${n}_AO.png`, colorType: 0, srgb: false, label: 'AO' })
-    add({ kind: 'height', fileName: `${n}_Height.png`, colorType: 0, bitDepth: 16, srgb: false, label: 'Height' })
+    add({ kind: 'height', fileName: `${n}_Height.png`, colorType: 0, bitDepth: height16 ? 16 : 8, srgb: false, label: 'Height' })
     if (hasEmissive) add({ kind: 'emissive', fileName: `${n}_Emissive.png`, colorType: 2, srgb: true, label: 'Emissive' })
   }
   return files
@@ -223,7 +223,7 @@ export async function exportMaterial(engine, opts) {
   } = opts
 
   const name = sanitizeName(materialName)
-  const plan = planFiles({ preset, name: materialName, hasEmissive, hasOpacity, alphaMode })
+  const plan = planFiles({ preset, name: materialName, hasEmissive, hasOpacity, alphaMode, height16 })
   const files = []
   const metas = []
   const session = engine.beginExport(graph, resolution)

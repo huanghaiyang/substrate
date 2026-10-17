@@ -33,7 +33,8 @@ export default defineComponent({
         name: materialName.value,
         hasEmissive: hasEmissive.value,
         hasOpacity: hasOpacity.value,
-        alphaMode: alphaMode.value
+        alphaMode: alphaMode.value,
+        height16: height16.value
       })
     )
     const presetInfo = computed(() => PRESETS.find((p) => p.id === preset.value) || PRESETS[0])

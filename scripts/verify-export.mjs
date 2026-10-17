@@ -153,22 +153,29 @@ function seamRatio(png, ch) {
   const w = png.ihdr.width
   const h = png.ihdr.height
   const get = png.ihdr.bitDepth === 16 ? sample16 : sample8
+  const horiz = []
+  const vert = []
   let seamH = 0
-  let localH = 0
   let seamV = 0
-  let localV = 0
   for (let y = 0; y < h; y++) {
     seamH += Math.abs(get(png, 0, y, ch) - get(png, w - 1, y, ch))
-    localH += (Math.abs(get(png, 0, y, ch) - get(png, 1, y, ch)) + Math.abs(get(png, w - 2, y, ch) - get(png, w - 1, y, ch))) * 0.5
+    for (let x = 0; x < w - 1; x++) horiz.push(Math.abs(get(png, x, y, ch) - get(png, x + 1, y, ch)))
   }
   for (let x = 0; x < w; x++) {
     seamV += Math.abs(get(png, x, 0, ch) - get(png, x, h - 1, ch))
-    localV += (Math.abs(get(png, x, 0, ch) - get(png, x, 1, ch)) + Math.abs(get(png, x, h - 2, ch) - get(png, x, h - 1, ch))) * 0.5
+    for (let y = 0; y < h - 1; y++) vert.push(Math.abs(get(png, x, y, ch) - get(png, x, y + 1, ch)))
+  }
+  const pct = (arr, p) => {
+    if (!arr.length) return 0
+    const copy = arr.slice().sort((a, b) => a - b)
+    return copy[Math.min(copy.length - 1, Math.floor(copy.length * p))]
   }
   const floor = png.ihdr.bitDepth === 16 ? 256 : 1.0
+  const hStep = seamH / h
+  const vStep = seamV / w
   return {
-    horizontal: +((seamH / h) / Math.max(localH / h, floor)).toFixed(2),
-    vertical: +((seamV / w) / Math.max(localV / w, floor)).toFixed(2)
+    horizontal: +(hStep < floor ? 0 : hStep / Math.max(pct(horiz, 0.99), floor)).toFixed(2),
+    vertical: +(vStep < floor ? 0 : vStep / Math.max(pct(vert, 0.99), floor)).toFixed(2)
   }
 }
 

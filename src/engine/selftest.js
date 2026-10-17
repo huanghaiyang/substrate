@@ -18,21 +18,30 @@ function channelStats(data, width, height) {
 
 function seamRatios(data, width, height) {
   const px = (x, y) => data[(y * width + x) * 4]
+  const horiz = []
+  const vert = []
   let seamH = 0
-  let localH = 0
   let seamV = 0
-  let localV = 0
   for (let y = 0; y < height; y++) {
     seamH += Math.abs(px(0, y) - px(width - 1, y))
-    localH += (Math.abs(px(0, y) - px(1, y)) + Math.abs(px(width - 2, y) - px(width - 1, y))) * 0.5
+    for (let x = 0; x < width - 1; x++) horiz.push(Math.abs(px(x, y) - px(x + 1, y)))
   }
   for (let x = 0; x < width; x++) {
     seamV += Math.abs(px(x, 0) - px(x, height - 1))
-    localV += (Math.abs(px(x, 0) - px(x, 1)) + Math.abs(px(x, height - 2) - px(x, height - 1))) * 0.5
+    for (let y = 0; y < height - 1; y++) vert.push(Math.abs(px(x, y) - px(x, y + 1)))
   }
-  const h = seamH / height / Math.max(localH / height, 1.0)
-  const v = seamV / width / Math.max(localV / width, 1.0)
-  return { horizontal: +h.toFixed(2), vertical: +v.toFixed(2) }
+  const pct = (arr, p) => {
+    if (!arr.length) return 0
+    const copy = arr.slice().sort((a, b) => a - b)
+    return copy[Math.min(copy.length - 1, Math.floor(copy.length * p))]
+  }
+  const floor = 1.0
+  const h = seamH / height
+  const v = seamV / width
+  return {
+    horizontal: +(h < floor ? 0 : h / Math.max(pct(horiz, 0.99), floor)).toFixed(2),
+    vertical: +(v < floor ? 0 : v / Math.max(pct(vert, 0.99), floor)).toFixed(2)
+  }
 }
 
 function normalStats(data, width, height) {

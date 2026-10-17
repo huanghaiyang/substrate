@@ -101,7 +101,7 @@ export const filterDefs = [
     body: /* glsl */ `
       vec4 nodeColor(vec2 uv) {
         float len = u_length * uRes.x / 1024.0;
-        vec2 dir = vec2(cos(radians(u_angle)), sin(radians(u_angle)));
+        vec2 dir = vec2(cos(u_angle), sin(u_angle));
         vec4 sum = vec4(0.0);
         float wsum = 0.0;
         for (int i = 0; i < 32; i++) {
@@ -168,7 +168,7 @@ export const filterDefs = [
     ],
     body: /* glsl */ `
       vec4 nodeColor(vec2 uv) {
-        vec2 dir = vec2(cos(radians(u_angle)), sin(radians(u_angle)));
+        vec2 dir = vec2(cos(u_angle), sin(u_angle));
         vec2 r = uPx * u_radius;
         float a = luma(texture(uIn_input, uv + dir * r).rgb);
         float b = luma(texture(uIn_input, uv - dir * r).rgb);
@@ -283,7 +283,7 @@ export const filterDefs = [
       vec4 nodeColor(vec2 uv) {
         vec4 c = texture(uIn_input, uv);
         vec3 hsv = rgb2hsv(c.rgb);
-        hsv.x = fract(hsv.x + u_hue / 360.0);
+        hsv.x = fract(hsv.x + u_hue / TAU);
         hsv.y = sat(hsv.y * u_saturation);
         hsv.z = sat(hsv.z + u_lightness);
         return vec4(hsv2rgb(hsv), c.a);
@@ -542,7 +542,7 @@ export const filterDefs = [
     body: /* glsl */ `
       vec4 nodeColor(vec2 uv) {
         vec2 p = uv - 0.5 - u_offset;
-        p = rot2(p, radians(u_rotation));
+        p = rot2(p, u_rotation);
         p = p / max(u_scale, vec2(1e-3)) + 0.5;
         return texture(uIn_input, p);
       }`

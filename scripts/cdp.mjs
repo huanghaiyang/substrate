@@ -91,7 +91,56 @@ async function main() {
     }
   })
   try {
-    if (cmd === 'eval') {
+    if (cmd === 'audit') {
+      const section = args[1] || 'all'
+      const expr =
+        "(async()=>{const m=await import('/src/engine/audit.js');const r=await m.runAudit(window.__SUBSTRATE__.engine," +
+        JSON.stringify(section) +
+        ");return JSON.stringify(r)})()"
+      const res = await client.send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true, userGesture: true })
+      if (res.exceptionDetails) {
+        console.error(JSON.stringify(res.exceptionDetails, null, 2))
+        process.exitCode = 2
+      } else {
+        const raw = res.result && res.result.value
+        const report = typeof raw === 'string' ? JSON.parse(raw) : raw
+        const sections = report.sections || [report]
+        const totalPassed = sections.reduce((n, s) => n + (s.passed || 0), 0)
+        const totalFailed = sections.reduce((n, s) => n + (s.failed || 0), 0)
+        for (const s of sections) {
+          console.log(
+            (s.ok ? 'PASS' : 'FAIL') + '  ' + (s.section || section) + '  passed=' + s.passed + ' failed=' + s.failed
+          )
+          for (const f of s.failures || []) console.log('   - ' + f.name + '  ' + f.info)
+        }
+        console.log('---')
+        console.log('audit ' + (report.ok ? 'PASSED' : 'FAILED') + '  total=' + (totalPassed + totalFailed) + ' failed=' + totalFailed)
+        process.exitCode = report.ok ? 0 : 1
+      }
+    } else if (cmd === 'focus') {
+      try {
+        await client.send('Page.enable')
+        await client.send('Page.bringToFront')
+        await client.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+        await client.send('Page.setWebLifecycleState', { state: 'active' })
+      } catch (e) {
+        console.error('focus failed:', e.message)
+      }
+      const state = await client.send('Runtime.evaluate', {
+        expression: 'JSON.stringify({ visibility: document.visibilityState, focused: document.hasFocus() })',
+        returnByValue: true
+      })
+      console.log(state.result && state.result.value)
+    } else if (cmd === 'eval') {
+      // keep the page foregrounded: background tabs get their timers throttled, which stalls in-page audits
+      try {
+        await client.send('Page.enable')
+        await client.send('Page.bringToFront')
+        await client.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+        await client.send('Page.setWebLifecycleState', { state: 'active' })
+      } catch (e) {
+        /* focus is best effort */
+      }
       const expression = args[1]
       const result = await client.send('Runtime.evaluate', {
         expression,

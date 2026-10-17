@@ -68,6 +68,7 @@ PORT=3001 npm start  # custom port
 ```
 
 The first launch loads a built-in demo material in the browser language (add `?lang=zh` or `?lang=en` to force one).
+Press **? → Run self-test** at any time to execute the built-in 2,215-check audit.
 Edit, paint, export — everything is persisted to the browser (local autosave) and can be saved as named projects
 on the Node server.
 
@@ -275,7 +276,8 @@ Open `http://127.0.0.1:3000/?selftest=1&export=1` (optionally `&demo=mossy-rock&
 - compiles **every node's GLSL** directly against the WebGL context (report at `window.__SELFTEST__.shaders`),
 - evaluates the graph, checks GL errors and thumbnail generation,
 - reads back every channel and validates colour variance, normal unit length and outward orientation,
-- measures wrapped-edge discontinuities against the **local gradient** for seamless tiling,
+- measures wrapped-edge discontinuities against the 99th percentile of interior adjacent steps (robust to both smooth
+  gradients and intentional high-frequency patterns such as checkerboards) for seamless tiling,
 - optionally bakes and exports a full package.
 
 Results are printed on screen and POSTed to `/api/debug/last?kind=selftest`.
@@ -299,6 +301,7 @@ You can also run the same test through the page's **WebMCP** tools (registered o
 | `?fresh=1` | Skip session restore and load the default demo. |
 | `?selftest=1[&export=1][&res=512]` | Run the automated self-test (and export) on load. |
 | `?redact=1` | Hide the GPU/driver fingerprint in the status bar (used for documentation screenshots). |
+| `?audit=1[&auditsection=render]` | Run the full self-check suite on load (all sections or one). |
 
 ### 2. Independent package verifier (Node)
 
@@ -311,10 +314,35 @@ It re-implements PNG decoding with `node:zlib` (chunk CRCs, inflate, scanline un
 resolution, bit depth and colour type per channel, sRGB chunk presence rules, `Software` tEXt metadata,
 wrapped-edge seam ratios, manifest structure, README sections, and every zip entry against the files on disk.
 
-Latest run: **4/4 demo packages passed** (all PNGs CRC-valid, correct colour spaces, seam ratios ≈ 1.0,
-6 clean zip entries each).
+Latest run after the audit fixes: **4/4 demo packages passed** (all PNGs CRC-valid, correct colour spaces,
+seam ratios well below 1.0 with the percentile metric, clean zip entries each).
 
-### 3. Browser automation helper
+### 3. Full application audit (2,215 checks)
+
+`src/engine/audit.js` is a browser-side test harness that exercises the whole product, not just exports:
+
+| Section | Checks |
+| --- | --- |
+| **schema** | every node definition, parameter schema (ranges, defaults, steps, select indices, gradient stops), shader uniform/input consistency, all 37 fragment programs compile |
+| **render** | every node rendered at its default settings, **every select option**, **every numeric parameter at min and max**, colour extremes and 8-stop gradients: finite output, sane range, expected variation, seamless tiling, unit-length normals |
+| **values** | numeric semantics against golden values — sRGB→linear colour conversion, invert, threshold, levels/gamma, posterize, grayscale weights, HSL hue rotation, all blend operators (copy/add/multiply/screen/subtract/lighten/darken + opacity + mask), normal/AO/curvature/edge constants, blur identity, warp/transform identity, channel picking, gradient repeat/offset, gradient-map inversion, empty paint layer identity |
+| **actions** | add every node type, delete/duplicate/undo/redo, cycle rejection, output uniqueness, parameter coalescing, move/rename, resolution & proxy switching, loading all demos, project save/load/delete (including non-ASCII names), image input round-trip, paint stroke/undo/clear, all five export presets, DirectX normal flip, 16-bit height and alpha plans |
+| **dom** | real UI interactions: palette search (EN+ZH), palette add, graph context menu, node context menu, node drag + undo, marquee selection, Delete/Undo/Redo keys, help/projects/export dialogs, demo dropdown, map zoom, preview shape & sliders, Paint Studio drawing + undo, language switching, New button, console-error watch |
+| **i18n** | EN/ZH key parity, node/parameter/option dictionary coverage, runtime language switching, raw-key/missing-key scans |
+
+Run it either from the in-app help dialog (**Run self-test**), with the URL, or from the command line:
+
+```bash
+node scripts/cdp.mjs audit all        # or: npm run audit
+npm run audit:quick                   # schema only
+```
+
+It prints a per-section PASS/FAIL summary and returns a non-zero exit code on failure. Latest run: **2,215 checks, 0 failures**
+(schema 1,278 · render 628 · values 46 · actions 198 · dom 48 · i18n 17). The same run is available as
+`?audit=1` (all sections) or `?audit=1&auditsection=render`, with the report available as `window.__AUDIT__`
+and POSTed to `/api/debug/report` for CI.
+
+### 4. Browser automation helper
 
 `scripts/cdp.mjs` connects to Chrome's DevTools Protocol via Node's native WebSocket — useful for
 evaluating expressions in the running app, capturing screenshots to files and collecting console logs:
@@ -370,6 +398,7 @@ src/engine/png.js          PNG encoder (adaptive filters, 8/16-bit)
 src/engine/exporter.js     presets, channel packing, manifest/README
 src/engine/selftest.js     automated pipeline validation
 src/engine/webmcp.js       WebMCP tool registration
+src/engine/audit.js        browser-side full audit: nodes, values, actions, DOM, i18n
 exports/                   generated material packages (git-ignored; produced by Export)
 docs/screenshots/          documentation images
 ```

@@ -64,6 +64,7 @@ export class TextureEngine {
 
     this.pools = new Map()
     this.cache = new Map()
+    this.cacheRts = new Set()
     this.materials = new Map()
     this.solids = new Map()
     this.paintTextures = new Map()
@@ -182,6 +183,7 @@ export class TextureEngine {
 
   clearCache() {
     for (const e of this.cache.values()) this.release(e.rt)
+    for (const e of this.cache.values()) this.cacheRts.delete(e.rt)
     this.cache.clear()
   }
 
@@ -503,7 +505,10 @@ export class TextureEngine {
           passes++
         }
         rt = prevRt
-        if (!streaming) this.cache.set(key, { rt, w: res, stamp: frame })
+        if (!streaming) {
+          this.cache.set(key, { rt, w: res, stamp: frame })
+          this.cacheRts.add(rt)
+        }
       }
       rts.set(id, rt)
 
@@ -531,6 +536,7 @@ export class TextureEngine {
       const cap = 96
       for (const [k, e] of this.cache) {
         if (e.stamp < frame - 2) {
+          this.cacheRts.delete(e.rt)
           this.release(e.rt)
           this.cache.delete(k)
         }
@@ -538,6 +544,7 @@ export class TextureEngine {
       if (this.cache.size > cap) {
         const sorted = [...this.cache.entries()].sort((a, b) => a[1].stamp - b[1].stamp)
         for (let i = 0; i < sorted.length - cap; i++) {
+          this.cacheRts.delete(sorted[i][1].rt)
           this.release(sorted[i][1].rt)
           this.cache.delete(sorted[i][0])
         }
@@ -573,7 +580,10 @@ export class TextureEngine {
 
   releaseResult(result) {
     if (!result) return
-    for (const rt of result.rts.values()) this.release(rt)
+    for (const rt of result.rts.values()) {
+      if (this.cacheRts && this.cacheRts.has(rt)) continue
+      this.release(rt)
+    }
     result.rts.clear()
     if (this.last === result) this.last = null
   }

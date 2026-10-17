@@ -10,7 +10,9 @@
     "build": "node scripts/build.mjs",
     "serve:dist": "node server/index.js --dist",
     "verify": "node scripts/verify-export.mjs",
-    "cdp": "node scripts/cdp.mjs"
+    "cdp": "node scripts/cdp.mjs",
+    "audit": "node scripts/cdp.mjs audit all",
+    "audit:quick": "node scripts/cdp.mjs audit schema"
   },
   "dependencies": {
     "three": "^0.169.0",
