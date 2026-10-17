@@ -92,6 +92,15 @@ async function main() {
   })
   try {
     if (cmd === 'audit') {
+      // foreground the page: background tabs throttle timers, which stalls the in-page suite
+      try {
+        await client.send('Page.enable')
+        await client.send('Page.bringToFront')
+        await client.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+        await client.send('Page.setWebLifecycleState', { state: 'active' })
+      } catch (e) {
+        /* focus is best effort */
+      }
       const section = args[1] || 'all'
       const expr =
         "(async()=>{const m=await import('/src/engine/audit.js');const r=await m.runAudit(window.__SUBSTRATE__.engine," +

@@ -12,7 +12,8 @@
     "verify": "node scripts/verify-export.mjs",
     "cdp": "node scripts/cdp.mjs",
     "audit": "node scripts/cdp.mjs audit all",
-    "audit:quick": "node scripts/cdp.mjs audit schema"
+    "audit:quick": "node scripts/cdp.mjs audit schema",
+    "audit:ui": "node scripts/cdp.mjs audit ui"
   },
   "dependencies": {
     "three": "^0.169.0",

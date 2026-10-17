@@ -26,6 +26,7 @@ export const state = reactive({
   dirty: true,
   error: '',
   previewNonce: 0,
+  previewVersion: 0,
   lastEvalMs: 0,
   gpuMs: 0,
   evalNodes: 0,

@@ -43,8 +43,24 @@ export default defineComponent({
       })).filter((i) => i.url)
     }
 
-    watch(() => state.previewVersion, rebuild, { flush: 'post' })
-    onMounted(rebuild)
+    // Only rebuild the (expensive) PNG data URLs while the map panel is actually visible;
+    // rebuild once when the user switches to the 2D Maps tab so it is always current.
+    watch(
+      () => state.previewVersion,
+      () => {
+        if (state.showMaps) rebuild()
+      },
+      { flush: 'post' }
+    )
+    watch(
+      () => state.showMaps,
+      (visible) => {
+        if (visible) rebuild()
+      }
+    )
+    onMounted(() => {
+      if (state.showMaps) rebuild()
+    })
 
     const meta = computed(() => {
       const out = outputNode()

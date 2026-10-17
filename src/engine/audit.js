@@ -1034,6 +1034,74 @@ async function auditDom(ctx) {
     key('Escape')
     await sleepMs(150)
 
+    // ---------- live preview follows demo switches and edits ----------
+    const { previewStore } = await import('./preview.js')
+    const { loadDemo: loadDemoFn } = await import('./store.js')
+    const texHash = (arr) => {
+      if (!arr || !arr.length) return 'none'
+      let h = 0
+      const step = Math.max(1, Math.floor(arr.length / 2048))
+      for (let i = 0; i < arr.length; i += step) h = (h * 31 + arr[i]) | 0
+      return h + ':' + arr.length
+    }
+    const previewSnap = () => {
+      const mesh = window.__PREVIEW__ && window.__PREVIEW__.getMesh && window.__PREVIEW__.getMesh()
+      const mat = mesh && mesh.material
+      const thumbs = qa('.map-card .map-thumb').map((e) => e.style.backgroundImage).join('|')
+      return {
+        map: mat && mat.map ? texHash(mat.map.image && mat.map.image.data) : 'none',
+        normal: mat && mat.normalMap ? texHash(mat.normalMap.image && mat.normalMap.image.data) : 'none',
+        maps: previewStore.maps && previewStore.maps.basecolor ? texHash(previewStore.maps.basecolor.data) : 'none',
+        pv: state.previewVersion,
+        nonce: state.previewNonce,
+        cards: thumbs
+      }
+    }
+    const waitPreviewVersion = async (from, timeout = 10000) => {
+      const t0 = Date.now()
+      while (Date.now() - t0 < timeout) {
+        if (state.previewVersion > from) return true
+        await sleepMs(120)
+      }
+      return false
+    }
+    const { selectNode: selectNodeFn } = await import('./store.js')
+    loadDemoFn('weathered-steel')
+    const pvSteel = state.previewVersion
+    await waitPreviewVersion(pvSteel)
+    const snapSteel = previewSnap()
+    loadDemoFn('mossy-rock')
+    const pvRock = state.previewVersion
+    await waitPreviewVersion(pvRock)
+    const snapRock = previewSnap()
+    ctx.add('dom: 3D preview follows demo switch', snapSteel.map !== snapRock.map && snapRock.map !== 'none', JSON.stringify({ steel: snapSteel.map, rock: snapRock.map, pv: [snapSteel.pv, snapRock.pv] }))
+    ctx.add('dom: 3D normal follows demo switch', snapSteel.normal !== snapRock.normal && snapRock.normal !== 'none', JSON.stringify({ steel: snapSteel.normal, rock: snapRock.normal }))
+    ctx.add('dom: 2D map panel follows demo switch', snapSteel.maps !== snapRock.maps && snapRock.maps !== 'none', JSON.stringify({ steel: snapSteel.maps, rock: snapRock.maps }))
+    click(tabs[1])
+    await sleepMs(500)
+    const cardsRock = qa('.map-card .map-thumb').map((e) => e.style.backgroundImage).join('|')
+    loadDemoFn('painted-sign')
+    const pvSign = state.previewVersion
+    await waitPreviewVersion(pvSign)
+    await sleepMs(300)
+    const cardsSign = qa('.map-card .map-thumb').map((e) => e.style.backgroundImage).join('|')
+    ctx.add('dom: map card thumbnails refresh', cardsRock !== cardsSign && cardsSign.length > 0, 'cards unchanged')
+    click(tabs[0])
+    await sleepMs(400)
+    const outId = outputNode().id
+    const baseConn = state.graph.connections.find((c) => c.to.node === outId && c.to.port === 'basecolor')
+    const editTarget = baseConn ? nodeById(baseConn.from.node) : state.graph.nodes.find((n) => n.type === 'perlin')
+    if (editTarget) {
+      selectNodeFn(editTarget.id)
+      await sleepMs(500)
+      const snapBeforeEdit = previewSnap()
+      const rng = qa('.inspector input[type=range]')[0]
+      if (rng) setInput(rng, String(Number(rng.min) + (Number(rng.max) - Number(rng.min)) * 0.9), 'input')
+      await waitPreviewVersion(snapBeforeEdit.pv)
+      const snapAfterEdit = previewSnap()
+      ctx.add('dom: 3D preview follows parameter edits', !!rng && snapBeforeEdit.map !== snapAfterEdit.map, JSON.stringify({ before: snapBeforeEdit.map, after: snapAfterEdit.map, ranged: !!rng }))
+    }
+
     // node context menu
     const nodeEl = qa('.gnode')[0]
     if (nodeEl) {
@@ -1309,7 +1377,13 @@ const SECTIONS = {
   values: auditValues,
   actions: auditActions,
   dom: auditDom,
-  i18n: auditI18n
+  i18n: auditI18n,
+  ui: async (ctx) => {
+    const { runUiCheck } = await import('./ui-check.js')
+    const res = await runUiCheck()
+    for (const t of res.tests || res.failures || []) ctx.add(t.name, t.pass, t.info)
+    if (!res.tests) ctx.add('ui: results', false, 'ui-check returned no test list')
+  }
 }
 
 export async function runAudit(engine, section = 'all') {

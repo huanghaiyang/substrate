@@ -68,7 +68,7 @@ PORT=3001 npm start  # custom port
 ```
 
 The first launch loads a built-in demo material in the browser language (add `?lang=zh` or `?lang=en` to force one).
-Press **? → Run self-test** at any time to execute the built-in 2,215-check audit.
+Press **? → Run self-test** at any time to execute the built-in 2,220-check audit.
 Edit, paint, export — everything is persisted to the browser (local autosave) and can be saved as named projects
 on the Node server.
 
@@ -317,7 +317,7 @@ wrapped-edge seam ratios, manifest structure, README sections, and every zip ent
 Latest run after the audit fixes: **4/4 demo packages passed** (all PNGs CRC-valid, correct colour spaces,
 seam ratios well below 1.0 with the percentile metric, clean zip entries each).
 
-### 3. Full application audit (2,215 checks)
+### 3. Full application audit (2,220 checks + 89 opt-in UI checks)
 
 `src/engine/audit.js` is a browser-side test harness that exercises the whole product, not just exports:
 
@@ -327,19 +327,21 @@ seam ratios well below 1.0 with the percentile metric, clean zip entries each).
 | **render** | every node rendered at its default settings, **every select option**, **every numeric parameter at min and max**, colour extremes and 8-stop gradients: finite output, sane range, expected variation, seamless tiling, unit-length normals |
 | **values** | numeric semantics against golden values — sRGB→linear colour conversion, invert, threshold, levels/gamma, posterize, grayscale weights, HSL hue rotation, all blend operators (copy/add/multiply/screen/subtract/lighten/darken + opacity + mask), normal/AO/curvature/edge constants, blur identity, warp/transform identity, channel picking, gradient repeat/offset, gradient-map inversion, empty paint layer identity |
 | **actions** | add every node type, delete/duplicate/undo/redo, cycle rejection, output uniqueness, parameter coalescing, move/rename, resolution & proxy switching, loading all demos, project save/load/delete (including non-ASCII names), image input round-trip, paint stroke/undo/clear, all five export presets, DirectX normal flip, 16-bit height and alpha plans |
-| **dom** | real UI interactions: palette search (EN+ZH), palette add, graph context menu, node context menu, node drag + undo, marquee selection, Delete/Undo/Redo keys, help/projects/export dialogs, demo dropdown, map zoom, preview shape & sliders, Paint Studio drawing + undo, language switching, New button, console-error watch |
+| **dom** | real UI interactions: palette search (EN+ZH), palette add, graph context menu, node context menu, node drag + undo, marquee selection, Delete/Undo/Redo keys, help/projects/export dialogs, demo dropdown, map zoom, preview shape & sliders, Paint Studio drawing + undo, language switching, New button, console-error watch. Includes live-preview regression tests: the 3D material and the 2D map panel must refresh on demo switches and on parameter edits |
 | **i18n** | EN/ZH key parity, node/parameter/option dictionary coverage, runtime language switching, raw-key/missing-key scans |
+| **ui** *(opt-in)* | 89 deep toolbar + right-panel checks: project-name edit, New, all four demo switches, save/open round-trip, undo/redo buttons, resolution & proxy selects, help dialog, language switch, export dialog defaults/height toggle/real export; preview shapes, tiling & displacement sliders, pause/reset, badge, 8 map cards + normal-convention note + zoom, inspector widgets (slider↔number, bool, gradient add/remove stops), Paint Studio open/close and live thumbnail |
 
 Run it either from the in-app help dialog (**Run self-test**), with the URL, or from the command line:
 
 ```bash
-node scripts/cdp.mjs audit all        # or: npm run audit
+node scripts/cdp.mjs audit all        # or: npm run audit   (2,220 checks, ~40 s)
+npm run audit:ui                      # deep toolbar/right-panel pass (89 checks)
 npm run audit:quick                   # schema only
 ```
 
-It prints a per-section PASS/FAIL summary and returns a non-zero exit code on failure. Latest run: **2,215 checks, 0 failures**
-(schema 1,278 · render 628 · values 46 · actions 198 · dom 48 · i18n 17). The same run is available as
-`?audit=1` (all sections) or `?audit=1&auditsection=render`, with the report available as `window.__AUDIT__`
+It prints a per-section PASS/FAIL summary and returns a non-zero exit code on failure. Latest run: **2,220 checks, 0 failures**
+(schema 1,278 · render 628 · values 46 · actions 198 · dom 53 · i18n 17), plus the opt-in UI pass (89 checks). The same run is available as
+`?audit=1` (all sections), `?audit=1&auditsection=render` or `?audit=1&auditsection=ui`, with the report available as `window.__AUDIT__`
 and POSTed to `/api/debug/report` for CI.
 
 ### 4. Browser automation helper
