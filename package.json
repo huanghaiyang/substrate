@@ -1,0 +1,22 @@
+{
+  "name": "substrate-texture-designer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Substrate — node-based procedural PBR texture authoring, painting and industry-standard export (Vue 3 + Three.js + Node, zero-bundler ESM).",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js",
+    "build": "node scripts/build.mjs",
+    "serve:dist": "node server/index.js --dist",
+    "verify": "node scripts/verify-export.mjs",
+    "cdp": "node scripts/cdp.mjs"
+  },
+  "dependencies": {
+    "three": "^0.169.0",
+    "vue": "^3.5.12"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
