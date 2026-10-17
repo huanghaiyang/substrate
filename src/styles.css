@@ -1617,3 +1617,7 @@ code {
   background: var(--accent-soft);
   color: var(--text);
 }
+
+.taper-length {
+  margin-top: 6px;
+}

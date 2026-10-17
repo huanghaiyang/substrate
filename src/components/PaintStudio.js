@@ -55,6 +55,29 @@ export default defineComponent({
     let stroke = null
     let prevPoint = null
     let lastLive = 0
+    let liveBase = null
+    let lastLiveRender = 0
+
+    // Live painting: keep a snapshot of the committed texture and re-rasterise the whole
+    // (cubic-smoothed) current stroke on top of it, so the preview matches the committed result
+    // exactly — including curve smoothing and pen taper.
+    function snapshotBase() {
+      const src = canvasRef.value
+      liveBase = document.createElement('canvas')
+      liveBase.width = src.width
+      liveBase.height = src.height
+      liveBase.getContext('2d').drawImage(src, 0, 0)
+    }
+    function renderLive(force = false) {
+      if (!canvasRef.value || !stroke || !liveBase) return
+      const now = performance.now()
+      if (!force && now - lastLiveRender < 24) return
+      lastLiveRender = now
+      const ctx = canvasRef.value.getContext('2d')
+      ctx.clearRect(0, 0, canvasRef.value.width, canvasRef.value.height)
+      ctx.drawImage(liveBase, 0, 0)
+      drawStroke(ctx, stroke, canvasRef.value.width, canvasRef.value.height)
+    }
 
     const brushDotStyle = computed(() => {
       const px = Math.min(74, Math.max(4, brush.size * 0.32))
@@ -115,6 +138,8 @@ export default defineComponent({
         spacing: brushValue('spacing'),
         brushId: brush.brushId,
         erase: brush.erase,
+        taper: !!brush.taper,
+        taperLength: brush.taperLength ?? 0.5,
         symmetry: { x: brush.symmetryX, y: brush.symmetryY },
         points: []
       }
@@ -131,7 +156,8 @@ export default defineComponent({
       stroke = newStroke()
       const pt = pointFrom(e)
       stroke.points.push(pt)
-      drawStroke(canvasRef.value.getContext('2d'), stroke, canvasRef.value.width, canvasRef.value.height)
+      snapshotBase()
+      renderLive(true)
       prevPoint = pt
       painting = true
       live(true)
@@ -143,13 +169,8 @@ export default defineComponent({
       const dx = (pt.x - prevPoint.x) * canvasRef.value.width
       const dy = (pt.y - prevPoint.y) * canvasRef.value.height
       if (Math.hypot(dx, dy) < 0.6) return
-      drawStroke(
-        canvasRef.value.getContext('2d'),
-        { ...stroke, points: [prevPoint, pt] },
-        canvasRef.value.width,
-        canvasRef.value.height
-      )
       stroke.points.push(pt)
+      renderLive()
       prevPoint = pt
       live()
     }
@@ -162,8 +183,11 @@ export default defineComponent({
         /* ignore */
       }
       const done = stroke
+      renderLive(true)
       stroke = null
       prevPoint = null
+      liveBase = null
+      lastLiveRender = 0
       if (done) commitStroke(props.nodeId, done)
       live(true)
     }
@@ -277,6 +301,14 @@ export default defineComponent({
           <div class="param">
             <div class="param-label"><span>{{ $t('paint.spacing') }}</span><span class="val">{{ brushValue('spacing').toFixed(2) }}</span></div>
             <input type="range" min="0.02" max="0.5" step="0.005" :value="brushValue('spacing')" @input="brush.spacing = Number($event.target.value)" style="width: 100%" />
+          </div>
+          <div class="param">
+            <div class="param-label"><span>{{ $t('paint.taper') }}</span></div>
+            <label class="check"><input type="checkbox" v-model="brush.taper" /> {{ $t('paint.taperOn') }}</label>
+            <div v-if="brush.taper" class="taper-length">
+              <div class="param-label"><span>{{ $t('paint.taperLength') }}</span><span class="val">{{ (brush.taperLength ?? 0.5).toFixed(2) }}</span></div>
+              <input type="range" min="0.05" max="1" step="0.05" :value="brush.taperLength ?? 0.5" @input="brush.taperLength = Number($event.target.value)" style="width: 100%" />
+            </div>
           </div>
           <div class="param">
             <div class="param-label"><span>{{ $t('paint.symmetry') }}</span></div>

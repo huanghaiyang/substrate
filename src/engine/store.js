@@ -20,10 +20,10 @@ function loadSavedBrush() {
     const out = {}
     if (typeof raw.brushId === 'string' && BRUSHES.some((b) => b.id === raw.brushId)) out.brushId = raw.brushId
     if (typeof raw.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(raw.color)) out.color = raw.color
-    for (const key of ['size', 'opacity', 'hardness', 'flow', 'spacing']) {
+    for (const key of ['size', 'opacity', 'hardness', 'flow', 'spacing', 'taperLength']) {
       if (raw[key] !== undefined && raw[key] !== null && Number.isFinite(Number(raw[key]))) out[key] = Number(raw[key])
     }
-    for (const key of ['erase', 'symmetryX', 'symmetryY']) {
+    for (const key of ['erase', 'symmetryX', 'symmetryY', 'taper']) {
       if (typeof raw[key] === 'boolean') out[key] = raw[key]
     }
     return out
@@ -74,6 +74,8 @@ export const state = reactive({
     erase: false,
     symmetryX: false,
     symmetryY: false,
+    taper: false,
+    taperLength: 0.5,
     brushId: DEFAULT_BRUSH_ID,
     flow: null,
     spacing: null,

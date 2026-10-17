@@ -16,7 +16,8 @@ import {
   redo,
   doEval,
   setResolution,
-  setProxy
+  setProxy,
+  savePaintBrush
 } from './store.js'
 import { previewStore } from './preview.js'
 
@@ -86,6 +87,7 @@ export async function runUiCheck() {
 
   const snapshot = { graph: JSON.parse(graphJSON()), name: state.projectName, resolution: state.resolution, proxy: state.proxy, locale: (await import('../i18n/index.js')).locale.value }
   const savedLocale = (() => { try { return localStorage.getItem('substrate.locale') } catch (e) { return null } })()
+  const brushSnapshot = { ...state.paintBrush }
   const hrefBeforeLocaleTests = location.href
   const { setLocale } = await import('../i18n/index.js')
 
@@ -467,6 +469,48 @@ export async function runUiCheck() {
       let transparent = 0
       for (let i = 3; i < d3.length; i += 4) if (d3[i] === 0) transparent++
       r.add('paint: eraser removes pixels', transparent > 100, String(transparent))
+      // cubic smoothing: a 3-point arc must bend away from the straight chord, while two points stay straight
+      const { strokeSamples } = await import('../engine/paint.js')
+      const arcPts = [{ x: 0.2, y: 0.5, p: 1 }, { x: 0.5, y: 0.2, p: 1 }, { x: 0.8, y: 0.5, p: 1 }]
+      const arc = strokeSamples(arcPts, 256, 256, 4, {})
+      const arcMid = arc.samples[Math.floor(arc.samples.length / 2)]
+      const chordMidY = ((0.5 + 0.2) / 2) * 256
+      r.add('paint: cubic stroke smoothing bends the path', Math.abs(arcMid.y - chordMidY) > 4, JSON.stringify({ y: +arcMid.y.toFixed(1), chord: chordMidY }))
+      const straight = strokeSamples([{ x: 0.2, y: 0.5, p: 1 }, { x: 0.8, y: 0.5, p: 1 }], 256, 256, 4, {})
+      r.add('paint: two-point stroke stays straight', Math.max(...straight.samples.map((v) => Math.abs(v.y - 128))) < 0.01)
+      // pen taper: end stamps shrink, middle stamps stay full size
+      const tapered = strokeSamples(arcPts, 256, 256, 4, { taper: true, taperLength: 0.5, size: 40 })
+      const tFirst = tapered.samples[0].radiusScale
+      const tLast = tapered.samples[tapered.samples.length - 1].radiusScale
+      const tMid = tapered.samples[Math.floor(tapered.samples.length / 2)].radiusScale
+      r.add('paint: pen taper shrinks the stroke ends', tFirst < 0.4 && tLast < 0.4 && tMid > 0.9, JSON.stringify({ first: +tFirst.toFixed(2), mid: +tMid.toFixed(2), last: +tLast.toFixed(2) }))
+      // painted coverage confirms the taper visually
+      const taperCanvas = document.createElement('canvas')
+      taperCanvas.width = taperCanvas.height = 128
+      const tctx = taperCanvas.getContext('2d')
+      const drawTaper = (on) => {
+        tctx.clearRect(0, 0, 128, 128)
+        drawStroke(tctx, { color: '#ffffff', size: 26, opacity: 1, brushId: 'hard-round', symmetry: {}, points: [{ x: 0.15, y: 0.5, p: 1 }, { x: 0.85, y: 0.5, p: 1 }], taper: on, taperLength: 0.6 }, 128, 128)
+        const data = tctx.getImageData(0, 0, 128, 128).data
+        const colAlpha = (x) => {
+          let n = 0
+          for (let y = 0; y < 128; y++) n += data[(y * 128 + x) * 4 + 3]
+          return n
+        }
+        return { start: colAlpha(22), mid: colAlpha(64), end: colAlpha(104) }
+      }
+      const plain = drawTaper(false)
+      const pen = drawTaper(true)
+      r.add('paint: taper narrows painted ends', pen.start < plain.start * 0.9 && pen.end < plain.end * 0.9 && pen.mid >= plain.mid * 0.85, JSON.stringify({ plain, pen }))
+      // UI: taper toggle exists, writes to the brush and next stroke
+      const taperToggle = [...qa('.paint-tools .check input[type=checkbox]')].find((c) => /渐细|Taper/i.test(c.closest('label')?.textContent || ''))
+      r.add('paint: pen taper toggle present', !!taperToggle, 'missing')
+      if (taperToggle && !taperToggle.checked) {
+        taperToggle.checked = true
+        taperToggle.dispatchEvent(new Event('change', { bubbles: true }))
+        await sleep(120)
+      }
+      r.add('paint: taper setting stored in brush', state.paintBrush.taper === true, String(state.paintBrush.taper))
       const liveImg = q('.paint-side img')
       r.add('right: paint live thumb', !!liveImg && !!liveImg.src)
       click(qa('.paint-head .btn').find((b) => /Graph|节点图/.test(b.textContent)))
@@ -478,6 +522,9 @@ export async function runUiCheck() {
   } finally {
     try {
       setLocale(snapshot.locale, false)
+      // restore the user's brush choice (the brush tests select presets and toggle taper)
+      Object.assign(state.paintBrush, brushSnapshot)
+      savePaintBrush()
       // restore the user's remembered language (the language-switch test really clicked the switch)
       try {
         if (savedLocale === null) localStorage.removeItem('substrate.locale')

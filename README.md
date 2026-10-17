@@ -18,9 +18,11 @@ paint on them by hand, preview the result as a lit 3D material, and export an in
   normal/AO/curvature generators, blend modes, channel packing helpers.
 - **Hand painting** — a real Paint Studio with **10 built-in brushes** (soft/hard round, pencil, ink, airbrush,
   marker, chalk, spray, sponge, flat) driven by grain, scatter, flow and spacing, plus pressure-sensitive size/flow,
-  hardness/opacity, eraser, fill, X/Y symmetry and stroke-level undo. The chosen brush and its settings are
-  remembered between sessions. Paint is rasterised to a canvas texture and composited through the node graph, so
-  painted strokes can drive base colour, roughness, height, masks — anything.
+  hardness/opacity, eraser, fill, X/Y symmetry and stroke-level undo. Strokes are smoothed with **cubic Bézier
+  curves** (Catmull-Rom through the sampled pointer path) and an optional **pen taper (笔锋)** thins the start and
+  end of each stroke. The chosen brush and its settings are remembered between sessions. Paint is rasterised to a
+  canvas texture and composited through the node graph, so painted strokes can drive base colour, roughness, height,
+  masks — anything.
 - **Live PBR preview** — Three.js `MeshStandardMaterial` with procedural IBL, ACES tone mapping, five preview
   meshes, tiling, displacement and auto-spin.
 - **2D channel inspection** — all eight PBR channels with colour-space labels, one-click full-size zoom.
@@ -113,6 +115,11 @@ Double-click a **Paint Layer** node (or select it and press *Open Paint Studio*)
   *Spray* (scattered droplets), *Sponge* (sparse porous texture) and *Flat Brush*.
 - **Brush dynamics** — size, opacity, hardness, **flow** and **spacing** are adjustable per brush; grain, scatter and
   stamp shape come from the preset. All brushes respond to pressure for size/flow where appropriate.
+- **Smooth strokes** — the pointer path is interpolated with Catmull-Rom splines and stamped along cubic Bézier
+  segments, so fast movements produce clean curves instead of polylines. Live preview re-rasterises the smoothed
+  stroke on top of the committed layer, so what you see while dragging is exactly what gets stored.
+- **Pen taper (笔锋, optional)** — a toggle plus length control thins both ends of a stroke like a lifted brush tip;
+  it is stored per stroke, so old strokes without it are unaffected and undo/redo stays deterministic.
 - The selected brush, its settings and colour are persisted in the browser and restored next time you paint.
 - Eraser (destination-out), fill, and X/Y mirror symmetry work with every brush.
 - Strokes are stored as data, rasterised at 1024², uploaded as a texture, and composited into the node stream;
@@ -153,7 +160,7 @@ per-file downloads, the zip, and copyable manifest/README text.
 │  engine/png.js        PNG encoder: 8/16-bit, grey/RGB/RGBA, adaptive row filters, sRGB     │
 │  engine/exporter.js   channel packing, PNG planning, manifest/README generation            │
 │  engine/selftest.js   shader audit + graph/normal/seam validation + export test            │
-│  engine/paint.js       brush stamp rasteriser (spacing / grain / scatter / symmetry)          │
+│  engine/paint.js       Catmull-Rom → cubic Bézier stroke smoothing + brush stamps + pen taper          │
 │  engine/brushes.js     built-in brush presets + preview thumbnails                        │
 │  engine/webmcp.js     WebMCP tool surface for agent-driven verification                    │
 │  i18n/                bilingual UI catalogue + localized node/parameter definitions         │
@@ -332,7 +339,7 @@ wrapped-edge seam ratios, manifest structure, README sections, and every zip ent
 Latest run after the audit fixes: **4/4 demo packages passed** (all PNGs CRC-valid, correct colour spaces,
 seam ratios well below 1.0 with the percentile metric, clean zip entries each).
 
-### 3. Full application audit (2,227 checks + 100 opt-in UI checks)
+### 3. Full application audit (2,227 checks + 106 opt-in UI checks)
 
 `src/engine/audit.js` is a browser-side test harness that exercises the whole product, not just exports:
 
@@ -344,18 +351,18 @@ seam ratios well below 1.0 with the percentile metric, clean zip entries each).
 | **actions** | add every node type, delete/duplicate/undo/redo, cycle rejection, output uniqueness, parameter coalescing, move/rename, resolution & proxy switching, loading all demos, project save/load/delete (including non-ASCII names), image input round-trip, paint stroke/undo/clear, all five export presets, DirectX normal flip, 16-bit height and alpha plans |
 | **dom** | real UI interactions: palette search (EN+ZH), palette add, graph context menu, node context menu, node drag + undo, marquee selection, Delete/Undo/Redo keys, help/projects/export dialogs, demo dropdown, map zoom, preview shape & sliders, Paint Studio drawing + undo, language switching, New button, console-error watch. Includes live-preview regression tests: the 3D material and the 2D map panel must refresh on demo switches and on parameter edits |
 | **i18n** | EN/ZH key parity, node/parameter/option dictionary coverage, runtime language switching, raw-key/missing-key scans |
-| **ui** *(opt-in)* | 100 deep toolbar/right-panel/paint checks: project-name edit, New, all four demo switches, save/open round-trip, undo/redo buttons, resolution & proxy selects, help dialog, language switch, export dialog defaults/height toggle/real export; preview shapes, tiling & displacement sliders, pause/reset, badge, 8 map cards + normal-convention note + zoom, inspector widgets (slider↔number, bool, gradient add/remove stops), Paint Studio open/close, brush library (10 presets, unique thumbnails, per-brush rendering coverage, stroke records the preset, brush persistence, eraser, flow/spacing sliders) and live thumbnail |
+| **ui** *(opt-in)* | 106 deep toolbar/right-panel/paint checks: project-name edit, New, all four demo switches, save/open round-trip, undo/redo buttons, resolution & proxy selects, help dialog, language switch, export dialog defaults/height toggle/real export; preview shapes, tiling & displacement sliders, pause/reset, badge, 8 map cards + normal-convention note + zoom, inspector widgets (slider↔number, bool, gradient add/remove stops), Paint Studio open/close, brush library (10 presets, unique thumbnails, per-brush rendering coverage, stroke records the preset, brush persistence, eraser, flow/spacing sliders), cubic stroke smoothing, two-point straightness, pen-taper end shrink (geometry + painted coverage + UI toggle) and live thumbnail |
 
 Run it either from the in-app help dialog (**Run self-test**), with the URL, or from the command line:
 
 ```bash
 node scripts/cdp.mjs audit all        # or: npm run audit   (2,227 checks, ~40 s)
-npm run audit:ui                      # deep toolbar/right-panel/paint pass (100 checks)
+npm run audit:ui                      # deep toolbar/right-panel/paint pass (106 checks)
 npm run audit:quick                   # schema only
 ```
 
 It prints a per-section PASS/FAIL summary and returns a non-zero exit code on failure. Latest run: **2,227 checks, 0 failures**
-(schema 1,278 · render 628 · values 46 · actions 198 · dom 56 · i18n 21), plus the opt-in UI pass (100 checks). The same run is available as
+(schema 1,278 · render 628 · values 46 · actions 198 · dom 56 · i18n 21), plus the opt-in UI pass (106 checks). The same run is available as
 `?audit=1` (all sections), `?audit=1&auditsection=render` or `?audit=1&auditsection=ui`, with the report available as `window.__AUDIT__`
 and POSTed to `/api/debug/report` for CI.
 
@@ -414,7 +421,7 @@ src/engine/demos.js        three authored demo graphs + paint strokes
 src/engine/png.js          PNG encoder (adaptive filters, 8/16-bit)
 src/engine/exporter.js     presets, channel packing, manifest/README
 src/engine/selftest.js     automated pipeline validation
-src/engine/paint.js        brush stamp rasteriser (spacing, grain, scatter, symmetry)
+src/engine/paint.js        stroke rasteriser: Catmull-Rom → cubic Bézier smoothing, brush stamps, pen taper
 src/engine/brushes.js      10 built-in brush presets + preview thumbnails
 src/engine/webmcp.js       WebMCP tool registration
 src/engine/audit.js        browser-side full audit: nodes, values, actions, DOM, i18n
