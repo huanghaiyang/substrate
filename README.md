@@ -16,8 +16,10 @@ paint on them by hand, preview the result as a lit 3D material, and export an in
   with search.
 - **36 GPU nodes** — tileable fBm Perlin, Worley/cellular, grunge, patterns, SDF shapes, gradients, blurs, warps,
   normal/AO/curvature generators, blend modes, channel packing helpers.
-- **Hand painting** — a real Paint Studio with **10 built-in brushes** (soft/hard round, pencil, ink, airbrush,
-  marker, chalk, spray, sponge, flat) driven by grain, scatter, flow and spacing, plus pressure-sensitive size/flow,
+- **Hand painting** — a real Paint Studio with **16 built-in brushes** in two groups: *Basic* (soft/hard round,
+  pencil, ink, airbrush, marker, chalk, spray, sponge, flat) and *Nature* (**grass, leaf, flower, tree, fern,
+  branch** — procedurally drawn foliage motifs with rotation/scale jitter) driven by grain, scatter, flow and
+  spacing, plus pressure-sensitive size/flow,
   hardness/opacity, eraser, fill, X/Y symmetry and stroke-level undo. Strokes are smoothed with **cubic Bézier
   curves** (Catmull-Rom through the sampled pointer path) and an optional **pen taper (笔锋)** thins the start and
   end of each stroke. The chosen brush and its settings are remembered between sessions. Paint is rasterised to a
@@ -109,10 +111,16 @@ colour pickers, 2D vectors, and a multi-stop gradient editor (click the ramp to 
 
 Double-click a **Paint Layer** node (or select it and press *Open Paint Studio*).
 
-- **Brush library** — ten built-in presets with distinct character:
-  *Soft Round* (airbrush falloff), *Hard Round*, *Pencil* (grainy, pressure-driven), *Ink* (tight, opaque),
-  *Airbrush* (low flow, builds up slowly), *Marker* (angled flat head), *Chalk* (heavy grain + scatter),
-  *Spray* (scattered droplets), *Sponge* (sparse porous texture) and *Flat Brush*.
+- **Brush library** — 16 built-in presets in two groups:
+  * **Basic** — *Soft Round* (airbrush falloff), *Hard Round*, *Pencil* (grainy, pressure-driven), *Ink* (tight,
+    opaque), *Airbrush* (low flow, builds up slowly), *Marker* (angled flat head), *Chalk* (heavy grain + scatter),
+    *Spray* (scattered droplets), *Sponge* (sparse porous texture) and *Flat Brush*.
+  * **Nature** — *Grass* (fan of tapered blades), *Leaf* (veined leaf silhouette), *Flower* (petals + center),
+    *Tree* (trunk + canopy speckle), *Fern* (frond with leaflets) and *Branch* (twig with leaves). Each foliage
+    motif is drawn procedurally, rotated/scaled per dab, and tinted by the brush colour, so it tiles into meadows,
+    hedges, flower patches and forest silhouettes.
+
+![Nature brushes — grass, leaves, flowers, trees, ferns and branches](docs/screenshots/10-nature-brushes.png)
 - **Brush dynamics** — size, opacity, hardness, **flow** and **spacing** are adjustable per brush; grain, scatter and
   stamp shape come from the preset. All brushes respond to pressure for size/flow where appropriate.
 - **Smooth strokes** — the pointer path is interpolated with Catmull-Rom splines and stamped along cubic Bézier
@@ -339,7 +347,7 @@ wrapped-edge seam ratios, manifest structure, README sections, and every zip ent
 Latest run after the audit fixes: **4/4 demo packages passed** (all PNGs CRC-valid, correct colour spaces,
 seam ratios well below 1.0 with the percentile metric, clean zip entries each).
 
-### 3. Full application audit (2,227 checks + 108 opt-in UI checks)
+### 3. Full application audit (2,227 checks + 110 opt-in UI checks)
 
 `src/engine/audit.js` is a browser-side test harness that exercises the whole product, not just exports:
 
@@ -351,18 +359,18 @@ seam ratios well below 1.0 with the percentile metric, clean zip entries each).
 | **actions** | add every node type, delete/duplicate/undo/redo, cycle rejection, output uniqueness, parameter coalescing, move/rename, resolution & proxy switching, loading all demos, project save/load/delete (including non-ASCII names), image input round-trip, paint stroke/undo/clear, all five export presets, DirectX normal flip, 16-bit height and alpha plans |
 | **dom** | real UI interactions: palette search (EN+ZH), palette add, graph context menu, node context menu, node drag + undo, marquee selection, Delete/Undo/Redo keys, help/projects/export dialogs, demo dropdown, map zoom, preview shape & sliders, Paint Studio drawing + undo, language switching, New button, console-error watch. Includes live-preview regression tests: the 3D material and the 2D map panel must refresh on demo switches and on parameter edits |
 | **i18n** | EN/ZH key parity, node/parameter/option dictionary coverage, runtime language switching, raw-key/missing-key scans |
-| **ui** *(opt-in)* | 108 deep toolbar/right-panel/paint checks: project-name edit, New, all four demo switches, save/open round-trip, undo/redo buttons, resolution & proxy selects, help dialog, language switch, export dialog defaults/height toggle/real export; preview shapes, tiling & displacement sliders, pause/reset, badge, 8 map cards + normal-convention note + zoom, inspector widgets (slider↔number, bool, gradient add/remove stops), Paint Studio open/close, brush library (10 presets, unique thumbnails, per-brush rendering coverage, stroke records the preset, brush persistence, eraser, flow/spacing sliders), cubic stroke smoothing, two-point straightness, pen-taper end shrink (geometry + painted coverage + UI toggle), paint performance guards and live thumbnail |
+| **ui** *(opt-in)* | 110 deep toolbar/right-panel/paint checks: project-name edit, New, all four demo switches, save/open round-trip, undo/redo buttons, resolution & proxy selects, help dialog, language switch, export dialog defaults/height toggle/real export; preview shapes, tiling & displacement sliders, pause/reset, badge, 8 map cards + normal-convention note + zoom, inspector widgets (slider↔number, bool, gradient add/remove stops), Paint Studio open/close, brush library (16 presets in two groups including nature motifs, unique thumbnails, per-brush rendering coverage, stroke records the preset, brush persistence, eraser, flow/spacing sliders), cubic stroke smoothing, two-point straightness, pen-taper end shrink (geometry + painted coverage + UI toggle), paint performance guards and live thumbnail |
 
 Run it either from the in-app help dialog (**Run self-test**), with the URL, or from the command line:
 
 ```bash
 node scripts/cdp.mjs audit all        # or: npm run audit   (2,227 checks, ~40 s)
-npm run audit:ui                      # deep toolbar/right-panel/paint pass (108 checks)
+npm run audit:ui                      # deep toolbar/right-panel/paint pass (110 checks)
 npm run audit:quick                   # schema only
 ```
 
 It prints a per-section PASS/FAIL summary and returns a non-zero exit code on failure. Latest run: **2,227 checks, 0 failures**
-(schema 1,278 · render 628 · values 46 · actions 198 · dom 56 · i18n 21), plus the opt-in UI pass (108 checks). The same run is available as
+(schema 1,278 · render 628 · values 46 · actions 198 · dom 56 · i18n 21), plus the opt-in UI pass (110 checks). The same run is available as
 `?audit=1` (all sections), `?audit=1&auditsection=render` or `?audit=1&auditsection=ui`, with the report available as `window.__AUDIT__`
 and POSTed to `/api/debug/report` for CI.
 
@@ -432,7 +440,7 @@ src/engine/png.js          PNG encoder (adaptive filters, 8/16-bit)
 src/engine/exporter.js     presets, channel packing, manifest/README
 src/engine/selftest.js     automated pipeline validation
 src/engine/paint.js        stroke rasteriser: Catmull-Rom → cubic Bézier smoothing, brush stamps, pen taper
-src/engine/brushes.js      10 built-in brush presets + preview thumbnails
+src/engine/brushes.js      16 built-in brush presets (basic + nature motifs) + preview thumbnails
 src/engine/webmcp.js       WebMCP tool registration
 src/engine/audit.js        browser-side full audit: nodes, values, actions, DOM, i18n
 src/engine/ui-check.js     deep toolbar / right panel / paint interaction checks

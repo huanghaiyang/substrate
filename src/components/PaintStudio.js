@@ -10,7 +10,7 @@ import {
   savePaintBrush
 } from '../engine/store.js'
 import { drawStroke } from '../engine/paint.js'
-import { BRUSHES, brushById, brushPreview } from '../engine/brushes.js'
+import { BRUSHES, BRUSH_GROUPS, brushById, brushPreview } from '../engine/brushes.js'
 import { trNode } from '../i18n/index.js'
 
 export default defineComponent({
@@ -23,6 +23,7 @@ export default defineComponent({
     const cursorEl = ref(null)
     const brush = state.paintBrush
     const brushes = BRUSHES
+    const brushGroups = BRUSH_GROUPS
     const node = computed(() => nodeById(props.nodeId))
     const currentBrush = computed(() => brushById(brush.brushId))
     const brushValue = (key) => {
@@ -223,6 +224,7 @@ export default defineComponent({
       cursorBorder,
       brush,
       brushes,
+      brushGroups,
       currentBrush,
       brushThumbFor,
       selectBrush,
@@ -259,18 +261,21 @@ export default defineComponent({
             <span>{{ $t('paint.brushes') }}</span>
             <span class="dim small">{{ $t(currentBrush.nameKey) }}</span>
           </div>
-          <div class="brush-grid">
-            <button
-              v-for="b in brushes"
-              :key="b.id"
-              class="brush-item"
-              :class="{ on: brush.brushId === b.id }"
-              :title="$t(b.nameKey)"
-              @click="selectBrush(b)"
-            >
-              <img :src="brushThumbFor(b)" alt="" draggable="false" />
-              <span>{{ $t(b.nameKey) }}</span>
-            </button>
+          <div v-for="g in brushGroups" :key="g.key" class="brush-group">
+            <div class="brush-group-label">{{ $t(g.key) }}</div>
+            <div class="brush-grid">
+              <button
+                v-for="b in g.items"
+                :key="b.id"
+                class="brush-item"
+                :class="{ on: brush.brushId === b.id }"
+                :title="$t(b.nameKey)"
+                @click="selectBrush(b)"
+              >
+                <img :src="brushThumbFor(b)" alt="" draggable="false" />
+                <span>{{ $t(b.nameKey) }}</span>
+              </button>
+            </div>
           </div>
           <div class="param">
             <div class="param-label"><span>{{ $t('paint.color') }}</span><span class="val">{{ brush.color }}</span></div>

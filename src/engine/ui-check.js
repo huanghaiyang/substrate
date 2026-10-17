@@ -410,7 +410,13 @@ export async function runUiCheck() {
     if (q('.paint-studio')) {
       // ---- built-in brushes ----
       const brushItems = qa('.brush-item')
-      r.add('paint: brush library lists 10 presets', brushItems.length === 10, String(brushItems.length))
+      const { BRUSH_GROUPS } = await import('../engine/brushes.js')
+      const totalBrushes = BRUSH_GROUPS.reduce((n, g) => n + g.items.length, 0)
+      r.add('paint: brush library lists all presets', brushItems.length === totalBrushes, `${brushItems.length}/${totalBrushes}`)
+      const groupLabels = qa('.brush-group-label').map((e) => e.textContent.trim())
+      r.add('paint: brush picker is grouped', groupLabels.length === 2, groupLabels.join(','))
+      const natureItems = qa('.brush-group')[1]?.querySelectorAll('.brush-item').length || 0
+      r.add('paint: nature brush group present', natureItems >= 6, String(natureItems))
       const thumbUrls = brushItems.map((b) => b.querySelector('img')?.src).filter(Boolean)
       r.add('paint: brush thumbnails render', thumbUrls.length === brushItems.length && new Set(thumbUrls).size === brushItems.length, `${thumbUrls.length} thumbs, ${new Set(thumbUrls).size} unique`)
       const paintNodeB = state.graph.nodes.find((n) => n.type === 'paint')

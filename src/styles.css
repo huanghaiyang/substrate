@@ -1570,14 +1570,21 @@ code {
   color: var(--text-faint);
   margin: 8px 0 5px;
 }
+.brush-group {
+  margin-bottom: 10px;
+}
+.brush-group-label {
+  font-size: 9px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin: 0 0 5px;
+}
 .brush-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 4px;
-  max-height: 360px;
-  overflow-y: auto;
   padding-right: 2px;
-  margin-bottom: 10px;
 }
 .brush-item {
   display: flex;
