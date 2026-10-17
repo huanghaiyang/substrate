@@ -339,7 +339,7 @@ wrapped-edge seam ratios, manifest structure, README sections, and every zip ent
 Latest run after the audit fixes: **4/4 demo packages passed** (all PNGs CRC-valid, correct colour spaces,
 seam ratios well below 1.0 with the percentile metric, clean zip entries each).
 
-### 3. Full application audit (2,227 checks + 106 opt-in UI checks)
+### 3. Full application audit (2,227 checks + 108 opt-in UI checks)
 
 `src/engine/audit.js` is a browser-side test harness that exercises the whole product, not just exports:
 
@@ -351,18 +351,18 @@ seam ratios well below 1.0 with the percentile metric, clean zip entries each).
 | **actions** | add every node type, delete/duplicate/undo/redo, cycle rejection, output uniqueness, parameter coalescing, move/rename, resolution & proxy switching, loading all demos, project save/load/delete (including non-ASCII names), image input round-trip, paint stroke/undo/clear, all five export presets, DirectX normal flip, 16-bit height and alpha plans |
 | **dom** | real UI interactions: palette search (EN+ZH), palette add, graph context menu, node context menu, node drag + undo, marquee selection, Delete/Undo/Redo keys, help/projects/export dialogs, demo dropdown, map zoom, preview shape & sliders, Paint Studio drawing + undo, language switching, New button, console-error watch. Includes live-preview regression tests: the 3D material and the 2D map panel must refresh on demo switches and on parameter edits |
 | **i18n** | EN/ZH key parity, node/parameter/option dictionary coverage, runtime language switching, raw-key/missing-key scans |
-| **ui** *(opt-in)* | 106 deep toolbar/right-panel/paint checks: project-name edit, New, all four demo switches, save/open round-trip, undo/redo buttons, resolution & proxy selects, help dialog, language switch, export dialog defaults/height toggle/real export; preview shapes, tiling & displacement sliders, pause/reset, badge, 8 map cards + normal-convention note + zoom, inspector widgets (slider↔number, bool, gradient add/remove stops), Paint Studio open/close, brush library (10 presets, unique thumbnails, per-brush rendering coverage, stroke records the preset, brush persistence, eraser, flow/spacing sliders), cubic stroke smoothing, two-point straightness, pen-taper end shrink (geometry + painted coverage + UI toggle) and live thumbnail |
+| **ui** *(opt-in)* | 108 deep toolbar/right-panel/paint checks: project-name edit, New, all four demo switches, save/open round-trip, undo/redo buttons, resolution & proxy selects, help dialog, language switch, export dialog defaults/height toggle/real export; preview shapes, tiling & displacement sliders, pause/reset, badge, 8 map cards + normal-convention note + zoom, inspector widgets (slider↔number, bool, gradient add/remove stops), Paint Studio open/close, brush library (10 presets, unique thumbnails, per-brush rendering coverage, stroke records the preset, brush persistence, eraser, flow/spacing sliders), cubic stroke smoothing, two-point straightness, pen-taper end shrink (geometry + painted coverage + UI toggle), paint performance guards and live thumbnail |
 
 Run it either from the in-app help dialog (**Run self-test**), with the URL, or from the command line:
 
 ```bash
 node scripts/cdp.mjs audit all        # or: npm run audit   (2,227 checks, ~40 s)
-npm run audit:ui                      # deep toolbar/right-panel/paint pass (106 checks)
+npm run audit:ui                      # deep toolbar/right-panel/paint pass (108 checks)
 npm run audit:quick                   # schema only
 ```
 
 It prints a per-section PASS/FAIL summary and returns a non-zero exit code on failure. Latest run: **2,227 checks, 0 failures**
-(schema 1,278 · render 628 · values 46 · actions 198 · dom 56 · i18n 21), plus the opt-in UI pass (106 checks). The same run is available as
+(schema 1,278 · render 628 · values 46 · actions 198 · dom 56 · i18n 21), plus the opt-in UI pass (108 checks). The same run is available as
 `?audit=1` (all sections), `?audit=1&auditsection=render` or `?audit=1&auditsection=ui`, with the report available as `window.__AUDIT__`
 and POSTed to `/api/debug/report` for CI.
 
@@ -388,9 +388,19 @@ Measured in Chrome on an NVIDIA laptop GPU (ANGLE/D3D11 backend) with WebGL2 and
 | --- | --- |
 | 24-node weathered-steel graph @1024² (23 passes) | ~120–200 ms full evaluation, ~5–30 ms with cache warm |
 | Slider drag (proxy 100%) | only downstream nodes re-render (structural hash cache) |
-| Painting @1024² | ~20–30 ms per update (throttled to ~10 Hz while the brush moves) |
+| Painting @1024², 90-point chalk stroke | **~80 fps**, median frame 16.7 ms, p95 19.2 ms, zero long tasks; in-stroke graph pass ~47 ms (half-res, no thumbnails) |
+| Painting, 200-point smoothed stroke re-raster | 3–6 ms with cached stamp sprites (previously 15–18 ms) |
+| Painting @1024², in-stroke engine updates | throttled to ~9 Hz at half resolution; thumbnails and the 3D/2D preview refresh on stroke end |
 | 2K export (4 maps + zip) | ~5.5 s including PNG encoding and packaging |
 | Shader audit (37 fragment programs) | < 150 ms |
+
+Painting is optimised so the canvas never blocks on the GPU:
+- brush dabs are pre-rendered once into sprite canvases (3 grain variants) and blitted, instead of
+  rebuilding gradients and hundreds of grain circles per dab;
+- the brush cursor is moved by direct DOM writes (no Vue re-render per pointermove);
+- the live stroke is re-rasterised at most once per animation frame on top of a texture snapshot;
+- in-stroke graph evaluations run at half resolution, skip node thumbnails/preview rebuilds and are
+  throttled; releasing the brush triggers a full-quality evaluation and preview refresh.
 
 Document resolution is capped at 4096²; export at 4K requires roughly 1–2 GB of GPU memory for the streaming bake.
 

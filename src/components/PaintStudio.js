@@ -20,7 +20,7 @@ export default defineComponent({
   setup(props, { emit }) {
     const canvasRef = ref(null)
     const wrapRef = ref(null)
-    const cursor = ref(null)
+    const cursorEl = ref(null)
     const brush = state.paintBrush
     const brushes = BRUSHES
     const node = computed(() => nodeById(props.nodeId))
@@ -56,7 +56,7 @@ export default defineComponent({
     let prevPoint = null
     let lastLive = 0
     let liveBase = null
-    let lastLiveRender = 0
+    let renderScheduled = false
 
     // Live painting: keep a snapshot of the committed texture and re-rasterise the whole
     // (cubic-smoothed) current stroke on top of it, so the preview matches the committed result
@@ -68,32 +68,27 @@ export default defineComponent({
       liveBase.height = src.height
       liveBase.getContext('2d').drawImage(src, 0, 0)
     }
-    function renderLive(force = false) {
+    function renderLive() {
       if (!canvasRef.value || !stroke || !liveBase) return
-      const now = performance.now()
-      if (!force && now - lastLiveRender < 24) return
-      lastLiveRender = now
       const ctx = canvasRef.value.getContext('2d')
       ctx.clearRect(0, 0, canvasRef.value.width, canvasRef.value.height)
       ctx.drawImage(liveBase, 0, 0)
       drawStroke(ctx, stroke, canvasRef.value.width, canvasRef.value.height)
+    }
+    function scheduleRender() {
+      if (renderScheduled) return
+      renderScheduled = true
+      requestAnimationFrame(() => {
+        renderScheduled = false
+        renderLive()
+      })
     }
 
     const brushDotStyle = computed(() => {
       const px = Math.min(74, Math.max(4, brush.size * 0.32))
       return { width: px + 'px', height: px + 'px', background: brush.color, opacity: brush.erase ? 0.25 : brush.opacity }
     })
-    const cursorStyle = computed(() => {
-      if (!cursor.value) return {}
-      const d = cursor.value.size
-      return {
-        left: cursor.value.x - d / 2 + 'px',
-        top: cursor.value.y - d / 2 + 'px',
-        width: d + 'px',
-        height: d + 'px',
-        borderStyle: brush.erase ? 'dashed' : 'solid'
-      }
-    })
+    const cursorBorder = computed(() => (brush.erase ? 'dashed' : 'solid'))
 
     function pressureOf(e) {
       if (e.pointerType === 'mouse') return 0.85
@@ -107,26 +102,31 @@ export default defineComponent({
         p: pressureOf(e)
       }
     }
+    // The brush cursor follows the pointer through direct DOM writes: updating a reactive ref on
+    // every pointermove re-rendered the whole Paint Studio and was a major source of jank.
     function updateCursor(e) {
-      if (!canvasRef.value || !wrapRef.value) return
+      const el = cursorEl.value
+      if (!el || !canvasRef.value || !wrapRef.value) return
       const rect = canvasRef.value.getBoundingClientRect()
       const wrapRect = wrapRef.value.getBoundingClientRect()
       const scale = rect.width / canvasRef.value.width
-      cursor.value = {
-        x: e.clientX - wrapRect.left,
-        y: e.clientY - wrapRect.top,
-        size: Math.max(6, brush.size * scale)
-      }
+      const d = Math.max(6, brush.size * scale)
+      el.style.left = e.clientX - wrapRect.left - d / 2 + 'px'
+      el.style.top = e.clientY - wrapRect.top - d / 2 + 'px'
+      el.style.width = d + 'px'
+      el.style.height = d + 'px'
+      el.style.visibility = 'visible'
     }
     function hideCursor() {
-      cursor.value = null
+      if (cursorEl.value) cursorEl.value.style.visibility = 'hidden'
     }
     function live(immediate = false) {
       const now = performance.now()
-      if (!immediate && now - lastLive < 45) return
+      if (!immediate && now - lastLive < 120) return
       lastLive = now
       state.engine?.touchPaint(props.nodeId)
-      requestEval(immediate)
+      // cheap in-stroke pass; stroke end does a full-quality evaluation
+      requestEval(immediate, immediate ? {} : { low: true })
     }
     function newStroke() {
       return {
@@ -157,7 +157,7 @@ export default defineComponent({
       const pt = pointFrom(e)
       stroke.points.push(pt)
       snapshotBase()
-      renderLive(true)
+      renderLive()
       prevPoint = pt
       painting = true
       live(true)
@@ -170,7 +170,7 @@ export default defineComponent({
       const dy = (pt.y - prevPoint.y) * canvasRef.value.height
       if (Math.hypot(dx, dy) < 0.6) return
       stroke.points.push(pt)
-      renderLive()
+      scheduleRender()
       prevPoint = pt
       live()
     }
@@ -183,11 +183,10 @@ export default defineComponent({
         /* ignore */
       }
       const done = stroke
-      renderLive(true)
+      renderLive()
       stroke = null
       prevPoint = null
       liveBase = null
-      lastLiveRender = 0
       if (done) commitStroke(props.nodeId, done)
       live(true)
     }
@@ -220,7 +219,8 @@ export default defineComponent({
     return {
       canvasRef,
       wrapRef,
-      cursor,
+      cursorEl,
+      cursorBorder,
       brush,
       brushes,
       currentBrush,
@@ -231,7 +231,6 @@ export default defineComponent({
       title,
       strokes,
       brushDotStyle,
-      cursorStyle,
       onDown,
       onMove,
       onUp,
@@ -324,7 +323,7 @@ export default defineComponent({
             @pointerdown="onDown"
             @pointerleave="hideCursor"
           ></canvas>
-          <div v-if="cursor" class="brush-cursor" :style="cursorStyle"></div>
+          <div ref="cursorEl" class="brush-cursor" :style="{ borderStyle: cursorBorder }" style="visibility: hidden"></div>
         </div>
         <div class="paint-side">
           <div class="side-title">{{ $t('paint.live') }}</div>

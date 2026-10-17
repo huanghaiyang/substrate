@@ -521,27 +521,42 @@ async function hydrateImages() {
 }
 
 // ------------------------------------------------------------------ evaluate
-export function requestEval(immediate = false) {
+let pendingEvalOpts = null
+
+/**
+ * Schedule an evaluation. `opts.low` runs a cheaper preview pass (half resolution, no node
+ * thumbnails, no preview rebuild) and is used while the user is dragging a paint stroke so the
+ * canvas stays responsive; the final stroke end triggers a full-quality pass.
+ */
+export function requestEval(immediate = false, opts = {}) {
   state.dirty = true
+  pendingEvalOpts = opts
   if (evalTimer) {
     if (!immediate) return
     clearTimeout(evalTimer)
   }
+  const delay = immediate ? 0 : opts.low ? 110 : 60
   evalTimer = setTimeout(() => {
     evalTimer = null
-    doEval()
-  }, immediate ? 0 : 60)
+    const o = pendingEvalOpts || {}
+    pendingEvalOpts = null
+    doEval(o)
+  }, delay)
 }
 
-export function doEval() {
+export function doEval(opts = {}) {
   const engine = state.engine
   if (!engine) return null
   syncPaintTextures()
+  const low = !!opts.low
   try {
     const t0 = performance.now()
-    const res = Math.min(engine.ext.maxTexture, Math.max(64, Math.round(state.resolution * state.proxy)))
+    const scale = state.proxy * (low ? 0.5 : 1)
+    const res = Math.min(engine.ext.maxTexture, Math.max(64, Math.round(state.resolution * scale)))
     const result = engine.evaluate(state.graph, { res })
-    const thumbs = engine.buildThumbs(state.graph, result, 96)
+    // thumbnails and the 3D/2D preview are the expensive part: skip them for in-stroke passes,
+    // the final stroke-end evaluation refreshes them
+    const thumbs = low ? state.lastThumbCount : engine.buildThumbs(state.graph, result, 96)
     state.gpuMs = result.ms
     state.lastEvalMs = +(performance.now() - t0).toFixed(1)
     state.evalNodes = engine.stats.nodes
@@ -551,7 +566,7 @@ export function doEval() {
     state.engineStats = { ...engine.stats }
     state.dirty = false
     state.error = ''
-    state.previewNonce++
+    if (!low) state.previewNonce++
   } catch (e) {
     console.error('[eval]', e)
     state.error = e?.message || String(e)

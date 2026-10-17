@@ -3,6 +3,11 @@
 // A brush preset describes the *character* of the stamp (shape, falloff, grain, scatter,
 // spacing, flow). The stroke still carries colour/opacity/size/erase/symmetry, and the user
 // can override hardness/flow/spacing from the Paint Studio.
+//
+// Performance: every brush dab is pre-rendered once into a small sprite canvas (with 3 grain
+// variants) and then blitted with drawImage. Painting a long stroke therefore costs one blit
+// per stamp instead of rebuilding gradients and hundreds of grain circles per stamp, which
+// keeps the canvas responsive.
 
 const TAU = Math.PI * 2
 
@@ -212,7 +217,7 @@ function paintStampShape(ctx, x, y, radius, brush, alpha, colStr, seed) {
     }
     return
   }
-  const g = ctx.createRadialGradient(0, 0, 0, 0, 0, radius)
+  const g = ctx.createRadialGradient(x, y, 0, x, y, radius)
   const inner = Math.max(0, Math.min(0.985, hardness))
   g.addColorStop(0, `rgba(${colStr},${alpha})`)
   g.addColorStop(inner, `rgba(${colStr},${alpha})`)
@@ -245,14 +250,65 @@ function paintStampShape(ctx, x, y, radius, brush, alpha, colStr, seed) {
       const hr = Math.max(0.4, radius * (0.06 + hash01(seed, i, 17) * 0.22) * brush.grain)
       ctx.globalAlpha = 0.35 + hash01(seed, i, 23) * 0.6
       ctx.beginPath()
-      ctx.arc(Math.cos(a) * d, Math.sin(a) * d, hr, 0, TAU)
+      ctx.arc(x + Math.cos(a) * d, y + Math.sin(a) * d, hr, 0, TAU)
       ctx.fill()
     }
     ctx.restore()
   }
 }
 
-/** Paint one brush dab. Handles scatter, grain and X/Y symmetry. */
+// ---------------------------------------------------------------- stamp sprites
+const SPRITE_VARIANTS = 3
+const spriteCache = new Map()
+const SPRITE_CACHE_LIMIT = 96
+
+function spriteKey(brush, colStr, baseSize) {
+  return [
+    brush.id,
+    Math.round(baseSize),
+    colStr,
+    brush.shape,
+    Number(brush.hardness).toFixed(2),
+    Number(brush.grain).toFixed(2),
+    Number(brush.flatness ?? 1).toFixed(2),
+    Number(brush.angle || 0).toFixed(1),
+    brush.dots || 0,
+    Number(brush.dotScale || 0).toFixed(2)
+  ].join('|')
+}
+
+function buildSprites(brush, colStr, baseSize) {
+  const base = Math.max(2, Math.min(512, Math.round(baseSize)))
+  const pad = Math.ceil(base * 0.18) + 2
+  const dim = base + pad * 2
+  const sprites = []
+  for (let v = 0; v < SPRITE_VARIANTS; v++) {
+    const canvas = document.createElement('canvas')
+    canvas.width = canvas.height = dim
+    const ctx = canvas.getContext('2d')
+    ctx.translate(dim / 2, dim / 2)
+    paintStampShape(ctx, 0, 0, base / 2, brush, 1, colStr, 17.31 + v * 91.7)
+    sprites.push(canvas)
+  }
+  return { sprites, dim, base }
+}
+
+/** Cached, pre-rendered stamp sprites for the current brush (3 grain variants). */
+export function getStampSprites(brush, colStr, baseSize) {
+  const key = spriteKey(brush, colStr, baseSize)
+  let entry = spriteCache.get(key)
+  if (!entry) {
+    entry = buildSprites(brush, colStr, baseSize)
+    spriteCache.set(key, entry)
+    if (spriteCache.size > SPRITE_CACHE_LIMIT) {
+      const first = spriteCache.keys().next().value
+      spriteCache.delete(first)
+    }
+  }
+  return entry
+}
+
+/** Paint one brush dab. Handles scatter, grain variants and X/Y symmetry. */
 export function stampDab(ctx, x, y, radius, brush, colStr, pressure, width, height) {
   const p = Math.max(0.05, Math.min(1, pressure == null ? 1 : pressure))
   let r = brush.sizeScale ? radius * brush.sizeScale : radius
@@ -261,7 +317,10 @@ export function stampDab(ctx, x, y, radius, brush, colStr, pressure, width, heig
   let alpha = brush.opacity * brush.flow
   if (brush.pressureFlow) alpha *= 0.3 + 0.7 * p
   alpha = Math.max(0.015, Math.min(1, alpha))
-  const seed = x * 13.37 + y * 7.77 + (brush.angle || 0)
+  const baseSize = brush.size || radius * 2
+  const entry = getStampSprites(brush, colStr, baseSize)
+  const nominalRadius = entry.base / 2
+  const scale = r / nominalRadius
   const jitter = brush.scatter * r * 0.65
   const positions = [[x, y]]
   const sym = brush.symmetry || {}
@@ -278,9 +337,10 @@ export function stampDab(ctx, x, y, radius, brush, colStr, pressure, width, heig
       py += (hash01(baseX, baseY, 83) - 0.5) * 2 * jitter
     }
     if (px < -r || py < -r || px > width + r || py > height + r) continue
-    // eraser grain: vary opacity instead of punching holes
-    const stampAlpha = brush.erase && brush.grain > 0 ? alpha * (1 - brush.grain * 0.6 * hash01(px, py, 5)) : alpha
-    paintStampShape(ctx, px, py, r, brush, Math.max(0.01, stampAlpha), colStr, seed + px * 0.31 + py * 0.53)
+    const variant = entry.sprites[Math.floor(hash01(px, py, 7) * SPRITE_VARIANTS) % SPRITE_VARIANTS]
+    const dw = entry.dim * scale
+    ctx.globalAlpha = Math.max(0.01, Math.min(1, alpha))
+    ctx.drawImage(variant, px - dw / 2, py - dw / 2, dw, dw)
   }
   ctx.restore()
 }
@@ -294,13 +354,12 @@ export function brushPreview(brush, size = 44) {
   const canvas = document.createElement('canvas')
   canvas.width = canvas.height = size
   const ctx = canvas.getContext('2d')
-  const b = { ...brush, opacity: Math.min(1, brush.opacity || 1), flow: Math.min(1, Math.max(0.35, brush.flow ?? 0.7)), erase: false, symmetry: {} }
-  const r = size * 0.3
+  const b = { ...brush, size: size * 0.6, opacity: Math.min(1, brush.opacity || 1), flow: Math.min(1, Math.max(0.35, brush.flow ?? 0.7)), erase: false, symmetry: {} }
   const col = '222,230,242'
   const n = 14
   for (let i = 0; i < n; i++) {
     const t = i / (n - 1)
-    stampDab(ctx, size * (0.2 + 0.6 * t), size * (0.7 - 0.42 * Math.sin(t * Math.PI * 0.9)), r, b, col, 0.45 + 0.55 * Math.sin(t * Math.PI), size, size)
+    stampDab(ctx, size * (0.2 + 0.6 * t), size * (0.7 - 0.42 * Math.sin(t * Math.PI * 0.9)), size * 0.24, b, col, 0.45 + 0.55 * Math.sin(t * Math.PI), size, size)
   }
   const url = canvas.toDataURL('image/png')
   previewCache.set(key, url)

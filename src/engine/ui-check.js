@@ -511,6 +511,24 @@ export async function runUiCheck() {
         await sleep(120)
       }
       r.add('paint: taper setting stored in brush', state.paintBrush.taper === true, String(state.paintBrush.taper))
+      // performance guard: a long smoothed stroke must rasterise fast (sprite stamps), otherwise
+      // live painting becomes janky
+      const perfCanvas = document.createElement('canvas')
+      perfCanvas.width = perfCanvas.height = 1024
+      const perfCtx = perfCanvas.getContext('2d')
+      const perfPts = []
+      for (let i = 0; i < 150; i++) {
+        const t = i / 149
+        perfPts.push({ x: 0.1 + 0.8 * t, y: 0.5 + 0.25 * Math.sin(t * 8), p: 0.6 + 0.4 * Math.sin(t * 4) })
+      }
+      const tPaint = performance.now()
+      drawStroke(perfCtx, { color: '#ffffff', size: 48, opacity: 1, brushId: 'chalk', symmetry: {}, points: perfPts }, 1024, 1024)
+      const paintMs = performance.now() - tPaint
+      r.add('paint: long stroke rasterises quickly', paintMs < 80, paintMs.toFixed(1) + ' ms')
+      const tPaint2 = performance.now()
+      drawStroke(perfCtx, { color: '#ffffff', size: 48, opacity: 1, brushId: 'chalk', symmetry: {}, points: perfPts }, 1024, 1024)
+      const paintMs2 = performance.now() - tPaint2
+      r.add('paint: cached sprites keep redraws fast', paintMs2 < 80, paintMs2.toFixed(1) + ' ms')
       const liveImg = q('.paint-side img')
       r.add('right: paint live thumb', !!liveImg && !!liveImg.src)
       click(qa('.paint-head .btn').find((b) => /Graph|节点图/.test(b.textContent)))
