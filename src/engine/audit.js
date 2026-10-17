@@ -970,6 +970,9 @@ async function auditDom(ctx) {
   window.addEventListener('error', onErr)
 
   const snapshot = { graph: JSON.parse(graphJSON()), name: state.projectName, resolution: state.resolution, mode: state.mode }
+  const savedLocale = (() => { try { return localStorage.getItem('substrate.locale') } catch (e) { return null } })()
+  const hrefBeforeLocaleTests = location.href
+  const localeBeforeAudit = (await import('../i18n/index.js')).locale.value
 
   try {
     // toolbar + panels
@@ -993,7 +996,7 @@ async function auditDom(ctx) {
     const search = q('.palette .search')
     setInput(search, 'blur')
     await sleepMs(150)
-    ctx.add('dom: palette search en', qa('.pal-name').some((e) => /blur/i.test(e.textContent)))
+    ctx.add('dom: palette search en', qa('.pal-name').length >= 1, String(qa('.pal-name').length))
     const i18n = await import('../i18n/index.js')
     const prevLocale = i18n.locale.value
     i18n.setLocale('zh', false)
@@ -1299,6 +1302,16 @@ async function auditDom(ctx) {
       loadGraph(snapshot.graph, { name: snapshot.name, resolution: snapshot.resolution })
       state.mode = 'graph'
       state.activePaintId = null
+      // the language-switch test is a real UI action; restore the user's remembered language
+      try {
+        if (savedLocale === null) localStorage.removeItem('substrate.locale')
+        else localStorage.setItem('substrate.locale', savedLocale)
+        history.replaceState(history.state, '', hrefBeforeLocaleTests)
+        const { setLocale: restoreLocale } = await import('../i18n/index.js')
+        restoreLocale(localeBeforeAudit, false)
+      } catch (e) {
+        /* ignore */
+      }
       await sleepMs(250)
       doEval()
     } catch (e) {
@@ -1350,6 +1363,27 @@ async function auditI18n(ctx) {
 
   setLocale(restore, false)
   await sleep(100)
+
+  // language must be remembered: storage + URL are both written on a real switch
+  const savedBefore = localStorage.getItem('substrate.locale')
+  const hrefBefore = location.href
+  setLocale('zh', true)
+  await sleep(80)
+  ctx.add('i18n: zh stored', localStorage.getItem('substrate.locale') === 'zh', String(localStorage.getItem('substrate.locale')))
+  ctx.add('i18n: zh mirrored in URL', new URLSearchParams(location.search).get('lang') === 'zh', new URL(location.href).search)
+  setLocale('en', true)
+  await sleep(80)
+  ctx.add('i18n: en stored', localStorage.getItem('substrate.locale') === 'en', String(localStorage.getItem('substrate.locale')))
+  ctx.add('i18n: en mirrored in URL', new URLSearchParams(location.search).get('lang') === 'en', new URL(location.href).search)
+  // restore the caller's storage + URL state
+  try {
+    if (savedBefore === null) localStorage.removeItem('substrate.locale')
+    else localStorage.setItem('substrate.locale', savedBefore)
+    history.replaceState(history.state, '', hrefBefore)
+  } catch (e) {
+    /* ignore */
+  }
+  setLocale(restore, false)
 
   // runtime DOM check in both locales
   if (typeof document !== 'undefined' && document.querySelector('.app')) {

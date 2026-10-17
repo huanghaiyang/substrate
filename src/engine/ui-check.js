@@ -85,9 +85,15 @@ export async function runUiCheck() {
   const cssSize = () => text('.right-tabs .chip')
 
   const snapshot = { graph: JSON.parse(graphJSON()), name: state.projectName, resolution: state.resolution, proxy: state.proxy, locale: (await import('../i18n/index.js')).locale.value }
+  const savedLocale = (() => { try { return localStorage.getItem('substrate.locale') } catch (e) { return null } })()
+  const hrefBeforeLocaleTests = location.href
   const { setLocale } = await import('../i18n/index.js')
 
   try {
+    // deterministic labels: run the English-locale pass, then restore the user's language at the end
+    setLocale('en', false)
+    await sleep(250)
+
     // ============================ TOP TOOLBAR ============================
     // project name input
     const nameInput = q('.project-name')
@@ -411,6 +417,14 @@ export async function runUiCheck() {
   } finally {
     try {
       setLocale(snapshot.locale, false)
+      // restore the user's remembered language (the language-switch test really clicked the switch)
+      try {
+        if (savedLocale === null) localStorage.removeItem('substrate.locale')
+        else localStorage.setItem('substrate.locale', savedLocale)
+        history.replaceState(history.state, '', hrefBeforeLocaleTests)
+      } catch (e) {
+        /* ignore */
+      }
       setResolution(snapshot.resolution)
       setProxy(snapshot.proxy)
       const { loadGraph } = await import('./store.js')

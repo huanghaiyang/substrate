@@ -78,9 +78,10 @@ on the Node server.
 
 ### Language / 语言
 
-Toggle **EN / 中文** in the top bar (or use `?lang=zh` / `?lang=en`). The setting is stored in `localStorage`;
-without a stored preference the UI follows `navigator.language`. Switching is instant and does not reload the page
-or touch the node graph.
+Toggle **EN / 中文** in the top bar (or use `?lang=zh` / `?lang=en`). The chosen language is remembered: it is
+written to `localStorage` **and** mirrored into the `?lang=` URL parameter, so reloading the page (or reopening the
+same bookmark) keeps the last choice instead of falling back to the browser language. Without any stored
+preference the UI follows `navigator.language`. Switching is instant and does not reload the page or touch the node graph.
 
 ### Graph editing
 
@@ -296,7 +297,7 @@ You can also run the same test through the page's **WebMCP** tools (registered o
 
 | Parameter | Purpose |
 | --- | --- |
-| `?lang=zh` / `?lang=en` | Force the interface language (also persisted). |
+| `?lang=zh` / `?lang=en` | Set the interface language; the choice is remembered in `localStorage` and kept in the URL. |
 | `?demo=<id>` | Load a demo: `weathered-steel`, `mossy-rock`, `painted-sign`, `blank`. |
 | `?fresh=1` | Skip session restore and load the default demo. |
 | `?selftest=1[&export=1][&res=512]` | Run the automated self-test (and export) on load. |

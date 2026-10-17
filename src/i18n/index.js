@@ -51,21 +51,51 @@ function applyDocumentLocale(id) {
   }
 }
 
-export function initLocale() {
-  locale.value = detectLocale()
-  applyDocumentLocale(locale.value)
-  return locale.value
+function persistLocale(id) {
+  try {
+    localStorage.setItem(STORAGE_KEY, id)
+  } catch (e) {
+    /* storage may be unavailable (private mode) */
+  }
 }
 
+// Keep ?lang= in the address bar in sync so a plain reload of the same URL keeps the
+// user's choice (without this, a URL such as ?lang=en would override the saved language
+// again on every reload).
+function syncUrlLocale(id) {
+  try {
+    if (typeof history === 'undefined' || !history.replaceState) return
+    const url = new URL(location.href)
+    if (url.searchParams.get('lang') === id) return
+    url.searchParams.set('lang', id)
+    history.replaceState(history.state, '', url)
+  } catch (e) {
+    /* ignore */
+  }
+}
+
+export function initLocale() {
+  const id = detectLocale()
+  locale.value = id
+  applyDocumentLocale(id)
+  // remember the initial choice too (first visit follows navigator.language; an explicit
+  // ?lang= is remembered for later visits without the parameter)
+  persistLocale(id)
+  return id
+}
+
+/**
+ * Switch the interface language.
+ * persist=true (default, used by the UI switch) writes localStorage and mirrors the choice
+ * into ?lang=, so the language is remembered across reloads.
+ * persist=false is for throw-away overrides (documentation screenshots, automated audits).
+ */
 export function setLocale(id, persist = true) {
   locale.value = id === 'zh' ? 'zh' : 'en'
   applyDocumentLocale(locale.value)
   if (persist) {
-    try {
-      localStorage.setItem(STORAGE_KEY, locale.value)
-    } catch (e) {
-      /* ignore */
-    }
+    persistLocale(locale.value)
+    syncUrlLocale(locale.value)
   }
   return locale.value
 }
