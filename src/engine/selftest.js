@@ -114,7 +114,21 @@ export async function runSelfTest(engine, opts = {}) {
     for (const [key, m] of Object.entries(maps)) {
       report.channels[key] = channelStats(m.data, m.width, m.height)
     }
+    // Read the normal map at the evaluated resolution. previewMaps() samples it down to 256 px,
+  // and filtering interpolates unit normals into shorter vectors — high-frequency (but valid)
+  // normal maps would then look non-unit. Sampling the actual output texture avoids that.
+  const outTexs = engine.lastOutputs.get([...engine.lastOutputs.keys()][0]) || {}
+  if (outTexs.normal) {
+    const normalSize = Math.min(2048, Math.max(64, resolution))
+    report.normal = normalStats(
+      engine.readTexture8(outTexs.normal, normalSize, { srgb: false, flipRows: false }),
+      normalSize,
+      normalSize
+    )
+    report.normal.sampledAt = normalSize
+  } else {
     report.normal = normalStats(maps.normal.data, maps.normal.width, maps.normal.height)
+  }
 
     // seam check via full-resolution readback of base colour + height
     const outId = [...engine.lastOutputs.keys()][0]
@@ -152,8 +166,18 @@ export async function runSelfTest(engine, opts = {}) {
   }
   if (wired.has('basecolor')) checks.baseColorVariance = report.channels.basecolor.max - report.channels.basecolor.min > 30
   if (wired.has('normal')) {
-    checks.normalUnitLength = report.normal.meanUnitError < 0.12
-    checks.normalsFaceOutward = report.normal.meanZ > 0.35
+    checks.normalUnitLength = report.normal.meanUnitError < 0.02
+    // A tangent-space normal always has +Z; very steep but valid surfaces can have a low mean Z.
+    // Only flag grossly invalid/inverted normals as failures, and warn about extreme steepness.
+    checks.normalsFaceOutward = report.normal.meanZ > 0.05
+    if (report.normal.meanZ < 0.35) {
+      report.warnings = report.warnings || []
+      report.warnings.push(
+        'Normal map is extremely steep (mean Z ' +
+          report.normal.meanZ +
+          '). Reduce Normal intensity, increase its sample radius, or blur the height input.'
+      )
+    }
   }
   if (wired.has('basecolor') || wired.has('height')) checks.seamless = seamOk
   report.checks = checks

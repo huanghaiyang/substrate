@@ -8,6 +8,7 @@ import { t } from '../i18n/index.js'
 
 const STORAGE_KEY = 'substrate.aiChat.v1'
 const MODEL_KEY = 'substrate.llmModel'
+const THINKING_KEY = 'substrate.showThinking'
 const MAX_MESSAGES = 300
 
 function readSaved() {
@@ -21,6 +22,7 @@ function readSaved() {
         role: m.role,
         content: String(m.content || ''),
         trace: Array.isArray(m.trace) ? m.trace.slice(0, 24) : undefined,
+        reasoning: Array.isArray(m.reasoning) ? m.reasoning.slice(0, 24) : undefined,
         error: m.error ? String(m.error) : undefined,
         pending: false,
         interrupted: !!m.pending || !!m.interrupted,
@@ -44,6 +46,13 @@ export const aiChat = reactive({
   lastActivity: 0,
   floatingVisible: false,
   unread: 0,
+  showThinking: (() => {
+    try {
+      return localStorage.getItem(THINKING_KEY) !== '0'
+    } catch (e) {
+      return true
+    }
+  })(),
   loadedAt: Date.now()
 })
 
@@ -56,6 +65,7 @@ export function persistChatNow() {
       role: m.role,
       content: m.content,
       trace: m.trace,
+      reasoning: m.reasoning,
       error: m.error,
       model: m.model,
       at: m.at,
@@ -78,6 +88,7 @@ export function persistChat() {
         role: m.role,
         content: m.content,
         trace: m.trace,
+        reasoning: m.reasoning,
         error: m.error,
         model: m.model,
         at: m.at,
@@ -99,6 +110,15 @@ export function persistChat() {
       }
     }
   }, 250)
+}
+
+export function setShowThinking(value) {
+  aiChat.showThinking = !!value
+  try {
+    localStorage.setItem(THINKING_KEY, aiChat.showThinking ? '1' : '0')
+  } catch (e) {
+    /* ignore */
+  }
 }
 
 export function setChatModel(key) {
@@ -138,13 +158,14 @@ export async function sendChat(text) {
       .filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.pending && m.content)
       .slice(-12)
       .map((m) => ({ role: m.role, content: m.content }))
-    const result = await chatWithAssistant({ modelKey: aiChat.modelKey, messages: history, maxSteps: 20 })
+    const result = await chatWithAssistant({ modelKey: aiChat.modelKey, messages: history, maxSteps: 20, showThinking: aiChat.showThinking })
     const idx = aiChat.messages.indexOf(pending)
     const final = {
       role: 'assistant',
       content: result?.ok ? result.reply || '' : '',
       error: result?.ok ? undefined : result?.error?.message || '请求失败',
       trace: result?.toolCalls || [],
+      reasoning: Array.isArray(result?.reasoning) ? result.reasoning : [],
       model: result?.model || undefined,
       hitStepLimit: !!result?.hitStepLimit,
       pending: false,
@@ -189,6 +210,10 @@ export function exportChatMarkdown() {
     lines.push('## ' + (m.role === 'user' ? 'User' : 'Assistant') + ' · ' + new Date(m.at || Date.now()).toISOString())
     if (m.content) lines.push('', m.content)
     if (m.error) lines.push('', '> Error: ' + m.error)
+    if (m.reasoning && m.reasoning.length) {
+      lines.push('', '**Thinking / plan**')
+      for (const r of m.reasoning) lines.push('- [' + (r.kind || 'thought') + ' · step ' + (r.step || '?') + '] ' + r.text)
+    }
     if (m.hitStepLimit) lines.push('', '> Tool-step limit reached; this is a progress summary.')
     if (m.trace && m.trace.length) {
       lines.push('', '**Tool calls**')

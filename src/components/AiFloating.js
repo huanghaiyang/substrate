@@ -26,6 +26,10 @@ export default defineComponent({
       <div class="ai-float-list" ref="listEl">
         <div v-for="(m, i) in messages" :key="i" class="ai-float-msg" :class="m.role">
           <span class="ai-float-role">{{ m.role === 'user' ? $t('ai.you') : 'AI' }}</span>
+          <details v-if="m.reasoning && m.reasoning.length" class="ai-reasoning ai-reasoning-float">
+            <summary>{{ $t('ai.reasoning') }} · {{ m.reasoning.length }}</summary>
+            <pre v-for="(r, ri) in m.reasoning" :key="ri">{{ r.text }}</pre>
+          </details>
           <span v-if="m.pending" class="ai-thinking">{{ $t('ai.thinking') }}</span>
           <span v-else class="ai-float-text">{{ m.content || m.error || '' }}</span>
           <div v-if="m.hitStepLimit" class="ai-step-limit">{{ $t('ai.stepLimit') }}</div>

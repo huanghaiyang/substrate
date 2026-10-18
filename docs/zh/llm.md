@@ -61,6 +61,7 @@ DEEPSEEK_API_KEY=sk-... npm start
 - **AI 规则**由服务端系统提示词强制执行，并通过 `GET /api/llm/rules` 只读暴露（⚙ 设置中也会列出）：助手只能通过工具操作本工作室；禁止读取/修改应用源码、仓库文件、环境变量、API Key、日志或系统路径，遇到刺探密钥/主机/网络等请求必须拒绝。
 - 助手可**联网搜索素材**（`substrate_search_open_assets`）并带署名导入（`substrate_import_asset_url`）；详见 [asset-search.md](asset-search.md)。
 - **长时间搭图有步数上限且会给出汇总**：面板默认最多 20 个助手/工具步骤（服务端上限 32）。若在搭图过程中耗尽步数预算，服务端会最后发起一次禁用工具的请求，生成简明的进度汇总并返回 `hitStepLimit: true`，而不是直接报“已达最大工具步数”错误。面板/浮动窗会显示提示，该标记随对话持久化，继续对话即可接着完成。
+- **思考过程可见**：DeepSeek Reasoner 通过 `reasoning_content` 返回思维链；普通对话模型可能返回简短计划文本。⚙ 设置中的**显示思考过程**（默认开启）还会要求模型在最终回复中给出一个简短的 `<thinking>…</thinking>` 块，服务端会提取该块并显示在回复上方的可折叠**思考过程**中（浮动窗为紧凑版），随对话持久化并写入 Markdown 导出；标签不会泄漏到可见回复。不返回思考的模型则显示工具调用轨迹。
 - **工具调用配对有保证**：一轮多工具调用（最多 12 个并行）会在下一次请求前为每个 `tool_call_id` 写入一条 `tool` 回复；不完整/损坏的工具记录会被 `sanitizeToolSequence` 自动修复，避免提供商返回 *“assistant message with tool_calls must be followed by tool messages”*。如果模型完全不支持工具调用，服务端会从干净的消息列表降级为普通对话重试一次。
 
 ## 切换模型 / 添加提供商

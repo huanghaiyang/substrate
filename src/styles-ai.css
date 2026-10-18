@@ -527,3 +527,59 @@
   border: 1px solid rgba(224, 176, 106, 0.35);
   background: rgba(224, 176, 106, 0.08);
 }
+
+.ai-reasoning {
+  margin: 4px 0;
+  border: 1px solid rgba(140, 160, 190, 0.22);
+  border-radius: 6px;
+  background: rgba(140, 160, 190, 0.06);
+  padding: 4px 7px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+.ai-reasoning summary {
+  cursor: pointer;
+  color: var(--text-faint);
+  font-size: 10px;
+  letter-spacing: 0.3px;
+  user-select: none;
+}
+.ai-reasoning-step {
+  margin-top: 5px;
+}
+.ai-reasoning-kind {
+  font-size: 9px;
+  color: #8fa3c0;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.ai-reasoning pre {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--text-faint);
+  max-height: 220px;
+  overflow-y: auto;
+}
+.ai-reasoning-float {
+  margin: 2px 0;
+}
+.ai-reasoning-float pre {
+  max-height: 90px;
+}
+
+.ai-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 2px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.ai-toggle input {
+  accent-color: var(--accent);
+}

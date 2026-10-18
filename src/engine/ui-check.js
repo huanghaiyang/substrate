@@ -550,7 +550,12 @@ export async function runUiCheck() {
     r.add('ai: topbar entry present', !!aiBtn)
     if (aiBtn) {
       click(aiBtn)
-      await sleep(900)
+      await waitFor(() => !!q('.ai-panel'), 3000)
+      if (!q('.ai-panel')) {
+        click(aiBtn)
+        await waitFor(() => !!q('.ai-panel'), 3000)
+      }
+      await waitFor(() => qa('.ai-model option').length >= 1, 10000)
       const modelOptions = qa('.ai-model option')
       r.add('ai: panel opens', !!q('.ai-panel'))
       r.add('ai: models listed', modelOptions.length >= 1, String(modelOptions.length))
@@ -702,7 +707,7 @@ export async function runUiCheck() {
             setTimeout(
               () =>
                 resolve(
-                  new Response(JSON.stringify({ ok: true, reply: '浮动窗口测试回复', model: { key: 'test:test' }, toolCalls: [{ name: 'substrate_get_state', ok: true }] }), {
+                  new Response(JSON.stringify({ ok: true, reply: '浮动窗口测试回复', model: { key: 'test:test' }, toolCalls: [{ name: 'substrate_get_state', ok: true }], reasoning: [{ step: 1, kind: 'reasoning', text: '测试思考：先读取状态。' }, { step: 2, kind: 'plan', text: '计划：汇报结果。' }] }), {
                     status: 200,
                     headers: { 'Content-Type': 'application/json' }
                   })
@@ -741,6 +746,12 @@ export async function runUiCheck() {
       if (expand) click(expand)
       await sleep(400)
       r.add('ai: floating expands to full panel', !!q('.ai-panel') && aiStore.aiChat.messages.length >= 2, 'expand failed')
+      const reasoningEl = q('.ai-panel .ai-reasoning')
+      r.add(
+        'ai: thinking process rendered',
+        !!reasoningEl && /思考过程|Thinking process/.test(reasoningEl.textContent || '') && /测试思考/.test(reasoningEl.textContent || ''),
+        'thinking block missing'
+      )
       if (q('.ai-panel')) click(qa('.ai-head .icon-btn').find((b) => b.textContent.trim() === '✕'))
     } finally {
       window.fetch = realFetch

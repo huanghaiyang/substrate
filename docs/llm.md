@@ -84,6 +84,13 @@ DEEPSEEK_API_KEY=sk-... npm start
   with `hitStepLimit: true` instead of a dead-end "maximum steps" error. The note is shown in the
   panel/floating window, persists with the transcript, and the conversation can simply continue to
   finish the work.
+- **Thinking process is visible**: DeepSeek Reasoner exposes its chain of thought via
+  `reasoning_content`; chat models may include a short plan alongside tool calls. The ⚙ setting
+  **Show thinking process** (on by default) also asks the model for one concise
+  `<thinking>…</thinking>` block in its final answer, which is extracted, shown in a collapsible
+  **Thinking process** block above the reply (compact version in the floating window), persisted with
+  the transcript and included in the Markdown export. Tags never leak into the visible reply; models
+  without reasoning simply show the tool trace.
 - **Tool-call pairing is guaranteed**: a multi-tool assistant turn (up to 12 parallel calls) gets one
   `tool` reply per `tool_call_id` before the next provider request, and malformed/incomplete
   transcripts are repaired (`sanitizeToolSequence`) so the provider cannot reject the follow-up with

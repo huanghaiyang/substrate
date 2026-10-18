@@ -388,6 +388,9 @@ OpenAI-compatible provider/model via the ⚙ settings.
   `substrate_import_asset_url` to find and import open-license images, reporting creator and license. Configure
   `PEXELS_API_KEY`, `PIXABAY_API_KEY` or `UNSPLASH_ACCESS_KEY` (env or `asset-search.local.json`) for semantic
   search; see [docs/asset-search.md](docs/asset-search.md).
+- **Thinking process is visible** — DeepSeek Reasoner's `reasoning_content` (and plan text from
+  chat models) is captured per step and shown in a collapsible **Thinking process** block above the
+  reply; it is persisted and included in the Markdown export.
 - **Long tool sessions are bounded and summarized**: if the graph-building tool-step budget is
   exhausted, the assistant returns a progress summary (marked `hitStepLimit`) instead of a dead-end
   error; the note persists with the conversation and replying "continue" resumes the work.
@@ -444,7 +447,9 @@ Open `http://127.0.0.1:3000/?selftest=1&export=1` (optionally `&demo=mossy-rock&
 
 - compiles **every node's GLSL** directly against the WebGL context (report at `window.__SELFTEST__.shaders`),
 - evaluates the graph, checks GL errors and thumbnail generation,
-- reads back every channel and validates colour variance, normal unit length and outward orientation,
+- reads back every channel and validates colour variance, normal unit length and outward orientation
+  (the normal map is sampled at the rendered resolution, so high-frequency valid normals are not
+  washed out by downsampling; extremely steep normals produce a warning rather than a failure),
 - measures wrapped-edge discontinuities against the 99th percentile of interior adjacent steps (robust to both smooth
   gradients and intentional high-frequency patterns such as checkerboards) for seamless tiling,
 - optionally bakes and exports a full package.
@@ -487,7 +492,7 @@ wrapped-edge seam ratios, manifest structure, README sections, and every zip ent
 Latest run after the audit fixes: **4/4 demo packages passed** (all PNGs CRC-valid, correct colour spaces,
 seam ratios well below 1.0 with the percentile metric, clean zip entries each).
 
-### 3. Full application audit (2,227 checks + 135 opt-in UI checks)
+### 3. Full application audit (2,227 checks + 136 opt-in UI checks)
 
 `src/engine/audit.js` is a browser-side test harness that exercises the whole product, not just exports:
 
@@ -499,18 +504,18 @@ seam ratios well below 1.0 with the percentile metric, clean zip entries each).
 | **actions** | add every node type, delete/duplicate/undo/redo, cycle rejection, output uniqueness, parameter coalescing, move/rename, resolution & proxy switching, loading all demos, project save/load/delete (including non-ASCII names), image input round-trip, paint stroke/undo/clear, all five export presets, DirectX normal flip, 16-bit height and alpha plans |
 | **dom** | real UI interactions: palette search (EN+ZH), palette add, graph context menu, node context menu, node drag + undo, marquee selection, Delete/Undo/Redo keys, help/projects/export dialogs, demo dropdown, map zoom, preview shape & sliders, Paint Studio drawing + undo, language switching, New button, console-error watch. Includes live-preview regression tests: the 3D material and the 2D map panel must refresh on demo switches and on parameter edits |
 | **i18n** | EN/ZH key parity, node/parameter/option dictionary coverage, runtime language switching, raw-key/missing-key scans |
-| **ui** *(opt-in)* | 135 deep toolbar/right-panel/paint/AI checks: project-name edit, New, all four demo switches, save/open round-trip, undo/redo buttons, resolution & proxy selects, help dialog, language switch, export dialog defaults/height toggle/real export; preview shapes, tiling & displacement sliders, pause/reset, badge, 8 map cards + normal-convention note + zoom, inspector widgets (slider↔number, bool, gradient add/remove stops), Paint Studio open/close, brush library (16 presets in two groups including nature motifs, unique thumbnails, per-brush rendering coverage, stroke records the preset, brush persistence, eraser, flow/spacing sliders), cubic stroke smoothing, two-point straightness, pen-taper end shrink (geometry + painted coverage + UI toggle), paint performance guards and live thumbnail; **AI panel** (models listed, model switching, no key material in the DOM/API, MCP self-check, **conversation persistence**, **reply keeps running after the panel closes**, **translucent floating window + auto-scroll + expand**, **AI rules**, **transcript export**), **material library** (import, list, pattern fill, online-search UI) and **custom brush JSON import** |
+| **ui** *(opt-in)* | 136 deep toolbar/right-panel/paint/AI checks: project-name edit, New, all four demo switches, save/open round-trip, undo/redo buttons, resolution & proxy selects, help dialog, language switch, export dialog defaults/height toggle/real export; preview shapes, tiling & displacement sliders, pause/reset, badge, 8 map cards + normal-convention note + zoom, inspector widgets (slider↔number, bool, gradient add/remove stops), Paint Studio open/close, brush library (16 presets in two groups including nature motifs, unique thumbnails, per-brush rendering coverage, stroke records the preset, brush persistence, eraser, flow/spacing sliders), cubic stroke smoothing, two-point straightness, pen-taper end shrink (geometry + painted coverage + UI toggle), paint performance guards and live thumbnail; **AI panel** (models listed, model switching, no key material in the DOM/API, MCP self-check, **conversation persistence**, **reply keeps running after the panel closes**, **translucent floating window + auto-scroll + expand**, **AI rules**, **transcript export**), **material library** (import, list, pattern fill, online-search UI) and **custom brush JSON import** |
 
 Run it either from the in-app help dialog (**Run self-test**), with the URL, or from the command line:
 
 ```bash
 node scripts/cdp.mjs audit all        # or: npm run audit   (2,227 checks, ~40 s)
-npm run audit:ui                      # deep toolbar/right-panel/paint/AI pass (135 checks)
+npm run audit:ui                      # deep toolbar/right-panel/paint/AI pass (136 checks)
 npm run audit:quick                   # schema only
 ```
 
 It prints a per-section PASS/FAIL summary and returns a non-zero exit code on failure. Latest run: **2,227 checks, 0 failures**
-(schema 1,278 · render 628 · values 46 · actions 198 · dom 56 · i18n 21), plus the opt-in UI pass (135 checks) and the MCP self-check (30 checks). The same run is available as
+(schema 1,278 · render 628 · values 46 · actions 198 · dom 56 · i18n 21), plus the opt-in UI pass (136 checks) and the MCP self-check (30 checks). The same run is available as
 `?audit=1` (all sections), `?audit=1&auditsection=render` or `?audit=1&auditsection=ui`, with the report available as `window.__AUDIT__`
 and POSTed to `/api/debug/report` for CI.
 

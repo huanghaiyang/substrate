@@ -1,7 +1,7 @@
 import { defineComponent, ref, computed, onMounted, nextTick, watch } from 'vue'
 import { fetchModels, saveProvider, deleteProvider, testProviderModel, fetchAiRules } from '../engine/llm-client.js'
 import { runMcpSelfCheck } from '../engine/mcp-selfcheck.js'
-import { aiChat, sendChat, clearChat, setChatModel, exportChatMarkdown } from '../engine/ai-chat.js'
+import { aiChat, sendChat, clearChat, setChatModel, setShowThinking, exportChatMarkdown } from '../engine/ai-chat.js'
 import { t } from '../i18n/index.js'
 
 export default defineComponent({
@@ -9,6 +9,7 @@ export default defineComponent({
   emits: ['close'],
   setup(_props, { emit }) {
     const models = ref([])
+    const showThinking = computed(() => aiChat.showThinking)
     const providers = ref([])
     const modelKey = computed(() => aiChat.modelKey)
     const input = ref('')
@@ -181,6 +182,8 @@ export default defineComponent({
       removeProviderEntry,
       testCurrent,
       clearAll: clearChat,
+      showThinking,
+      toggleThinking: (e) => setShowThinking(e.target.checked),
       downloadChat,
       close: () => emit('close')
     }
@@ -222,6 +225,8 @@ export default defineComponent({
           </div>
         </div>
         <div v-if="testResult" class="ai-test">{{ testResult }}</div>
+        <label class="ai-toggle"><input type="checkbox" :checked="showThinking" @change="toggleThinking" /> {{ $t('ai.showThinking') }}</label>
+        <div class="hint small">{{ $t('ai.showThinkingHint') }}</div>
         <div class="hint small">{{ $t('ai.keyHint') }}</div>
         <div class="hint small">{{ $t('ai.rulesHint') }}</div>
         <div v-if="aiRules.length" class="ai-rules">
@@ -245,6 +250,13 @@ export default defineComponent({
         <div v-for="(m, i) in messages" :key="i" class="ai-msg" :class="m.role">
           <div v-if="m.role === 'user'" class="ai-bubble user">{{ m.content }}</div>
           <div v-else class="ai-bubble assistant">
+            <details v-if="m.reasoning && m.reasoning.length" class="ai-reasoning">
+              <summary>{{ $t('ai.reasoning') }} · {{ m.reasoning.length }}</summary>
+              <div v-for="(r, ri) in m.reasoning" :key="ri" class="ai-reasoning-step">
+                <div class="ai-reasoning-kind">{{ r.kind === 'plan' ? $t('ai.plan') : $t('ai.thought') }} · {{ r.step }}</div>
+                <pre>{{ r.text }}</pre>
+              </div>
+            </details>
             <div v-if="m.pending" class="ai-thinking">{{ $t('ai.thinking') }}</div>
             <div v-else-if="m.content" class="ai-text">{{ m.content }}</div>
             <div v-if="m.interrupted" class="ai-error">{{ $t('ai.interrupted') }}</div>
@@ -267,6 +279,7 @@ export default defineComponent({
         <button class="btn primary" :disabled="busy || !input.trim()" @click="send()">{{ $t('ai.send') }}</button>
       </div>
       <div class="hint small ai-foot">{{ $t('ai.hint') }}</div>
+      <div class="hint small ai-foot">{{ $t('ai.reasoningHint') }}</div>
     </div>
   `
 })

@@ -21,10 +21,10 @@ export async function fetchModels() {
   return data
 }
 
-export async function chatWithAssistant({ modelKey, messages, maxSteps = 20 }) {
+export async function chatWithAssistant({ modelKey, messages, maxSteps = 20, showThinking = true }) {
   return request('/api/llm/chat', {
     method: 'POST',
-    body: JSON.stringify({ modelKey, messages, maxSteps })
+    body: JSON.stringify({ modelKey, messages, maxSteps, showThinking })
   })
 }
 

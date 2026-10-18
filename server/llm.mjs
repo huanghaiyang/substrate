@@ -269,6 +269,18 @@ export function getAiRules() {
  * by a tool message with the matching tool_call_id. This repairs a transcript by dropping incomplete
  * tool-call turns and orphan tool replies, so a malformed step can never poison later requests.
  */
+function extractThinking(raw) {
+  const thinking = []
+  const text = String(raw || '')
+    .replace(/<(?:thinking|reasoning|思考)>([\s\S]*?)<\/(?:thinking|reasoning|思考)>/gi, (_m, inner) => {
+      const clean = sanitizeText(inner || '').trim()
+      if (clean) thinking.push(clean)
+      return ''
+    })
+    .trim()
+  return { text, thinking }
+}
+
 export function sanitizeToolSequence(messages) {
   const out = []
   const list = Array.isArray(messages) ? messages : []
@@ -310,8 +322,24 @@ export async function runAssistant(dispatch, body = {}) {
   const maxSteps = Math.min(32, Math.max(1, Number(body.maxSteps) || 16))
   const tools = openAiTools()
   const baseMessages = [{ role: 'system', content: SYSTEM_PROMPT }, ...userMessages]
+  const showThinking = body.showThinking === true
+  if (showThinking) {
+    baseMessages.splice(1, 0, {
+      role: 'system',
+      content:
+        'Visible-thinking mode: in your FINAL answer, begin with one <thinking>...</thinking> block containing a concise 2-5 sentence plan/findings. The studio displays it as 思考过程 and strips the tag. Keep it brief; never reveal hidden chain-of-thought, secrets or source code.'
+    })
+  }
   let messages = baseMessages.slice()
   const toolCalls = []
+  const reasoning = []
+  const addReasoning = (step, kind, text) => {
+    const clean = sanitizeText(text || '').trim()
+    if (!clean) return
+    const last = reasoning[reasoning.length - 1]
+    if (last && last.step === step && last.kind === kind && last.text === clean) return
+    reasoning.push({ step, kind, text: clean.slice(0, 8000) })
+  }
   let steps = 0
   let usage = null
   let toolsEnabled = true
@@ -344,15 +372,26 @@ export async function runAssistant(dispatch, body = {}) {
       const choice = response.choices?.[0]
       const message = choice?.message
       if (!message) throw Object.assign(new Error('LLM response has no message'), { code: 'LLM_BAD_RESPONSE' })
+      // DeepSeek reasoners expose the chain of thought as message.reasoning_content; chat models
+      // may include a short plan in content when they request tools. Keep both so the UI can show
+      // the thinking/plan behind each step.
+      if (message.reasoning_content) addReasoning(steps, 'reasoning', message.reasoning_content)
+      if (typeof message.reasoning === 'string') addReasoning(steps, 'reasoning', message.reasoning)
       const calls = Array.isArray(message.tool_calls) ? message.tool_calls : []
+      const stepContent = extractThinking(message.content)
+      for (const t of stepContent.thinking) addReasoning(steps, 'thought', t)
+      if (calls.length && stepContent.text) addReasoning(steps, 'plan', stepContent.text)
       if (!calls.length) {
-        const reply = sanitizeText(message.content || '').trim().slice(0, 12000) || '(no reply)'
+        const finalContent = extractThinking(sanitizeText(message.content || ''))
+        for (const t of finalContent.thinking) addReasoning(steps, 'thought', t)
+        const reply = finalContent.text.slice(0, 12000) || '(no reply)'
         return {
           ok: true,
           reply,
           model: { key: body.modelKey || provider.id + ':' + model.id, provider: provider.label, model: model.id },
           steps,
           toolCalls,
+          reasoning,
           toolsDisabled,
           usage,
           durationMs: Date.now() - started
@@ -364,7 +403,7 @@ export async function runAssistant(dispatch, body = {}) {
         ...call,
         id: call.id || 'call_' + steps + '_' + i
       }))
-      messages.push({ role: 'assistant', content: message.content || null, tool_calls: callsToRun })
+      messages.push({ role: 'assistant', content: stepContent.text || null, tool_calls: callsToRun })
       for (const call of callsToRun) {
         const name = call.function?.name || ''
         let args = {}
@@ -406,7 +445,10 @@ export async function runAssistant(dispatch, body = {}) {
       ])
       const summaryResponse = await callChatCompletion(provider, model.id, finalMessages, null)
       const summaryMessage = summaryResponse.choices?.[0]?.message
-      const reply = sanitizeText(summaryMessage?.content || '').trim().slice(0, 12000)
+      if (summaryMessage?.reasoning_content) addReasoning(steps, 'reasoning', summaryMessage.reasoning_content)
+      const summaryContent = extractThinking(sanitizeText(summaryMessage?.content || ''))
+      for (const t of summaryContent.thinking) addReasoning(steps, 'thought', t)
+      const reply = summaryContent.text.slice(0, 12000)
       if (reply) {
         return {
           ok: true,
@@ -414,6 +456,7 @@ export async function runAssistant(dispatch, body = {}) {
           model: { key: body.modelKey || provider.id + ':' + model.id, provider: provider.label, model: model.id },
           steps,
           toolCalls,
+          reasoning,
           toolsDisabled,
           hitStepLimit: true,
           usage: summaryResponse.usage || usage,
@@ -430,6 +473,7 @@ export async function runAssistant(dispatch, body = {}) {
         message: 'The assistant reached the maximum number of tool steps and could not produce a summary. Try continuing the request (e.g. "继续完成刚才的节点图").'
       },
       toolCalls,
+      reasoning,
       steps,
       toolsDisabled,
       usage,
