@@ -8,6 +8,8 @@ import PaintStudio from './components/PaintStudio.js'
 import ExportDialog from './components/ExportDialog.js'
 import AiPanel from './components/AiPanel.js'
 import AssetLibrary from './components/AssetLibrary.js'
+import AiFloating from './components/AiFloating.js'
+import { aiChat, hideFloating } from './engine/ai-chat.js'
 import { runMcpSelfCheck } from './engine/mcp-selfcheck.js'
 import {
   state,
@@ -32,7 +34,7 @@ import { locale, locales, setLocale, t, trText } from './i18n/index.js'
 
 export default defineComponent({
   name: 'App',
-  components: { NodePalette, GraphEditor, Inspector, Preview3D, MapPanel, PaintStudio, ExportDialog, AiPanel, AssetLibrary },
+  components: { NodePalette, GraphEditor, Inspector, Preview3D, MapPanel, PaintStudio, ExportDialog, AiPanel, AssetLibrary, AiFloating },
   setup() {
     const graphRef = ref(null)
     const showExport = ref(false)
@@ -117,6 +119,15 @@ export default defineComponent({
       state.mode = 'graph'
       state.activePaintId = null
       requestEval(true)
+    }
+
+    function expandAi() {
+      showAi.value = true
+      hideFloating()
+    }
+    function toggleAi() {
+      showAi.value = !showAi.value
+      if (showAi.value) hideFloating()
     }
 
     async function runMcpCheck() {
@@ -238,6 +249,9 @@ export default defineComponent({
       showProjects,
       showDemos,
       showHelp,
+      aiChat,
+      expandAi,
+      toggleAi,
       showAi,
       showAssets,
       mcpCheck,
@@ -307,7 +321,7 @@ export default defineComponent({
         <div class="lang-switch" :title="$t('lang.label')">
           <button v-for="l in locales" :key="l.id" :class="{ on: locale.value === l.id }" @click="setLocale(l.id)">{{ l.label }}</button>
         </div>
-        <button class="icon-btn ai-btn" :title="$t('ai.title')" @click="showAi = !showAi">✦</button>
+        <button class="icon-btn ai-btn" :title="$t('ai.title')" @click="toggleAi">✦</button>
         <button class="icon-btn" :title="$t('assets.title')" @click="showAssets = true">▦</button>
         <button class="icon-btn" :title="$t('top.help')" @click="showHelp = true">?</button>
         <button class="btn primary" @click="showExport = true">{{ $t('top.export') }}</button>
@@ -353,6 +367,7 @@ export default defineComponent({
 
       <ExportDialog v-if="showExport" @close="showExport = false" />
     <AiPanel v-if="showAi" @close="showAi = false" />
+    <AiFloating v-if="!showAi && aiChat.floatingVisible" @expand="expandAi" />
     <AssetLibrary v-if="showAssets" @close="showAssets = false" />
 
       <div v-if="showProjects" class="modal-backdrop" @click.self="showProjects = false">

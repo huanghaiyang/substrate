@@ -248,16 +248,14 @@ async function main() {
   const chatInvalid = await httpJSON('/api/llm/chat', { method: 'POST', body: JSON.stringify({ modelKey: models.body?.defaultModel, messages: [] }) })
   check('llm: chat validates empty messages', chatInvalid.body?.ok === false && chatInvalid.body.error.code === 'INVALID_ARGUMENT', JSON.stringify(chatInvalid.body))
 
-  const customProvider = await httpJSON('/api/llm/providers', {
-    method: 'POST',
-    body: JSON.stringify({ id: 'mcp-test-provider', label: 'MCP Test Provider', baseUrl: 'https://example.com/v1', models: [{ id: 'test-model', label: 'Test Model' }], apiKey: 'sk-test-secret-should-not-leak' })
-  })
-  check('llm: custom provider saved', customProvider.body?.ok === true, JSON.stringify(customProvider.body?.error))
-  check('llm: custom provider key masked', !/sk-test-secret-should-not-leak/.test(JSON.stringify(customProvider.body)), 'key material echoed by provider save')
+  // Provider CRUD must not mutate the user's local provider config in a test run: only validate
+  // error paths and masking here.
+  const invalidProvider = await httpJSON('/api/llm/providers', { method: 'POST', body: JSON.stringify({ label: 'No models' }) })
+  check('llm: provider validation rejects missing models', invalidProvider.body?.ok === false, JSON.stringify(invalidProvider.body))
+  const unknownProviderDelete = await httpJSON('/api/llm/providers/delete', { method: 'POST', body: JSON.stringify({ id: '__does_not_exist__' }) })
+  check('llm: unknown provider delete rejected', unknownProviderDelete.body?.ok === false, JSON.stringify(unknownProviderDelete.body))
   const modelsAfter = await httpJSON('/api/llm/models')
-  check('llm: custom provider listed without key', (modelsAfter.body?.providers || []).some((p) => p.id === 'mcp-test-provider' && p.hasKey === true) && !/sk-test-secret/.test(JSON.stringify(modelsAfter.body)))
-  const providerDeleted = await httpJSON('/api/llm/providers/delete', { method: 'POST', body: JSON.stringify({ id: 'mcp-test-provider' }) })
-  check('llm: custom provider deleted', providerDeleted.body?.ok === true, JSON.stringify(providerDeleted.body?.error))
+  check('llm: provider list stays masked', (modelsAfter.body?.providers || []).every((p) => !('apiKey' in p) && 'hasKey' in p) && !/sk-/.test(JSON.stringify(modelsAfter.body)))
 
   if (process.env.SUBSTRATE_TEST_LLM === '1') {
     const chat = await httpJSON('/api/llm/chat', {
@@ -268,6 +266,32 @@ async function main() {
   } else {
     skip('llm: live chat call', 'set SUBSTRATE_TEST_LLM=1 to call the configured provider')
   }
+
+  // ---------------------------------------------------------------- AI rules + online asset tools
+  const rules = await httpJSON('/api/llm/rules')
+  check('ai: rules endpoint', rules.body?.ok === true && (rules.body.rules || []).length >= 5, JSON.stringify(rules.body))
+  check(
+    'ai: rules forbid source/secrets access',
+    (rules.body?.rules || []).some((r) => /source code/i.test(r)) &&
+      (rules.body?.rules || []).some((r) => /API keys|environment/i.test(r)),
+    JSON.stringify(rules.body?.rules)
+  )
+  const catalog29 = await httpJSON('/api/mcp/tools')
+  const toolNames = (catalog29.body?.tools || []).map((t) => t.name)
+  check('mcp: online asset search tool', toolNames.includes('substrate_search_open_assets'))
+  check('mcp: online asset import tool', toolNames.includes('substrate_import_asset_url'))
+  const search = await httpJSON('/api/assets/search?q=rust%20metal&limit=2')
+  check(
+    'assets: online search endpoint',
+    (search.body?.ok === true && (search.body.results || []).length > 0) ||
+      search.body?.error?.code === 'ASSET_SEARCH_UNAVAILABLE',
+    JSON.stringify(search.body?.error || search.body?.results?.length)
+  )
+  check('assets: search results carry license/creator', (search.body?.results || []).every((r) => r.license && r.creator) || !search.body?.ok)
+  const ssrf = await httpJSON('/api/assets/import-url', { method: 'POST', body: JSON.stringify({ url: 'http://127.0.0.1:3000/api/health' }) })
+  check('assets: URL import rejects localhost (SSRF guard)', ssrf.body?.ok === false, JSON.stringify(ssrf.body))
+  const proto = await httpJSON('/api/assets/import-url', { method: 'POST', body: JSON.stringify({ url: 'file:///etc/passwd' }) })
+  check('assets: URL import rejects non-http schemes', proto.body?.ok === false, JSON.stringify(proto.body))
 
   // ---------------------------------------------------------------- material library CRUD
   const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAFUlEQVR42mP8z8BQz0AEYBxVSF+FABJADveWkH6oAAAAAElFTkSuQmCC'

@@ -43,3 +43,7 @@ export async function testProviderModel(modelKey) {
 export async function fetchMcpSelfcheck() {
   return request('/api/mcp/selfcheck')
 }
+
+export async function fetchAiRules() {
+  return request('/api/llm/rules')
+}

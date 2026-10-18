@@ -32,12 +32,17 @@ paint on them by hand, preview the result as a lit 3D material, and export an in
   Substance Painter), correct sRGB vs linear handling, ORM / Mask Map packing, OpenGL↔DirectX normal flipping,
   16-bit height, adaptive-filter PNG encoder, `manifest.json` + `README.md` + zip package written by the Node server.
 - **MCP / agent integration** — a normalized external MCP gateway that **starts with the app** (stdio + HTTP
-  JSON-RPC, 27 tools) plus a built-in **MCP self-check**; in-page WebMCP tools are also available.
+  JSON-RPC, 29 tools) plus a built-in **MCP self-check**; in-page WebMCP tools are also available.
 - **AI assistant** — a top-bar **✦** panel connected to DeepSeek (default) or any OpenAI-compatible provider.
   The assistant runs **server-side** and drives the app through the MCP tools (edit graphs, paint, evaluate,
   export). API keys never reach the browser; models/providers can be switched and added from the panel.
-- **Material library** — import PNG/JPEG/WebP textures, preview/delete them, use them as graph textures or as
-  paint-layer pattern fills in the Paint Studio.
+- **Persistent AI conversation** — full history and tool traces are saved and restored after reloads, can be
+  exported as Markdown; closing the dialog **does not cancel a reply**, and an in-flight conversation appears in
+  a translucent floating window (auto-scroll, expandable). Enforced AI rules forbid touching source code,
+  API keys/environment, files or system information.
+- **Material library** — import PNG/JPEG/WebP textures, search open-license material **online**, preview/delete
+  them, use them as graph textures or as paint-layer pattern fills in the Paint Studio (with creator/license
+  attribution for online results).
 - **Custom brushes** — import brush definitions from JSON (full preset parameter set), stored locally and shown
   in a Custom group; see [docs/brushes.md](docs/brushes.md).
 - **Verified pipeline** — a built-in self-test audits every GLSL program, evaluates the graph, validates normals
@@ -320,9 +325,10 @@ MCP client ──stdio──▶ mcp/server.mjs ──HTTP──▶ server/index.
 
 - **Transports** — stdio (`node mcp/server.mjs`, configs in [`mcp/`](mcp/)), HTTP JSON-RPC at
   `POST /mcp`, and a plain JSON endpoint at `POST /api/mcp/call`. Discovery: `GET /api/mcp/tools`.
-- **27 tools** — `substrate_get_state`, `substrate_get_graph`, `substrate_add_node`,
+- **29 tools** — `substrate_get_state`, `substrate_get_graph`, `substrate_add_node`,
   `substrate_set_param`, `substrate_connect`, `substrate_paint_stroke`, `substrate_get_preview`
-  (2D channel / 3D ball PNG), `substrate_export`, `substrate_run_audit`, project save/load, …
+  (2D channel / 3D ball PNG), `substrate_search_open_assets`, `substrate_import_asset_url`,
+  `substrate_export`, `substrate_run_audit`, project save/load, …
 - **Normalized contract** — stable `substrate_<verb>_<noun>` names, JSON-Schema validated arguments,
   `readOnlyHint`/`destructiveHint`/`idempotentHint` annotations, per-tool timeouts, `apiVersion`,
   and a single envelope: `{ ok, apiVersion, tool, data, meta }` or `{ ok:false, error:{ code, message } }`
@@ -342,9 +348,10 @@ MCP client ──stdio──▶ mcp/server.mjs ──HTTP──▶ server/index.
 }
 ```
 
-Full reference, curl examples, auth, self-check and limitations: [`docs/mcp.md`](docs/mcp.md).
-Test it with `npm run test:mcp` (needs the app tab open; 60 interface checks including LLM key-masking and
-the material-library API).
+Full reference, curl examples, auth, self-check and limitations: [`docs/mcp.md`](docs/mcp.md). Online materials:
+[`docs/asset-search.md`](docs/asset-search.md).
+Test it with `npm run test:mcp` (needs the app tab open; 67 interface checks including LLM key-masking, AI
+rules, online-search guards and the material-library API).
 
 ## AI assistant
 
@@ -352,14 +359,29 @@ Open the **✦ AI assistant** panel from the top bar. It is connected to **DeepS
 configured key lives only on the Node server) and can be pointed at **DeepSeek Reasoner** or any additional
 OpenAI-compatible provider/model via the ⚙ settings.
 
-- Chat in natural language; the assistant calls the same 27 MCP tools as external agents and shows each tool
+- Chat in natural language; the assistant calls the same 29 MCP tools as external agents and shows each tool
   invocation (✓/✕) under its reply.
 - Switch models from the header dropdown; add providers with label, base URL, model ids and API key. Keys are
   written server-side only, never returned to the browser or displayed.
+- **Full conversation history is persisted** across reloads; **⤓** exports it as Markdown. Closing the panel
+  while a reply is in flight keeps the request running and shows the live transcript in a translucent
+  bottom-right floating window (auto-scroll, **⤢** expands back to the full panel).
+- **AI rules** (enforced server-side): the assistant may only operate this studio through its tools; it cannot
+  read/modify source code, files, environment variables, API keys or system information. The rules are listed
+  read-only in ⚙ settings and served by `GET /api/llm/rules`.
+- **Online material search**: the assistant can call `substrate_search_open_assets` /
+  `substrate_import_asset_url` to find and import open-license images, reporting creator and license. Configure
+  `PEXELS_API_KEY`, `PIXABAY_API_KEY` or `UNSPLASH_ACCESS_KEY` (env or `asset-search.local.json`) for semantic
+  search; see [docs/asset-search.md](docs/asset-search.md).
 - The **◎** button runs the MCP self-check; the help dialog has the same entry.
 - Setup, endpoints and security model: [docs/llm.md](docs/llm.md).
 
 ![AI assistant driving the studio through MCP tools](docs/screenshots/11-ai-assistant.png)
+
+While the panel is closed and a reply is still being generated, the conversation continues in a translucent
+floating window:
+
+![Floating AI conversation window](docs/screenshots/13-ai-floating.png)
 
 ## Material library
 
@@ -373,7 +395,12 @@ asset can be previewed, deleted and used as:
 
 Assets are stored on the local server under `assets/` (git-ignored) and referenced by URL in patterns.
 
-![Material library](docs/screenshots/12-material-library.png)
+Use the **search field** in the dialog to find open-license material online (`substrate_search_open_assets`),
+then **Import** a result: the image is downloaded server-side, validated (public http(s), PNG/JPEG/WebP, ≤32 MB)
+and stored together with **creator / license / source attribution**. Provider configuration and the fallback
+behavior are documented in [docs/asset-search.md](docs/asset-search.md).
+
+![Material library with online search](docs/screenshots/12-material-library.png)
 
 ## Keyboard shortcuts
 
@@ -442,7 +469,7 @@ wrapped-edge seam ratios, manifest structure, README sections, and every zip ent
 Latest run after the audit fixes: **4/4 demo packages passed** (all PNGs CRC-valid, correct colour spaces,
 seam ratios well below 1.0 with the percentile metric, clean zip entries each).
 
-### 3. Full application audit (2,227 checks + 124 opt-in UI checks)
+### 3. Full application audit (2,227 checks + 135 opt-in UI checks)
 
 `src/engine/audit.js` is a browser-side test harness that exercises the whole product, not just exports:
 
@@ -454,19 +481,18 @@ seam ratios well below 1.0 with the percentile metric, clean zip entries each).
 | **actions** | add every node type, delete/duplicate/undo/redo, cycle rejection, output uniqueness, parameter coalescing, move/rename, resolution & proxy switching, loading all demos, project save/load/delete (including non-ASCII names), image input round-trip, paint stroke/undo/clear, all five export presets, DirectX normal flip, 16-bit height and alpha plans |
 | **dom** | real UI interactions: palette search (EN+ZH), palette add, graph context menu, node context menu, node drag + undo, marquee selection, Delete/Undo/Redo keys, help/projects/export dialogs, demo dropdown, map zoom, preview shape & sliders, Paint Studio drawing + undo, language switching, New button, console-error watch. Includes live-preview regression tests: the 3D material and the 2D map panel must refresh on demo switches and on parameter edits |
 | **i18n** | EN/ZH key parity, node/parameter/option dictionary coverage, runtime language switching, raw-key/missing-key scans |
-| **ui** *(opt-in)* | 124 deep toolbar/right-panel/paint/AI checks: project-name edit, New, all four demo switches, save/open round-trip, undo/redo buttons, resolution & proxy selects, help dialog, language switch, export dialog defaults/height toggle/real export; preview shapes, tiling & displacement sliders, pause/reset, badge, 8 map cards + normal-convention note + zoom, inspector widgets (slider↔number, bool, gradient add/remove stops), Paint Studio open/close, brush library (16 presets in two groups including nature motifs, unique thumbnails, per-brush rendering coverage, stroke records the preset, brush persistence, eraser, flow/spacing sliders), cubic stroke smoothing, two-point straightness, pen-taper end shrink (geometry + painted coverage + UI toggle), paint performance guards and live thumbnail; **AI panel** (models listed, model switching, no key material in
-  the DOM/API, MCP self-check), **material library** (import, list, pattern fill) and **custom brush JSON import** |
+| **ui** *(opt-in)* | 135 deep toolbar/right-panel/paint/AI checks: project-name edit, New, all four demo switches, save/open round-trip, undo/redo buttons, resolution & proxy selects, help dialog, language switch, export dialog defaults/height toggle/real export; preview shapes, tiling & displacement sliders, pause/reset, badge, 8 map cards + normal-convention note + zoom, inspector widgets (slider↔number, bool, gradient add/remove stops), Paint Studio open/close, brush library (16 presets in two groups including nature motifs, unique thumbnails, per-brush rendering coverage, stroke records the preset, brush persistence, eraser, flow/spacing sliders), cubic stroke smoothing, two-point straightness, pen-taper end shrink (geometry + painted coverage + UI toggle), paint performance guards and live thumbnail; **AI panel** (models listed, model switching, no key material in the DOM/API, MCP self-check, **conversation persistence**, **reply keeps running after the panel closes**, **translucent floating window + auto-scroll + expand**, **AI rules**, **transcript export**), **material library** (import, list, pattern fill, online-search UI) and **custom brush JSON import** |
 
 Run it either from the in-app help dialog (**Run self-test**), with the URL, or from the command line:
 
 ```bash
 node scripts/cdp.mjs audit all        # or: npm run audit   (2,227 checks, ~40 s)
-npm run audit:ui                      # deep toolbar/right-panel/paint/AI pass (124 checks)
+npm run audit:ui                      # deep toolbar/right-panel/paint/AI pass (135 checks)
 npm run audit:quick                   # schema only
 ```
 
 It prints a per-section PASS/FAIL summary and returns a non-zero exit code on failure. Latest run: **2,227 checks, 0 failures**
-(schema 1,278 · render 628 · values 46 · actions 198 · dom 56 · i18n 21), plus the opt-in UI pass (124 checks) and the MCP self-check (30 checks). The same run is available as
+(schema 1,278 · render 628 · values 46 · actions 198 · dom 56 · i18n 21), plus the opt-in UI pass (135 checks) and the MCP self-check (30 checks). The same run is available as
 `?audit=1` (all sections), `?audit=1&auditsection=render` or `?audit=1&auditsection=ui`, with the report available as `window.__AUDIT__`
 and POSTed to `/api/debug/report` for CI.
 
@@ -476,11 +502,12 @@ and POSTed to `/api/debug/report` for CI.
 npm run test:mcp
 ```
 
-End-to-end validation of the external interface (60 checks): gateway availability/catalog, stdio JSON-RPC logic
+End-to-end validation of the external interface (67 pass / 2 skipped): gateway availability/catalog, stdio JSON-RPC logic
 (initialize / tools/list / tools/call / ping), graph reads and mutations, evaluation, thumbnails and
 2D/3D preview capture, painting, project save/load/delete, export + zip, normalized error envelopes,
 HTTP JSON-RPC (`/mcp`), the plain JSON endpoint, `/api/mcp/selfcheck`, the LLM model/provider endpoints
-(key-leak assertions, provider CRUD masking) and the material-library CRUD. It prints a PASS/FAIL summary,
+(key-leak assertions, provider validation/masking), **AI rules**, the material-library CRUD and
+**online search/import SSRF guards**. It prints a PASS/FAIL summary,
 cleans up the test project/export/assets and restores the demo material. (The stdio line framing itself is verified by piping an
 `initialize` request into `node mcp/server.mjs`; the automated test skips spawning where the sandbox
 forbids child processes.)
@@ -546,6 +573,7 @@ mcp/config.claude.json     Claude Desktop/Code configuration example
 mcp/config.codex.toml      Codex configuration example
 docs/mcp.md                MCP integration reference
 docs/llm.md                AI assistant / provider configuration and key security
+docs/asset-search.md       online material providers, attribution and SSRF policy
 docs/brushes.md            custom brush JSON format
 server/llm.mjs             server-side LLM proxy + tool-calling agent loop
 server/assets.mjs          material-library storage/import/validation
@@ -573,8 +601,10 @@ src/engine/mcp-commands.js browser handlers for external tools
 src/engine/mcp-bridge.js   SSE bridge between the page and the MCP gateway
 src/engine/mcp-selfcheck.js browser + gateway MCP self-check
 src/engine/llm-client.js   browser client for the model proxy (never sees keys)
+src/engine/ai-chat.js      persistent AI conversation store (survives panel close/reload)
 src/components/AiPanel.js  AI assistant panel
-src/components/AssetLibrary.js material library dialog
+src/components/AiFloating.js translucent floating transcript window
+src/components/AssetLibrary.js material library + online search dialog
 src/engine/audit.js        browser-side full audit: nodes, values, actions, DOM, i18n
 src/engine/ui-check.js     deep toolbar / right panel / paint interaction checks
 exports/                   generated material packages (git-ignored; produced by Export)

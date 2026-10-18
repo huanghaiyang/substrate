@@ -15,7 +15,7 @@ import {
   validateArguments,
   toolTimeout
 } from '../src/engine/mcp-catalog.js'
-import { initAssets, listAssets, importAsset, deleteAsset, assetFilePath, assetsCount } from './assets.mjs'
+import { initAssets, listAssets, importAsset, deleteAsset, assetFilePath, assetsCount, searchAssets, importAssetFromUrl } from './assets.mjs'
 import {
   loadConfig as loadLlmConfig,
   saveConfig as saveLlmConfig,
@@ -23,7 +23,8 @@ import {
   upsertProvider,
   removeProvider,
   runAssistant,
-  testModel
+  testModel,
+  getAiRules
 } from './llm.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -69,7 +70,10 @@ function mcpClientInfo() {
 
 function pumpMcpQueue() {
   if (!mcpQueue.length) return
-  for (const [id, client] of mcpClients) {
+  // Prefer the most recently connected tab: reloads/closed pages can leave stale SSE entries
+  // behind until the socket is reaped, and an older page may run outdated tool code.
+  const clients = [...mcpClients.entries()].sort((x, y) => (y[1].connectedAt || 0) - (x[1].connectedAt || 0))
+  for (const [id, client] of clients) {
     if (client.busy) continue
     const job = mcpQueue.shift()
     if (!job) return
@@ -747,6 +751,21 @@ function handleAssetImport(req, res) {
     .catch((e) => sendJSON(res, 400, { ok: false, error: { code: 'ASSET_IMPORT_FAILED', message: String(e.message || e) } }))
 }
 
+function handleAssetSearch(req, res, url) {
+  return searchAssets(url.searchParams.get('q') || '', Math.min(24, Math.max(1, Number(url.searchParams.get('limit')) || 12)))
+    .then((result) => sendJSON(res, 200, result))
+    .catch((e) => sendJSON(res, 400, { ok: false, error: { code: e.code || 'ASSET_SEARCH_FAILED', message: String(e.message || e) } }))
+}
+
+function handleAssetImportUrl(req, res) {
+  return readBody(req, 1024 * 1024)
+    .then((buf) => {
+      const payload = JSON.parse(buf.toString('utf8') || '{}')
+      return importAssetFromUrl(payload).then((asset) => sendJSON(res, 200, { ok: true, asset }))
+    })
+    .catch((e) => sendJSON(res, 400, { ok: false, error: { code: 'ASSET_IMPORT_FAILED', message: String(e.message || e) } }))
+}
+
 function handleAssetDelete(req, res) {
   return readBody(req, 256 * 1024)
     .then((buf) => {
@@ -897,11 +916,14 @@ const server = http.createServer((req, res) => {
       .catch((e) => sendJSON(res, 500, { ok: false, error: { code: 'INTERNAL', message: String(e.message || e) } }))
   }
   if (p === '/api/llm/models' && method === 'GET') return handleLlmModels(req, res)
+  if (p === '/api/llm/rules' && method === 'GET') return sendJSON(res, 200, getAiRules())
   if (p === '/api/llm/providers' && method === 'POST') return handleLlmProviderSave(req, res)
   if (p === '/api/llm/providers/delete' && method === 'POST') return handleLlmProviderDelete(req, res)
   if (p === '/api/llm/chat' && method === 'POST') return handleLlmChat(req, res)
   if (p === '/api/llm/test' && method === 'POST') return handleLlmTest(req, res)
   if (p === '/api/assets' && method === 'GET') return handleAssetsList(req, res)
+  if (p === '/api/assets/search' && method === 'GET') return handleAssetSearch(req, res, url)
+  if (p === '/api/assets/import-url' && method === 'POST') return handleAssetImportUrl(req, res)
   if (p === '/api/assets/import' && method === 'POST') return handleAssetImport(req, res)
   if (p === '/api/assets/delete' && method === 'POST') return handleAssetDelete(req, res)
   if (p.startsWith('/assets/') && (method === 'GET' || method === 'HEAD')) {

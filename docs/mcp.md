@@ -105,7 +105,7 @@ curl -s http://127.0.0.1:3000/api/mcp/call \
 Error codes: `APP_NOT_CONNECTED`, `INVALID_ARGUMENT`, `NOT_FOUND`, `EVAL_FAILED`, `EXPORT_FAILED`,
 `TIMEOUT`, `UNAUTHORIZED`, `INTERNAL`, `UNKNOWN_TOOL`.
 
-## Tools (27)
+## Tools (29)
 
 | Tool | Kind | Purpose |
 | --- | --- | --- |
@@ -114,6 +114,8 @@ Error codes: `APP_NOT_CONNECTED`, `INVALID_ARGUMENT`, `NOT_FOUND`, `EVAL_FAILED`
 | `substrate_list_demos` | read | built-in demo materials |
 | `substrate_list_projects` | read | saved projects on the local server |
 | `substrate_get_thumbnail` | read | 96 px PNG data URL of a node (default: output) |
+| `substrate_search_open_assets` | read | search open-license online materials (creator/license/source URLs) |
+| `substrate_import_asset_url` | write | download an online image into the material library with attribution |
 | `substrate_get_preview` | read | PNG data URL of one 2D channel or the shaded 3D material ball |
 | `substrate_evaluate` | read/write | force evaluation and return timing/passes/cache stats |
 | `substrate_run_selftest` | read | GPU pipeline self-test (shaders, channels, normals, seams) |
@@ -153,12 +155,13 @@ the app tab so the bridge appends `?token=` to its event stream.
 ## Automated tests
 
 `npm run test:mcp` exercises: gateway availability/catalog, stdio transport logic (initialize,
-tools/list, tools/call, ping), graph reads/mutations, evaluation, thumbnails, 2D/3D preview capture,
-painting, project save/load/delete, export + zip, normalized error envelopes, HTTP JSON-RPC
-(`/mcp`) and the plain JSON endpoint. It prints a PASS/FAIL summary and restores the demo material.
+tools/list, tools/call, ping), graph reads/mutations, evaluation, thumbnails, online material search/import,
+2D/3D preview capture, painting, project save/load/delete, export + zip, normalized error envelopes, HTTP JSON-RPC
+(`/mcp`), the plain JSON endpoint, AI rules and the material-library API. It prints a PASS/FAIL summary and
+restores the demo material.
 
 The extended test also covers the MCP self-check endpoint, the LLM model/provider API (key-leak assertions,
-provider CRUD masking) and the material-library API. The stdio framing itself is a newline-delimited JSON-RPC loop: piping an `initialize` request into
+provider validation/masking), AI rules and the material-library API + online search/import SSRF guards. The stdio framing itself is a newline-delimited JSON-RPC loop: piping an `initialize` request into
 `node mcp/server.mjs` returns the server info line (validated in CI environments that allow child
 processes).
 

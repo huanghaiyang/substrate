@@ -171,6 +171,27 @@ const handlers = {
     return projectList()
   },
 
+  async substrate_search_open_assets(args) {
+    const limit = Math.min(24, Math.max(1, Number(args.limit) || 12))
+    const res = await fetch('/api/assets/search?q=' + encodeURIComponent(args.query) + '&limit=' + limit)
+    const data = await res.json()
+    if (!data?.ok) {
+      throw new ToolError(data?.error?.code || ERROR_CODES.INTERNAL, data?.error?.message || 'Asset search failed', data?.error?.details)
+    }
+    return { query: data.query, provider: data.provider, results: data.results }
+  },
+
+  async substrate_import_asset_url(args) {
+    const res = await fetch('/api/assets/import-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(args)
+    })
+    const data = await res.json()
+    if (!data?.ok) throw new ToolError(ERROR_CODES.INTERNAL, data?.error?.message || 'Asset import failed')
+    return { asset: data.asset }
+  },
+
   async substrate_get_thumbnail(args) {
     let node = args.nodeId ? requireNode(args.nodeId) : outputNode()
     if (!node) throw new ToolError(ERROR_CODES.NOT_FOUND, 'No output node')

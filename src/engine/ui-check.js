@@ -90,6 +90,7 @@ export async function runUiCheck() {
   const brushSnapshot = { ...state.paintBrush }
   const customBrushesSnapshot = (() => { try { return localStorage.getItem('substrate.customBrushes') } catch (e) { return null } })()
   const llmModelSnapshot = (() => { try { return localStorage.getItem('substrate.llmModel') } catch (e) { return null } })()
+  const chatSnapshot = (() => { try { return localStorage.getItem('substrate.aiChat.v1') } catch (e) { return null } })()
   const hrefBeforeLocaleTests = location.href
   const { setLocale } = await import('../i18n/index.js')
 
@@ -597,6 +598,7 @@ export async function runUiCheck() {
           await sleep(900)
           const after = paintNode ? (nodeById(paintNode.id).data.strokes || []).length : 0
           r.add('assets: pattern fill paint layer', after === before + 1, before + ' -> ' + after)
+          r.add('assets: online search UI', !!q('.asset-search input') && !!q('.asset-search button'), 'search row missing')
         } else r.add('assets: pattern fill paint layer', false, 'fill button missing')
         const closeAsset = q('.asset-modal .modal-head .icon-btn')
         if (closeAsset) click(closeAsset)
@@ -648,6 +650,19 @@ export async function runUiCheck() {
         brushModule.loadCustomBrushes()
         if (llmModelSnapshot === null) localStorage.removeItem('substrate.llmModel')
         else localStorage.setItem('substrate.llmModel', llmModelSnapshot)
+        const aiModule = await import('../engine/ai-chat.js')
+        aiModule.aiChat.busy = false
+        aiModule.aiChat.floatingVisible = false
+        aiModule.aiChat.messages.splice(0, aiModule.aiChat.messages.length)
+        if (chatSnapshot === null) localStorage.removeItem('substrate.aiChat.v1')
+        else {
+          localStorage.setItem('substrate.aiChat.v1', chatSnapshot)
+          try {
+            const parsed = JSON.parse(chatSnapshot)
+            for (const msg of parsed.messages || []) aiModule.aiChat.messages.push(msg)
+            aiModule.aiChat.modelKey = parsed.modelKey || aiModule.aiChat.modelKey
+          } catch (e) { /* ignore */ }
+        }
       } catch (e) {
         /* ignore */
       }
@@ -667,7 +682,82 @@ export async function runUiCheck() {
       state.activePaintId = null
       await sleep(500)
       doEval()
-    } catch (e) {
+        // ============================ AI chat persistence / floating window / rules ============================
+    const realFetch = window.fetch
+    let fakeFetchInstalled = false
+    try {
+      const aiStore = await import('../engine/ai-chat.js')
+      const rules = await (await fetch('/api/llm/rules')).json()
+      r.add('ai: rules endpoint', rules?.ok === true && (rules.rules || []).length >= 5, JSON.stringify(rules))
+      r.add(
+        'ai: rules forbid source/secrets',
+        (rules.rules || []).some((x) => /source code/i.test(x)) && (rules.rules || []).some((x) => /API keys|environment/i.test(x)),
+        JSON.stringify(rules.rules)
+      )
+      // deterministic fake model reply: proves the request survives closing the panel
+      aiStore.clearChat()
+      window.fetch = (url, opts) => {
+        if (String(url).includes('/api/llm/chat')) {
+          return new Promise((resolve) =>
+            setTimeout(
+              () =>
+                resolve(
+                  new Response(JSON.stringify({ ok: true, reply: '浮动窗口测试回复', model: { key: 'test:test' }, toolCalls: [{ name: 'substrate_get_state', ok: true }] }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' }
+                  })
+                ),
+              360
+            )
+          )
+        }
+        return realFetch(url, opts)
+      }
+      fakeFetchInstalled = true
+      if (q('.ai-panel')) click(qa('.ai-head .icon-btn').find((b) => b.textContent.trim() === '✕'))
+      await sleep(120)
+      const sendPromise = aiStore.sendChat('浮动窗口测试：关闭面板后继续对话')
+      await sleep(60)
+      r.add('ai: keeps running after panel closed', aiStore.aiChat.busy === true, 'request was not in flight')
+      aiStore.showFloatingPanel()
+      await sleep(200)
+      const float = q('.ai-float')
+      r.add('ai: floating transcript visible', !!float, 'floating window missing')
+      const bg = float ? getComputedStyle(float).backgroundColor : ''
+      r.add('ai: floating background translucent', /rgba\([^)]*,\s*0\.\d+\)/.test(bg), bg)
+      const list = float?.querySelector('.ai-float-list')
+      r.add('ai: floating scrolls to latest', !!list && list.scrollTop + list.clientHeight >= list.scrollHeight - 4, 'not scrolled to bottom')
+      await sendPromise
+      r.add('ai: reply arrives after panel closed', !aiStore.aiChat.busy && aiStore.aiChat.messages.length >= 2 && aiStore.aiChat.messages.some((m) => m.role === 'assistant' && m.content), 'reply missing')
+      const saved = JSON.parse(localStorage.getItem('substrate.aiChat.v1') || 'null')
+      r.add(
+        'ai: full conversation persisted',
+        (saved?.messages || []).length >= 2 && saved.messages.some((m) => (m.trace || []).length),
+        JSON.stringify(saved?.messages?.length)
+      )
+      const md = aiStore.exportChatMarkdown()
+      r.add('ai: transcript export', md.includes('User') && md.includes('Tool calls'), 'markdown transcript incomplete')
+      const expand = q('.ai-float .ai-float-head .icon-btn')
+      if (expand) click(expand)
+      await sleep(400)
+      r.add('ai: floating expands to full panel', !!q('.ai-panel') && aiStore.aiChat.messages.length >= 2, 'expand failed')
+      if (q('.ai-panel')) click(qa('.ai-head .icon-btn').find((b) => b.textContent.trim() === '✕'))
+    } finally {
+      window.fetch = realFetch
+      const aiStore = await import('../engine/ai-chat.js')
+      aiStore.aiChat.busy = false
+      aiStore.aiChat.floatingVisible = false
+      aiStore.clearChat()
+      if (chatSnapshot !== null) {
+        try {
+          const parsed = JSON.parse(chatSnapshot)
+          for (const msg of parsed.messages || []) aiStore.aiChat.messages.push(msg)
+          aiStore.aiChat.modelKey = parsed.modelKey || aiStore.aiChat.modelKey
+        } catch (e) { /* ignore */ }
+      }
+      if (q('.ai-float')) q('.ai-float .icon-btn')?.click()
+    }
+} catch (e) {
       /* best effort */
     }
   }

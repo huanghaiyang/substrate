@@ -1,6 +1,7 @@
-import { defineComponent, ref, computed, onMounted, nextTick } from 'vue'
-import { fetchModels, chatWithAssistant, saveProvider, deleteProvider, testProviderModel } from '../engine/llm-client.js'
+import { defineComponent, ref, computed, onMounted, nextTick, watch } from 'vue'
+import { fetchModels, saveProvider, deleteProvider, testProviderModel, fetchAiRules } from '../engine/llm-client.js'
 import { runMcpSelfCheck } from '../engine/mcp-selfcheck.js'
+import { aiChat, sendChat, clearChat, setChatModel, exportChatMarkdown } from '../engine/ai-chat.js'
 import { t } from '../i18n/index.js'
 
 export default defineComponent({
@@ -9,13 +10,11 @@ export default defineComponent({
   setup(_props, { emit }) {
     const models = ref([])
     const providers = ref([])
-    const modelKey = ref(localStorage.getItem('substrate.llmModel') || '')
-    const messages = ref([])
+    const modelKey = computed(() => aiChat.modelKey)
     const input = ref('')
-    const busy = ref(false)
-    const error = ref('')
     const showSettings = ref(false)
     const selfcheck = ref(null)
+    const aiRules = ref([])
     const checking = ref(false)
     const testing = ref(false)
     const testResult = ref('')
@@ -35,16 +34,30 @@ export default defineComponent({
         const data = await fetchModels()
         models.value = data.models || []
         providers.value = data.providers || []
+        try {
+          const rules = await fetchAiRules()
+          aiRules.value = rules?.rules || []
+        } catch (e) {
+          aiRules.value = []
+        }
         if (!modelKey.value || !models.value.some((m) => m.key === modelKey.value)) {
-          modelKey.value = data.defaultModel || models.value[0]?.key || ''
+          setChatModel(data.defaultModel || models.value[0]?.key || '')
         }
       } catch (e) {
-        error.value = String(e.message || e)
+        aiChat.error = String(e.message || e)
       }
     }
     function selectModel(event) {
-      modelKey.value = event.target.value
-      localStorage.setItem('substrate.llmModel', modelKey.value)
+      setChatModel(event.target.value)
+    }
+    function downloadChat() {
+      const blob = new Blob([exportChatMarkdown()], { type: 'text/markdown;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = 'substrate-ai-chat-' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.md'
+      link.click()
+      setTimeout(() => URL.revokeObjectURL(url), 2000)
     }
     async function scrollChat() {
       await nextTick()
@@ -52,37 +65,17 @@ export default defineComponent({
     }
     async function send(text) {
       const content = String(text ?? input.value).trim()
-      if (!content || busy.value) return
+      if (!content || aiChat.busy) return
       if (!currentModel.value) {
-        error.value = t('ai.noModel')
+        aiChat.error = t('ai.noModel')
         return
       }
       if (!currentModel.value.hasKey) {
-        error.value = t('ai.noKey')
+        aiChat.error = t('ai.noKey')
         return
       }
       input.value = ''
-      error.value = ''
-      messages.value.push({ role: 'user', content })
-      await scrollChat()
-      busy.value = true
-      try {
-        const history = messages.value
-          .filter((m) => m.role === 'user' || m.role === 'assistant')
-          .slice(-12)
-          .map((m) => ({ role: m.role, content: m.content }))
-        const result = await chatWithAssistant({ modelKey: modelKey.value, messages: history, maxSteps: 8 })
-        if (result?.ok) {
-          messages.value.push({ role: 'assistant', content: result.reply || '', trace: result.toolCalls || [], model: result.model })
-        } else {
-          messages.value.push({ role: 'assistant', content: '', error: result?.error?.message || '请求失败', trace: result?.toolCalls || [] })
-        }
-      } catch (e) {
-        messages.value.push({ role: 'assistant', content: '', error: String(e.message || e) })
-      } finally {
-        busy.value = false
-        await scrollChat()
-      }
+      await sendChat(content)
     }
     function onKeydown(e) {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
@@ -119,10 +112,7 @@ export default defineComponent({
         models.value = data.models || []
         providers.value = data.providers || []
         form.value = { id: '', label: '', baseUrl: 'https://api.deepseek.com', models: 'deepseek-chat', apiKey: '' }
-        if (!models.value.some((m) => m.key === modelKey.value)) {
-          modelKey.value = data.defaultModel || models.value[0]?.key || ''
-          localStorage.setItem('substrate.llmModel', modelKey.value)
-        }
+        if (!models.value.some((m) => m.key === modelKey.value)) setChatModel(data.defaultModel || models.value[0]?.key || '')
         testResult.value = '✓ 已保存（密钥只保存在本机服务端）'
       } catch (e) {
         testResult.value = '✕ ' + (e.message || String(e))
@@ -135,10 +125,7 @@ export default defineComponent({
         if (!data?.ok) throw new Error(data?.error?.message || 'delete failed')
         models.value = data.models || []
         providers.value = data.providers || []
-        if (!models.value.some((m) => m.key === modelKey.value)) {
-          modelKey.value = models.value[0]?.key || ''
-          localStorage.setItem('substrate.llmModel', modelKey.value)
-        }
+        if (!models.value.some((m) => m.key === modelKey.value)) setChatModel(models.value[0]?.key || '')
         testResult.value = '✓ 已删除提供商 ' + p.label
       } catch (e) {
         testResult.value = '✕ ' + (e.message || String(e))
@@ -158,6 +145,11 @@ export default defineComponent({
       }
     }
 
+    watch(
+      () => [aiChat.messages.length, aiChat.messages[aiChat.messages.length - 1]?.content, aiChat.messages[aiChat.messages.length - 1]?.pending],
+      () => scrollChat()
+    )
+
     onMounted(async () => {
       await loadModels()
       await scrollChat()
@@ -167,11 +159,12 @@ export default defineComponent({
       models,
       providers,
       modelKey,
+      aiRules,
       currentModel,
-      messages,
+      messages: computed(() => aiChat.messages),
+      busy: computed(() => aiChat.busy),
+      error: computed(() => aiChat.error),
       input,
-      busy,
-      error,
       showSettings,
       selfcheck,
       checking,
@@ -187,6 +180,8 @@ export default defineComponent({
       saveProviderForm,
       removeProviderEntry,
       testCurrent,
+      clearAll: clearChat,
+      downloadChat,
       close: () => emit('close')
     }
   },
@@ -197,6 +192,8 @@ export default defineComponent({
         <select class="top-select ai-model" :value="modelKey" @change="selectModel" :title="$t('ai.model')">
           <option v-for="m in models" :key="m.key" :value="m.key">{{ m.label }} · {{ m.provider }}</option>
         </select>
+        <button class="icon-btn" :title="$t('ai.export')" @click="downloadChat">⤓</button>
+        <button class="icon-btn" :title="$t('ai.clear')" @click="clearAll">⌫</button>
         <button class="icon-btn" :title="$t('ai.selfcheck')" @click="runCheck" :disabled="checking">{{ checking ? '…' : '◎' }}</button>
         <button class="icon-btn" :title="$t('ai.settings')" @click="showSettings = !showSettings">⚙</button>
         <button class="icon-btn" @click="close">✕</button>
@@ -226,6 +223,10 @@ export default defineComponent({
         </div>
         <div v-if="testResult" class="ai-test">{{ testResult }}</div>
         <div class="hint small">{{ $t('ai.keyHint') }}</div>
+        <div class="hint small">{{ $t('ai.rulesHint') }}</div>
+        <div v-if="aiRules.length" class="ai-rules">
+          <div v-for="(r, i) in aiRules" :key="i">• {{ r }}</div>
+        </div>
       </div>
 
       <div v-if="selfcheck" class="ai-check" :class="selfcheck.ok ? 'ok' : 'bad'">
@@ -238,34 +239,30 @@ export default defineComponent({
           <div class="ai-empty-title">✦ {{ $t('ai.emptyTitle') }}</div>
           <div class="hint">{{ $t('ai.emptyHint') }}</div>
           <div class="ai-quick">
-            <button v-for="q in quickPrompts" :key="q.titleKey" class="btn tiny" @click="send(q.text)">{{ q.titleKey ? $t(q.titleKey) : q.text }}</button>
+            <button v-for="q in quickPrompts" :key="q.titleKey" class="btn tiny" @click="send(q.text)">{{ $t(q.titleKey) }}</button>
           </div>
         </div>
         <div v-for="(m, i) in messages" :key="i" class="ai-msg" :class="m.role">
           <div v-if="m.role === 'user'" class="ai-bubble user">{{ m.content }}</div>
           <div v-else class="ai-bubble assistant">
-            <div v-if="m.content" class="ai-text">{{ m.content }}</div>
+            <div v-if="m.pending" class="ai-thinking">{{ $t('ai.thinking') }}</div>
+            <div v-else-if="m.content" class="ai-text">{{ m.content }}</div>
+            <div v-if="m.interrupted" class="ai-error">{{ $t('ai.interrupted') }}</div>
             <div v-if="m.error" class="ai-error">✕ {{ m.error }}</div>
             <div v-if="m.trace && m.trace.length" class="ai-trace">
-              <div v-for="(t, k) in m.trace" :key="k" class="ai-tool" :class="{ ok: t.ok, bad: !t.ok }">
-                <span class="ai-tool-name">{{ t.ok ? '✓' : '✕' }} {{ t.name }}</span>
-                <span v-if="t.error" class="dim small">{{ t.error }}</span>
+              <div v-for="(tr, k) in m.trace" :key="k" class="ai-tool" :class="{ ok: tr.ok, bad: !tr.ok }">
+                <span class="ai-tool-name">{{ tr.ok ? '✓' : '✕' }} {{ tr.name }}</span>
+                <span v-if="tr.error" class="dim small">{{ tr.error }}</span>
               </div>
             </div>
           </div>
         </div>
-        <div v-if="busy" class="ai-bubble assistant ai-thinking">{{ $t('ai.thinking') }}</div>
+        <div v-if="busy && !messages.length" class="ai-bubble assistant ai-thinking">{{ $t('ai.thinking') }}</div>
       </div>
 
       <div v-if="error" class="ai-error ai-error-bar">{{ error }}</div>
       <div class="ai-input-row">
-        <textarea
-          v-model="input"
-          :placeholder="$t('ai.placeholder')"
-          rows="2"
-          @keydown="onKeydown"
-          :disabled="busy"
-        ></textarea>
+        <textarea v-model="input" :placeholder="$t('ai.placeholder')" rows="2" @keydown="onKeydown" :disabled="busy"></textarea>
         <button class="btn primary" :disabled="busy || !input.trim()" @click="send()">{{ $t('ai.send') }}</button>
       </div>
       <div class="hint small ai-foot">{{ $t('ai.hint') }}</div>

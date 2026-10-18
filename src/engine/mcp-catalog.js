@@ -74,6 +74,45 @@ export const TOOLS = [
     timeoutMs: 15000
   },
   {
+    name: 'substrate_search_open_assets',
+    title: 'Search Online Materials',
+    description:
+      'Search openly licensed image/texture sources (Openverse, Wikimedia Commons, and optional Pexels/Pixabay/Unsplash providers) for material reference images. Returns title, creator, license, source and thumbnail/download URLs. Attribution must be kept when using a result.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', minLength: 1, description: 'Search terms, e.g. "rusty metal plate" or "moss stone"' },
+        limit: { type: 'integer', minimum: 1, maximum: 24, description: 'Max results (default 12)' }
+      },
+      required: ['query'],
+      additionalProperties: false
+    },
+    annotations: readOnly,
+    timeoutMs: 45000
+  },
+  {
+    name: 'substrate_import_asset_url',
+    title: 'Import Online Material',
+    description:
+      'Download one image URL into the local material library (PNG/JPEG/WebP, max 32 MB, public http(s) only). Pass attribution fields from substrate_search_open_assets so the license/creator is stored with the asset.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', minLength: 8, description: 'Direct image URL' },
+        name: { type: 'string', description: 'Display name for the asset' },
+        provider: { type: 'string', description: 'Source provider (e.g. Openverse)' },
+        creator: { type: 'string', description: 'Original creator' },
+        license: { type: 'string', description: 'License name' },
+        licenseUrl: { type: 'string', description: 'License URL' },
+        sourceUrl: { type: 'string', description: 'Original source/landing page URL' }
+      },
+      required: ['url'],
+      additionalProperties: false
+    },
+    annotations: write,
+    timeoutMs: 60000
+  },
+  {
     name: 'substrate_get_thumbnail',
     title: 'Get Node Thumbnail',
     description:

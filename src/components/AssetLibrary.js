@@ -1,6 +1,7 @@
 import { defineComponent, ref, onMounted } from 'vue'
 import { state, nodeById, addNode, setNodeImage, commitStroke } from '../engine/store.js'
 import { loadPattern } from '../engine/paint.js'
+import { t } from '../i18n/index.js'
 
 export default defineComponent({
   name: 'AssetLibrary',
@@ -11,6 +12,61 @@ export default defineComponent({
     const loading = ref(true)
     const fileInput = ref(null)
     const busy = ref(false)
+    const searchQuery = ref('')
+    const searching = ref(false)
+    const searchResults = ref([])
+    const searchError = ref('')
+    const searchWarning = ref('')
+
+    async function searchOnline() {
+      const q = String(searchQuery.value || '').trim()
+      if (!q) return
+      searching.value = true
+      searchError.value = ''
+      searchResults.value = []
+      searchWarning.value = ''
+      try {
+        const res = await fetch('/api/assets/search?q=' + encodeURIComponent(q) + '&limit=12')
+        const data = await res.json()
+        if (!data?.ok) {
+          throw new Error(t('assets.searchUnavailable'))
+        }
+        searchResults.value = data.results || []
+        if (data.fallback) searchWarning.value = t('assets.searchFallback')
+        if (!searchResults.value.length) searchError.value = t('assets.noResults')
+      } catch (e) {
+        searchError.value = String(e.message || e)
+      } finally {
+        searching.value = false
+      }
+    }
+    async function importSearchResult(result) {
+      if (!result?.downloadUrl) return
+      busy.value = true
+      try {
+        const res = await fetch('/api/assets/import-url', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            url: result.downloadUrl,
+            name: result.title || 'Online asset',
+            provider: result.provider,
+            creator: result.creator,
+            license: result.license,
+            licenseUrl: result.licenseUrl,
+            sourceUrl: result.sourceUrl
+          })
+        })
+        const data = await res.json()
+        if (!data.ok) throw new Error(data.error?.message || 'import failed')
+        status.value = t('assets.importedOnline', { name: data.asset.name })
+        await load()
+      } catch (e) {
+        status.value = '✕ ' + (e.message || String(e))
+      } finally {
+        busy.value = false
+      }
+    }
 
     async function load() {
       loading.value = true
@@ -148,6 +204,13 @@ export default defineComponent({
       status,
       loading,
       busy,
+      searchQuery,
+      searching,
+      searchResults,
+      searchError,
+      searchWarning,
+      searchOnline,
+      importSearchResult,
       fileInput,
       openPicker,
       onFile,
@@ -171,6 +234,22 @@ export default defineComponent({
         </div>
         <div class="modal-body">
           <div class="hint">{{ $t('assets.hint') }}</div>
+          <div class="asset-search">
+            <input v-model="searchQuery" :placeholder="$t('assets.searchPlaceholder')" @keydown.enter="searchOnline" />
+            <button class="btn" :disabled="searching" @click="searchOnline">{{ searching ? $t('assets.searching') : $t('assets.searchOnline') }}</button>
+          </div>
+          <div v-if="searchError" class="asset-search-error">{{ searchError }}</div>
+          <div v-if="searchWarning" class="asset-search-error">{{ searchWarning }}</div>
+          <div v-if="searchResults.length" class="asset-search-results">
+            <div v-for="r in searchResults" :key="r.id" class="asset-search-card">
+              <img :src="r.thumbnail" :alt="r.title" loading="lazy" />
+              <div class="asset-search-meta">
+                <div class="asset-search-title" :title="r.title">{{ r.title }}</div>
+                <div class="asset-attribution">{{ r.provider }} · {{ r.creator }} · {{ r.license }}</div>
+                <button class="btn tiny" @click="importSearchResult(r)">{{ $t('assets.importResult') }}</button>
+              </div>
+            </div>
+          </div>
           <div v-if="loading" class="hint">{{ $t('common.loading') }}</div>
           <div v-else-if="!assets.length" class="asset-empty">
             <div>{{ $t('assets.empty') }}</div>
@@ -182,6 +261,7 @@ export default defineComponent({
               <div class="asset-card-body">
                 <div class="asset-name" :title="a.name">{{ a.name }}</div>
                 <div class="dim small">{{ Math.round(a.bytes / 1024) }} KB<span v-if="a.width"> · {{ a.width }}×{{ a.height }}</span></div>
+                <div v-if="a.attribution" class="asset-attribution">{{ a.attribution.provider }} · {{ a.attribution.creator }} · {{ a.attribution.license }}</div>
                 <div class="asset-actions">
                   <button class="btn tiny" @click="useAsTexture(a)">{{ $t('assets.useTexture') }}</button>
                   <button class="btn tiny" @click="useInPaint(a)">{{ $t('assets.usePaint') }}</button>
