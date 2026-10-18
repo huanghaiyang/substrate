@@ -116,6 +116,10 @@ export const EN = {
 
   'ai.export': 'Export conversation (Markdown)',
   'ai.clear': 'Clear conversation',
+  'ai.newConversation': 'New chat',
+  'ai.conversations': 'Conversations',
+  'ai.deleteConversation': 'Delete conversation',
+  'ai.newChat': 'New chat',
   'ai.interrupted': 'This reply was interrupted before it finished.',
   'ai.reasoning': 'Thinking process',
   'ai.thought': 'reasoning',
@@ -455,6 +459,10 @@ export const ZH = {
 
   'ai.export': '导出对话记录（Markdown）',
   'ai.clear': '清空对话',
+  'ai.newConversation': '新对话',
+  'ai.conversations': '对话历史',
+  'ai.deleteConversation': '删除对话',
+  'ai.newChat': '新对话',
   'ai.interrupted': '该回复在完成前被中断。',
   'ai.reasoning': '思考过程',
   'ai.thought': '推理',

@@ -705,7 +705,16 @@ export async function runUiCheck() {
           localStorage.setItem('substrate.aiChat.v1', chatSnapshot)
           try {
             const parsed = JSON.parse(chatSnapshot)
-            for (const msg of parsed.messages || []) aiModule.aiChat.messages.push(msg)
+            if (Array.isArray(parsed.conversations)) {
+              aiModule.aiChat.conversations.splice(0, aiModule.aiChat.conversations.length, ...parsed.conversations)
+              const active = parsed.conversations.find((c) => c.id === parsed.activeId) || parsed.conversations[0]
+              if (active) {
+                aiModule.aiChat.activeConversationId = active.id
+                aiModule.aiChat.messages = active.messages
+              }
+            } else {
+              for (const msg of parsed.messages || []) aiModule.aiChat.messages.push(msg)
+            }
             aiModule.aiChat.modelKey = parsed.modelKey || aiModule.aiChat.modelKey
           } catch (e) { /* ignore */ }
         }
@@ -776,10 +785,12 @@ export async function runUiCheck() {
       await sendPromise
       r.add('ai: reply arrives after panel closed', !aiStore.aiChat.busy && aiStore.aiChat.messages.length >= 2 && aiStore.aiChat.messages.some((m) => m.role === 'assistant' && m.content), 'reply missing')
       const saved = JSON.parse(localStorage.getItem('substrate.aiChat.v1') || 'null')
+      const savedActive = saved?.conversations?.find((c) => c.id === saved.activeId) || saved?.conversations?.[0]
+      const savedMessages = saved?.messages || savedActive?.messages || []
       r.add(
         'ai: full conversation persisted',
-        (saved?.messages || []).length >= 2 && saved.messages.some((m) => (m.trace || []).length),
-        JSON.stringify(saved?.messages?.length)
+        savedMessages.length >= 2 && savedMessages.some((m) => (m.trace || []).length),
+        JSON.stringify(savedMessages.length)
       )
       const md = aiStore.exportChatMarkdown()
       r.add('ai: transcript export', md.includes('User') && md.includes('Tool calls'), 'markdown transcript incomplete')
@@ -793,6 +804,40 @@ export async function runUiCheck() {
         !!reasoningEl && /思考过程|Thinking process/.test(reasoningEl.textContent || '') && /测试思考/.test(reasoningEl.textContent || ''),
         'thinking block missing'
       )
+      // Conversation isolation: a new chat must start empty and switching must not mix transcripts.
+      const convBefore = aiStore.aiChat.activeConversationId
+      const newConvBtn = q('.ai-new-conv')
+      r.add('ai: new conversation button', !!newConvBtn, 'new conversation button missing')
+      if (newConvBtn) {
+        click(newConvBtn)
+        await sleep(250)
+        const convB = aiStore.aiChat.activeConversationId
+        r.add(
+          'ai: new conversation starts isolated',
+          convB !== convBefore && aiStore.aiChat.messages.length === 0,
+          'active=' + convB + ' messages=' + aiStore.aiChat.messages.length
+        )
+        aiStore.aiChat.messages.push({ role: 'user', content: '隔离测试会话B', at: Date.now() })
+        aiStore.switchConversation(convBefore)
+        await sleep(200)
+        const backA = aiStore.aiChat.messages.map((m) => m.content || '')
+        r.add(
+          'ai: switching restores previous transcript',
+          backA.some((x) => /浮动窗口测试/.test(x)) && !backA.some((x) => x === '隔离测试会话B'),
+          JSON.stringify(backA)
+        )
+        aiStore.switchConversation(convB)
+        await sleep(150)
+        r.add(
+          'ai: switched conversation keeps its own context',
+          aiStore.aiChat.messages.some((m) => m.content === '隔离测试会话B'),
+          JSON.stringify(aiStore.aiChat.messages.map((m) => m.content))
+        )
+        const convSelect = q('.ai-conv-select')
+        r.add('ai: conversation selector lists chats', !!convSelect && convSelect.options.length >= 2, String(convSelect?.options?.length))
+        aiStore.deleteConversation(convB)
+        await sleep(100)
+      }
       if (q('.ai-panel')) click(qa('.ai-head .icon-btn').find((b) => b.textContent.trim() === '✕'))
     } finally {
       window.fetch = realFetch
@@ -803,7 +848,16 @@ export async function runUiCheck() {
       if (chatSnapshot !== null) {
         try {
           const parsed = JSON.parse(chatSnapshot)
-          for (const msg of parsed.messages || []) aiStore.aiChat.messages.push(msg)
+          if (Array.isArray(parsed.conversations)) {
+            aiStore.aiChat.conversations.splice(0, aiStore.aiChat.conversations.length, ...parsed.conversations)
+            const active = parsed.conversations.find((c) => c.id === parsed.activeId) || parsed.conversations[0]
+            if (active) {
+              aiStore.aiChat.activeConversationId = active.id
+              aiStore.aiChat.messages = active.messages
+            }
+          } else {
+            for (const msg of parsed.messages || []) aiStore.aiChat.messages.push(msg)
+          }
           aiStore.aiChat.modelKey = parsed.modelKey || aiStore.aiChat.modelKey
         } catch (e) { /* ignore */ }
       }

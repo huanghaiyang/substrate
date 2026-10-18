@@ -1,7 +1,7 @@
 import { defineComponent, ref, computed, onMounted, nextTick, watch } from 'vue'
 import { fetchModels, saveProvider, deleteProvider, testProviderModel, fetchAiRules } from '../engine/llm-client.js'
 import { runMcpSelfCheck } from '../engine/mcp-selfcheck.js'
-import { aiChat, sendChat, clearChat, setChatModel, setShowThinking, exportChatMarkdown } from '../engine/ai-chat.js'
+import { aiChat, sendChat, clearChat, newConversation, switchConversation, deleteConversation, setChatModel, setShowThinking, exportChatMarkdown } from '../engine/ai-chat.js'
 import { t } from '../i18n/index.js'
 
 export default defineComponent({
@@ -20,6 +20,8 @@ export default defineComponent({
     const testing = ref(false)
     const testResult = ref('')
     const chatEl = ref(null)
+    const conversations = computed(() => [...aiChat.conversations].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)))
+    const activeConversationId = computed(() => aiChat.activeConversationId)
     const attachInput = ref(null)
     const attachError = ref('')
     const uploading = ref(false)
@@ -125,6 +127,18 @@ export default defineComponent({
     }
     function removeAttachment(index) {
       aiChat.draftAttachments.splice(index, 1)
+    }
+    function startConversation() {
+      newConversation()
+      nextTick(() => scrollChat())
+    }
+    function selectConversation(event) {
+      switchConversation(event.target.value)
+      nextTick(() => scrollChat())
+    }
+    function removeConversation() {
+      deleteConversation(aiChat.activeConversationId)
+      nextTick(() => scrollChat())
     }
     async function scrollChat() {
       await nextTick()
@@ -242,6 +256,11 @@ export default defineComponent({
       attachError,
       uploading,
       pendingAttachments,
+      conversations,
+      activeConversationId,
+      startConversation,
+      selectConversation,
+      removeConversation,
       openAttach,
       onAttachFile,
       onDrop,
@@ -275,6 +294,14 @@ export default defineComponent({
         <button class="icon-btn" :title="$t('ai.selfcheck')" @click="runCheck" :disabled="checking">{{ checking ? '…' : '◎' }}</button>
         <button class="icon-btn" :title="$t('ai.settings')" @click="showSettings = !showSettings">⚙</button>
         <button class="icon-btn" @click="close">✕</button>
+      </div>
+
+      <div class="ai-conv-bar">
+        <button class="btn tiny ai-new-conv" :title="$t('ai.newConversation')" @click="startConversation">＋ {{ $t('ai.newConversation') }}</button>
+        <select class="top-select ai-conv-select" :value="activeConversationId" @change="selectConversation" :title="$t('ai.conversations')">
+          <option v-for="c in conversations" :key="c.id" :value="c.id">{{ c.title }}</option>
+        </select>
+        <button class="icon-btn" :title="$t('ai.deleteConversation')" :disabled="conversations.length <= 1" @click="removeConversation">🗑</button>
       </div>
 
       <div v-if="showSettings" class="ai-settings">

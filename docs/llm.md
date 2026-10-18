@@ -63,6 +63,18 @@ Environment override (recommended for shared machines):
 DEEPSEEK_API_KEY=sk-... npm start
 ```
 
+## Conversations
+
+- The panel keeps a **conversation list** (dropdown) and a **＋ New chat** button. Each entry has its
+  own transcript, title (auto-derived from the first user message), timestamps and attachments.
+- Only the **active conversation's messages** are sent to the model. Starting a new chat empties the
+  active transcript and clears the draft attachments, so prior context cannot leak into the new chat;
+  switching conversations swaps the entire context.
+- An in-flight reply is written back to the conversation it was started in, even if the user switches
+  chats or opens a new one while waiting.
+- Up to 20 conversations are persisted in `substrate.aiChat.v1` (v2 format; old v1 transcripts are
+  migrated into the first conversation automatically). Per-conversation history is capped at 300 messages.
+
 ## Conversation persistence, floating window and rules
 
 - **Full history is saved** in the browser (`substrate.aiChat.v1`): every user/assistant message,

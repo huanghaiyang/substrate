@@ -46,6 +46,10 @@ paint on them by hand, preview the result as a lit 3D material, and export an in
   `vision:{requested,sent,fallback}` diagnostic from the server).
   Tools carry copy-pasteable examples and return actionable hints (`details.example`/`details.availableNodes`)
   when arguments are wrong.
+- **Isolated conversations** — a conversation list plus **＋ New chat**; each chat has its own transcript and
+  only the active chat's messages are sent as model context, so old chats never leak into new ones. Up to 20
+  conversations persist locally (v1 transcripts migrate automatically), and an in-flight reply still lands
+  in the conversation where it started after switching.
 - **Persistent AI conversation** — full history and tool traces are saved and restored after reloads, can be
   exported as Markdown; closing the dialog **does not cancel a reply**, and an in-flight conversation appears in
   a translucent floating window (auto-scroll, expandable). Enforced AI rules forbid touching source code,
@@ -512,7 +516,7 @@ wrapped-edge seam ratios, manifest structure, README sections, and every zip ent
 Latest run after the audit fixes: **4/4 demo packages passed** (all PNGs CRC-valid, correct colour spaces,
 seam ratios well below 1.0 with the percentile metric, clean zip entries each).
 
-### 3. Full application audit (2,227 checks + 143 opt-in UI checks)
+### 3. Full application audit (2,227 checks + 148 opt-in UI checks)
 
 `src/engine/audit.js` is a browser-side test harness that exercises the whole product, not just exports:
 
@@ -524,18 +528,18 @@ seam ratios well below 1.0 with the percentile metric, clean zip entries each).
 | **actions** | add every node type, delete/duplicate/undo/redo, cycle rejection, output uniqueness, parameter coalescing, move/rename, resolution & proxy switching, loading all demos, project save/load/delete (including non-ASCII names), image input round-trip, paint stroke/undo/clear, all five export presets, DirectX normal flip, 16-bit height and alpha plans |
 | **dom** | real UI interactions: palette search (EN+ZH), palette add, graph context menu, node context menu, node drag + undo, marquee selection, Delete/Undo/Redo keys, help/projects/export dialogs, demo dropdown, map zoom, preview shape & sliders, Paint Studio drawing + undo, language switching, New button, console-error watch. Includes live-preview regression tests: the 3D material and the 2D map panel must refresh on demo switches and on parameter edits |
 | **i18n** | EN/ZH key parity, node/parameter/option dictionary coverage, runtime language switching, raw-key/missing-key scans |
-| **ui** *(opt-in)* | 143 deep toolbar/right-panel/paint/AI checks: project-name edit, New, all four demo switches, save/open round-trip, undo/redo buttons, resolution & proxy selects, help dialog, language switch, export dialog defaults/height toggle/real export; preview shapes, tiling & displacement sliders, pause/reset, badge, 8 map cards + normal-convention note + zoom, inspector widgets (slider↔number, bool, gradient add/remove stops), Paint Studio open/close, brush library (16 presets in two groups including nature motifs, unique thumbnails, per-brush rendering coverage, stroke records the preset, brush persistence, eraser, flow/spacing sliders), cubic stroke smoothing, two-point straightness, pen-taper end shrink (geometry + painted coverage + UI toggle), paint performance guards and live thumbnail; **AI panel** (models listed, model switching, no key material in the DOM/API, MCP self-check, **conversation persistence**, **reply keeps running after the panel closes**, **translucent floating window + auto-scroll + expand**, **AI rules**, **transcript export**), **material library** (import, list, pattern fill, online-search UI) and **custom brush JSON import** |
+| **ui** *(opt-in)* | 148 deep toolbar/right-panel/paint/AI checks: project-name edit, New, all four demo switches, save/open round-trip, undo/redo buttons, resolution & proxy selects, help dialog, language switch, export dialog defaults/height toggle/real export; preview shapes, tiling & displacement sliders, pause/reset, badge, 8 map cards + normal-convention note + zoom, inspector widgets (slider↔number, bool, gradient add/remove stops), Paint Studio open/close, brush library (16 presets in two groups including nature motifs, unique thumbnails, per-brush rendering coverage, stroke records the preset, brush persistence, eraser, flow/spacing sliders), cubic stroke smoothing, two-point straightness, pen-taper end shrink (geometry + painted coverage + UI toggle), paint performance guards and live thumbnail; **AI panel** (models listed, model switching, no key material in the DOM/API, MCP self-check, **conversation persistence**, **new chat + isolated conversation switching**, **reply keeps running after the panel closes**, **translucent floating window + auto-scroll + expand**, **AI rules**, **transcript export**), **material library** (import, list, pattern fill, online-search UI) and **custom brush JSON import** |
 
 Run it either from the in-app help dialog (**Run self-test**), with the URL, or from the command line:
 
 ```bash
 node scripts/cdp.mjs audit all        # or: npm run audit   (2,227 checks, ~40 s)
-npm run audit:ui                      # deep toolbar/right-panel/paint/AI pass (143 checks)
+npm run audit:ui                      # deep toolbar/right-panel/paint/AI pass (148 checks)
 npm run audit:quick                   # schema only
 ```
 
 It prints a per-section PASS/FAIL summary and returns a non-zero exit code on failure. Latest run: **2,227 checks, 0 failures**
-(schema 1,278 · render 628 · values 46 · actions 198 · dom 56 · i18n 21), plus the opt-in UI pass (143 checks) and the MCP self-check (30 checks). The same run is available as
+(schema 1,278 · render 628 · values 46 · actions 198 · dom 56 · i18n 21), plus the opt-in UI pass (148 checks) and the MCP self-check (30 checks). The same run is available as
 `?audit=1` (all sections), `?audit=1&auditsection=render` or `?audit=1&auditsection=ui`, with the report available as `window.__AUDIT__`
 and POSTed to `/api/debug/report` for CI.
 

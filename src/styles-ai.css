@@ -663,3 +663,24 @@
   object-fit: cover;
   border-radius: 3px;
 }
+
+.ai-conv-bar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg1);
+}
+.ai-conv-bar .ai-new-conv {
+  flex: 0 0 auto;
+}
+.ai-conv-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: none;
+  font-size: 10px;
+}
+.ai-conv-bar .icon-btn {
+  flex: 0 0 auto;
+}
