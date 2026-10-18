@@ -360,6 +360,112 @@ export function setNodePosition(id, x, y) {
   node.x = x
   node.y = y
 }
+// -------------------------------------------------------------------- auto layout
+const LAYOUT_WIDTH = 200
+const LAYOUT_HEADER = 28
+const LAYOUT_GAP_X = 84
+const LAYOUT_GAP_Y = 46
+const LAYOUT_MARGIN_X = 60
+const LAYOUT_MARGIN_Y = 80
+
+function layoutHeightOf(node) {
+  const def = defOf(node)
+  const inputs = def?.inputs?.length || 0
+  return LAYOUT_HEADER + Math.max(94, 14 + inputs * 16 + 10)
+}
+
+/**
+ * One-click node-graph tidy: deterministic left-to-right layered layout.
+ * 1. depth = longest path from any source (sink ends up in the rightmost layer)
+ * 2. barycentre sweeps over each layer reduce edge crossings
+ * 3. per-layer stacking with real node heights (no overlaps), vertically centred
+ * Positions are written directly and one undo step is recorded.
+ */
+export function autoLayout() {
+  const nodes = state.graph.nodes || []
+  if (!nodes.length) return { moved: 0, layers: 0 }
+  pushHistory(t('history.autoLayout'))
+  const byId = new Map(nodes.map((n) => [n.id, n]))
+  const preds = new Map(nodes.map((n) => [n.id, []]))
+  const succs = new Map(nodes.map((n) => [n.id, []]))
+  for (const c of state.graph.connections || []) {
+    if (!byId.has(c.from?.node) || !byId.has(c.to?.node)) continue
+    succs.get(c.from.node).push(c.to.node)
+    preds.get(c.to.node).push(c.from.node)
+  }
+
+  // longest-path depth via Kahn topological order
+  const indeg = new Map(nodes.map((n) => [n.id, preds.get(n.id).length]))
+  const depth = new Map(nodes.map((n) => [n.id, 0]))
+  const queue = nodes.filter((n) => indeg.get(n.id) === 0).map((n) => n.id)
+  let head = 0
+  while (head < queue.length) {
+    const id = queue[head++]
+    for (const next of succs.get(id)) {
+      depth.set(next, Math.max(depth.get(next), depth.get(id) + 1))
+      indeg.set(next, indeg.get(next) - 1)
+      if (indeg.get(next) === 0) queue.push(next)
+    }
+  }
+  // cycles should be impossible, but keep any leftovers in a valid layer rather than dropping them
+  for (const n of nodes) {
+    if (indeg.get(n.id) > 0) {
+      const pd = preds.get(n.id).map((id) => depth.get(id) ?? 0)
+      depth.set(n.id, pd.length ? Math.max(...pd) + 1 : 0)
+    }
+  }
+
+  const maxDepth = Math.max(...depth.values())
+  const layers = Array.from({ length: maxDepth + 1 }, () => [])
+  for (const n of nodes) layers[depth.get(n.id)].push(n)
+  // stable seed order: current top-to-bottom position
+  for (const layer of layers) layer.sort((a, b) => (a.y - b.y) || (a.x - b.x) || a.id.localeCompare(b.id))
+
+  const rank = new Map()
+  const refreshRanks = () => {
+    for (const layer of layers) layer.forEach((n, i) => rank.set(n.id, i))
+  }
+  refreshRanks()
+  for (let iter = 0; iter < 4; iter++) {
+    // forward sweep: order by predecessors
+    for (let d = 1; d <= maxDepth; d++) {
+      const layer = layers[d]
+      const score = new Map()
+      for (const n of layer) {
+        const ps = preds.get(n.id).map((id) => rank.get(id)).filter((v) => Number.isFinite(v))
+        score.set(n.id, ps.length ? ps.reduce((a, b) => a + b, 0) / ps.length : rank.get(n.id))
+      }
+      layer.sort((a, b) => (score.get(a.id) - score.get(b.id)) || a.id.localeCompare(b.id))
+      refreshRanks()
+    }
+    // backward sweep: order by successors
+    for (let d = maxDepth - 1; d >= 0; d--) {
+      const layer = layers[d]
+      const score = new Map()
+      for (const n of layer) {
+        const ss = succs.get(n.id).map((id) => rank.get(id)).filter((v) => Number.isFinite(v))
+        score.set(n.id, ss.length ? ss.reduce((a, b) => a + b, 0) / ss.length : rank.get(n.id))
+      }
+      layer.sort((a, b) => (score.get(a.id) - score.get(b.id)) || a.id.localeCompare(b.id))
+      refreshRanks()
+    }
+  }
+
+  const layerHeights = layers.map((layer) => layer.reduce((sum, n) => sum + layoutHeightOf(n), 0) + LAYOUT_GAP_Y * Math.max(0, layer.length - 1))
+  const tallest = Math.max(...layerHeights, 0)
+  for (let d = 0; d < layers.length; d++) {
+    const layer = layers[d]
+    let y = LAYOUT_MARGIN_Y + Math.max(0, (tallest - layerHeights[d]) / 2)
+    for (const n of layer) {
+      n.x = Math.round(LAYOUT_MARGIN_X + d * (LAYOUT_WIDTH + LAYOUT_GAP_X))
+      n.y = Math.round(y)
+      y += layoutHeightOf(n) + LAYOUT_GAP_Y
+    }
+  }
+  schedulePersist()
+  return { moved: nodes.length, layers: layers.length, width: LAYOUT_WIDTH, gapX: LAYOUT_GAP_X, gapY: LAYOUT_GAP_Y }
+}
+
 export function renameNode(id, title) {
   const node = nodeById(id)
   if (!node) return

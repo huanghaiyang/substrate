@@ -18,7 +18,7 @@
 - **实时 PBR 预览**——Three.js `MeshStandardMaterial`，程序化 IBL、ACES 色调映射、五种预览网格、平铺、置换和自动旋转。
 - **2D 通道检查**——全部 8 个 PBR 通道，带色彩空间标签，一键全尺寸查看。
 - **行业标准导出**——五种预设（glTF/three.js、Unreal、Unity HDRP、V-Ray/Arnold/通用、Substance Painter），正确处理 sRGB/线性空间、ORM / Mask Map 打包、OpenGL↔DirectX 法线翻转、16-bit 高度、自适应滤波 PNG 编码，并由 Node 服务端生成 `manifest.json` + `README.md` + zip 包。
-- **MCP / Agent 集成**——标准化外部 MCP 网关**随应用启动**（stdio + HTTP JSON-RPC，31 个工具），内置 **MCP 自检**；同时提供页面内 WebMCP 工具。
+- **MCP / Agent 集成**——标准化外部 MCP 网关**随应用启动**（stdio + HTTP JSON-RPC，32 个工具），内置 **MCP 自检**；同时提供页面内 WebMCP 工具。
 - **AI 助手**——顶栏 **✦** 面板，默认接入 DeepSeek，也可切换任意 OpenAI 兼容提供商。助手运行在**服务端**，通过 MCP 工具操作应用（编辑节点图、绘制、求值、导出）。API Key 永不进入浏览器；模型/提供商可在面板中添加和切换。
   聊天支持附件：图片（PNG/JPEG/WebP）会加入素材库，**并发送给支持视觉的模型做真实图像识别**（DeepSeek 端点支持视觉；不支持视觉的提供商会退化为元信息），
   也可通过 `substrate_list_assets`/`substrate_apply_asset` 使用；文本文件随消息发送。工具自带可直接复制的示例，参数错误会返回 `details.example`/`details.availableNodes` 提示。
@@ -88,6 +88,7 @@ PORT=3001 npm start  # 自定义端口
 - **选择 / 移动**——单击、Shift 单击或空白画布框选。拖动节点重新布局。
 - **删除**——`Del` 删除选中节点或连线。右键节点可复制/断开/删除。
 - **撤销 / 重做**——`Ctrl/Cmd+Z`、`Ctrl/Cmd+Shift+Z`（工具栏也可）。
+- **一键整理**——点击工具栏 **⌗** 自动整理节点图：分层从左到右、重心法减少交叉、按真实节点高度排布且不重叠；整个操作是一步撤销，完成后自动适配视图。Agent 也可调用 `substrate_auto_layout`。
 
 ### 编辑参数
 
@@ -264,7 +265,7 @@ MCP client ──stdio──▶ mcp/server.mjs ──HTTP──▶ server/index.
 ```
 
 - **传输方式**——stdio（`node mcp/server.mjs`，配置示例在 [`mcp/`](mcp/)）、`POST /mcp` 的 HTTP JSON-RPC，以及 `POST /api/mcp/call` 的简易 JSON 端点。发现：`GET /api/mcp/tools`。
-- **31 个工具**——`substrate_get_state`、`substrate_get_graph`、`substrate_add_node`、`substrate_set_param`、`substrate_connect`、`substrate_paint_stroke`、`substrate_get_preview`（2D 通道 / 3D 材质球 PNG）、`substrate_search_open_assets`、`substrate_import_asset_url`、`substrate_list_assets`、`substrate_apply_asset`、`substrate_export`、`substrate_run_audit`、项目保存/加载……完整列表与调用规范见 [docs/zh/mcp.md](docs/zh/mcp.md)。
+- **32 个工具**——`substrate_get_state`、`substrate_get_graph`、`substrate_add_node`、`substrate_set_param`、`substrate_connect`、`substrate_paint_stroke`、`substrate_get_preview`（2D 通道 / 3D 材质球 PNG）、`substrate_search_open_assets`、`substrate_import_asset_url`、`substrate_list_assets`、`substrate_apply_asset`、`substrate_export`、`substrate_run_audit`、项目保存/加载……完整列表与调用规范见 [docs/zh/mcp.md](docs/zh/mcp.md)。
 - **标准化契约**——稳定的 `substrate_<verb>_<noun>` 命名、JSON-Schema 参数校验（含嵌套的绘制点）、工具目录内置示例、可操作的错误提示：`INVALID_ARGUMENT` 返回 `details.example` 与输入 schema，`NOT_FOUND` 返回 `details.availableNodes`；包含 `readOnlyHint`/`destructiveHint`/`idempotentHint` 注解、逐工具超时、`apiVersion`，以及统一信封：`{ ok, apiVersion, tool, data, meta }` 或 `{ ok:false, error:{ code, message } }`。
 - **要求**——工作室必须运行且浏览器标签页打开（图在那里由 GPU 求值）。设置 `MCP_TOKEN` 可要求外部端点携带 Bearer Token。
 
@@ -281,13 +282,13 @@ MCP client ──stdio──▶ mcp/server.mjs ──HTTP──▶ server/index.
 ```
 
 完整参考、curl 示例、认证、自检与限制：[docs/zh/mcp.md](docs/zh/mcp.md)。在线素材：[docs/zh/asset-search.md](docs/zh/asset-search.md)。
-用 `npm run test:mcp` 测试（需要应用标签页打开；75 项接口检查，覆盖 LLM Key 脱敏、AI 规则、联网搜索防护和素材库 API）。
+用 `npm run test:mcp` 测试（需要应用标签页打开；76 项接口检查，覆盖 LLM Key 脱敏、AI 规则、联网搜索防护和素材库 API）。
 
 ## AI 助手
 
 从顶栏打开 **✦ AI 助手** 面板。默认连接 **DeepSeek Chat**（配置的 Key 只存在于 Node 服务端），可在 ⚙ 设置中切换到 **DeepSeek Reasoner** 或任意额外 OpenAI 兼容提供商/模型。
 
-- 用自然语言对话；助手调用与外部 Agent 相同的 31 个 MCP 工具，并在回复下方显示每次工具调用（✓/✕）。
+- 用自然语言对话；助手调用与外部 Agent 相同的 32 个 MCP 工具，并在回复下方显示每次工具调用（✓/✕）。
 - 从顶部下拉切换模型；添加提供商需填写显示名、Base URL、模型 ID 和 API Key。Key 只写服务端，永不返回浏览器或显示。
 - **完整对话历史持久化**，刷新后恢复；**⤓** 导出 Markdown。回复进行中关闭面板会保持请求继续运行，并在右下角半透明浮动窗口显示实时记录（自动滚动，**⤢** 展开回完整面板）。
 - **AI 规则**（服务端强制执行）：助手只能通过工具操作本工作室，不能读取/修改源码、文件、环境变量、API Key 或系统信息。规则在 ⚙ 设置中只读展示，并由 `GET /api/llm/rules` 提供。
@@ -379,7 +380,7 @@ node scripts/verify-export.mjs exports/<package>
 
 审计修复后的最近一次运行：**4/4 示例包通过**（所有 PNG CRC 合法、色彩空间正确、百分位接缝比远低于 1.0、zip 条目干净）。
 
-### 3. 完整应用审计（2,227 项 + 139 项可选 UI）
+### 3. 完整应用审计（2,227 项 + 143 项可选 UI）
 
 `src/engine/audit.js` 是浏览器端测试框架，覆盖整个产品而不只是导出：
 
@@ -391,17 +392,17 @@ node scripts/verify-export.mjs exports/<package>
 | **actions** | 添加所有节点类型、删除/复制/撤销/重做、环路拒绝、输出唯一性、参数合并、移动/重命名、分辨率与代理切换、加载全部示例、项目保存/加载/删除（含非 ASCII 名称）、图像输入往返、绘制笔触/撤销/清空、全部五种导出预设、DirectX 法线翻转、16-bit 高度与 alpha 方案 |
 | **dom** | 真实 UI 交互：节点库搜索（EN+ZH）、添加、图右键菜单、节点右键菜单、节点拖动 + 撤销、框选、Delete/Undo/Redo 键、帮助/项目/导出对话框、示例下拉、贴图缩放、预览形状与滑块、绘制工作室绘制 + 撤销、语言切换、新建按钮、控制台错误监听。包含实时预览回归测试：切换示例和编辑参数后 3D 材质与 2D 贴图面板必须刷新 |
 | **i18n** | EN/ZH key 一致性、节点/参数/选项字典覆盖、运行时语言切换、原始 key/缺失 key 扫描 |
-| **ui** *(可选)* | 139 项工具栏/右面板/绘制/AI 深度检查：项目名编辑、新建、全部四个示例切换、保存/打开往返、撤销/重做按钮、分辨率与代理下拉、帮助对话框、语言切换、导出默认值/高度开关/真实导出；预览形状、平铺与置换滑块、暂停/重置、badge、8 个贴图卡片 + 法线约定说明 + 缩放、属性控件（滑块↔数字、布尔、渐变增删停靠点）、绘制工作室开关、笔刷库（两组 16 个预设含自然图案、缩略图唯一性、逐笔刷渲染覆盖、笔触记录预设、笔刷持久化、橡皮擦、flow/spacing 滑块）、三次平滑、两点直线性、笔锋两端收缩（几何 + 绘制覆盖 + UI 开关）、绘制性能守卫与实况缩略图；**AI 面板**（模型列表、模型切换、DOM/API 中无 Key 材料、MCP 自检、**对话持久化**、**关闭面板后回复继续**、**半透明浮动窗 + 自动滚动 + 展开**、**AI 规则**、**对话导出**）、**素材库**（导入、列表、图案填充、联网搜索 UI）和**自定义笔刷 JSON 导入** |
+| **ui** *(可选)* | 143 项工具栏/右面板/绘制/AI 深度检查：项目名编辑、新建、全部四个示例切换、保存/打开往返、撤销/重做按钮、分辨率与代理下拉、帮助对话框、语言切换、导出默认值/高度开关/真实导出；预览形状、平铺与置换滑块、暂停/重置、badge、8 个贴图卡片 + 法线约定说明 + 缩放、属性控件（滑块↔数字、布尔、渐变增删停靠点）、绘制工作室开关、笔刷库（两组 16 个预设含自然图案、缩略图唯一性、逐笔刷渲染覆盖、笔触记录预设、笔刷持久化、橡皮擦、flow/spacing 滑块）、三次平滑、两点直线性、笔锋两端收缩（几何 + 绘制覆盖 + UI 开关）、绘制性能守卫与实况缩略图；**AI 面板**（模型列表、模型切换、DOM/API 中无 Key 材料、MCP 自检、**对话持久化**、**关闭面板后回复继续**、**半透明浮动窗 + 自动滚动 + 展开**、**AI 规则**、**对话导出**）、**素材库**（导入、列表、图案填充、联网搜索 UI）和**自定义笔刷 JSON 导入** |
 
 可从应用内帮助对话框（**运行自检**）、URL 或命令行运行：
 
 ```bash
 node scripts/cdp.mjs audit all        # 或：npm run audit   （2,227 项，约 40 秒）
-npm run audit:ui                      # 工具栏/右面板/绘制/AI 深度检查（139 项）
+npm run audit:ui                      # 工具栏/右面板/绘制/AI 深度检查（143 项）
 npm run audit:quick                   # 仅 schema
 ```
 
-它输出逐节 PASS/FAIL 汇总，失败时返回非零退出码。最近一次运行：**2,227 项，0 失败**（schema 1,278 · render 628 · values 46 · actions 198 · dom 56 · i18n 21），外加 139 项可选 UI 检查和 30 项 MCP 自检。也可通过 `?audit=1`（全部）、`?audit=1&auditsection=render` 或 `?audit=1&auditsection=ui` 运行，报告可在 `window.__AUDIT__` 获取并 POST 到 `/api/debug/report` 供 CI 使用。
+它输出逐节 PASS/FAIL 汇总，失败时返回非零退出码。最近一次运行：**2,227 项，0 失败**（schema 1,278 · render 628 · values 46 · actions 198 · dom 56 · i18n 21），外加 143 项可选 UI 检查和 30 项 MCP 自检。也可通过 `?audit=1`（全部）、`?audit=1&auditsection=render` 或 `?audit=1&auditsection=ui` 运行，报告可在 `window.__AUDIT__` 获取并 POST 到 `/api/debug/report` 供 CI 使用。
 
 ### 4. MCP 契约测试
 

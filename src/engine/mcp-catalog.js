@@ -331,6 +331,15 @@ export const TOOLS = [
     timeoutMs: 15000
   },
   {
+    name: 'substrate_auto_layout',
+    title: 'Auto-Arrange Node Graph',
+    description:
+      'One-click tidy of the node graph: layered left-to-right layout with barycentre crossing reduction, real node heights and one undo step. Use it after adding/rewiring nodes so the graph is readable.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: write,
+    timeoutMs: 30000
+  },
+  {
     name: 'substrate_set_param',
     title: 'Set Node Parameter',
     description:
@@ -510,6 +519,7 @@ export const TOOL_EXAMPLES = {
   substrate_connect: [
     { fromNode: 'perlin-xxxxx', fromPort: 'out', toNode: 'material_output-xxxxx', toPort: 'height' }
   ],
+  substrate_auto_layout: [{}],
   substrate_set_param: [
     { nodeId: 'perlin-xxxxx', key: 'scale', value: 12 },
     { nodeId: 'gradient_map-xxxxx', key: 'gradient', value: [{ p: 0, c: '#1d2a12' }, { p: 1, c: '#9aa84f' }] }

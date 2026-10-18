@@ -184,6 +184,31 @@ export async function runUiCheck() {
     r.add('toolbar: redo button', state.graph.nodes.length === withNode, `${state.graph.nodes.length} vs ${withNode}`)
     r.add('toolbar: undo disabled state sane', qa('.topbar .icon-btn').filter((b) => ['↺', '↻'].includes(b.textContent.trim())).length === 2)
 
+    // auto layout button (one-click graph tidy)
+    const layoutBtn = qa('.topbar .icon-btn').find((b) => /自动整理|Auto-arrange/.test(b.getAttribute('title') || ''))
+    r.add('toolbar: auto layout button', !!layoutBtn, 'layout button missing')
+    if (layoutBtn) {
+      loadDemo('weathered-steel')
+      await sleep(500)
+      const beforePos = state.graph.nodes.map((n) => ({ id: n.id, x: n.x, y: n.y }))
+      click(layoutBtn)
+      await sleep(500)
+      const afterPos = state.graph.nodes.map((n) => ({ id: n.id, x: n.x, y: n.y }))
+      const moved = afterPos.filter((n, i) => n.x !== beforePos[i].x || n.y !== beforePos[i].y).length
+      r.add('toolbar: auto layout moves nodes', moved > 0, String(moved))
+      let overlapCount = 0
+      for (let i = 0; i < afterPos.length; i++) {
+        for (let j = i + 1; j < afterPos.length; j++) {
+          if (afterPos[i].x === afterPos[j].x && Math.abs(afterPos[i].y - afterPos[j].y) < 140) overlapCount++
+        }
+      }
+      r.add('toolbar: auto layout has no overlaps', overlapCount === 0, String(overlapCount))
+      click(qa('.topbar .icon-btn').find((b) => b.textContent.trim() === '↺'))
+      await sleep(400)
+      const restored = state.graph.nodes.every((n) => beforePos.find((b) => b.id === n.id && b.x === n.x && b.y === n.y))
+      r.add('toolbar: auto layout undo restores positions', restored)
+    }
+
     // resolution + proxy selects
     loadDemo('weathered-steel')
     await sleep(600)

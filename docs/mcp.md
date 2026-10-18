@@ -121,11 +121,14 @@ input schema; missing nodes return `NOT_FOUND` with `details.availableNodes` (id
 // get_thumbnail: nodeId is optional (omit for the output node); ids come from get_graph
 { "nodeId": "material_output-xxxxx" }
 
+// auto layout: no arguments — tidy the whole graph in one undoable step
+{}
+
 // connect: toPort is the target input name
 { "fromNode": "perlin-xxxxx", "fromPort": "out", "toNode": "material_output-xxxxx", "toPort": "height" }
 ```
 
-## Tools (31)
+## Tools (32)
 
 | Tool | Kind | Purpose |
 | --- | --- | --- |
@@ -148,6 +151,7 @@ input schema; missing nodes return `NOT_FOUND` with `details.availableNodes` (id
 | `substrate_delete_node` | destructive | delete a node and its links |
 | `substrate_duplicate_node` | write | duplicate a node |
 | `substrate_move_node` | write | set node position |
+| `substrate_auto_layout` | write | one-click layered graph layout (crossing reduction, real node heights, undoable) |
 | `substrate_connect` | write | connect output → input port |
 | `substrate_disconnect` | destructive | remove a link by id |
 | `substrate_set_param` | write | set any node parameter (numbers, colours, vectors, gradients) |

@@ -19,6 +19,7 @@ import {
   addConnection,
   removeConnection,
   setNodeImage,
+  autoLayout,
   commitStroke,
   clearPaint,
   requestEval,
@@ -387,6 +388,12 @@ const handlers = {
     removeConnection(args.connectionId)
     await evaluate()
     return { removed: args.connectionId, graph: { nodes: state.graph.nodes.length, connections: state.graph.connections.length } }
+  },
+
+  async substrate_auto_layout() {
+    const result = autoLayout()
+    await new Promise((r) => setTimeout(r, 0))
+    return { ...result, nodes: state.graph.nodes.length, outputId: outputNode()?.id || null }
   },
 
   async substrate_set_param(args) {

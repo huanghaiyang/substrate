@@ -299,7 +299,7 @@ async function main() {
   // Calling conventions / attachment asset tools
   const catalogNow = await httpJSON('/api/mcp/tools')
   const toolsNow = catalogNow.body?.tools || []
-  check('mcp: 31 tools catalogued', toolsNow.length === 31, String(toolsNow.length))
+  check('mcp: 32 tools catalogued', toolsNow.length === 32, String(toolsNow.length))
   check(
     'mcp: tool examples provided',
     toolsNow.find((t) => t.name === 'substrate_paint_stroke')?.examples?.length > 0 &&
@@ -329,6 +329,8 @@ async function main() {
       Array.isArray(badThumb.body.error?.details?.availableNodes),
     JSON.stringify(badThumb.body)
   )
+  const layout = await httpJSON('/api/mcp/call', { method: 'POST', body: JSON.stringify({ name: 'substrate_auto_layout', arguments: {} }) })
+  check('mcp: auto layout tool', layout.body?.ok === true && layout.body.data?.moved > 0 && layout.body.data?.layers > 0, JSON.stringify(layout.body?.data || layout.body?.error))
   const assetsNow = await httpJSON('/api/mcp/call', { method: 'POST', body: JSON.stringify({ name: 'substrate_list_assets', arguments: {} }) })
   check('mcp: list assets tool', assetsNow.body?.ok === true && Array.isArray(assetsNow.body.data?.assets))
 

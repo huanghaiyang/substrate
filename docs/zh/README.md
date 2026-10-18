@@ -9,7 +9,7 @@
 | 文档 | 内容 |
 | --- | --- |
 | [README.zh-CN.md](../../README.zh-CN.md) | 完整中文项目说明：功能、使用、架构、行业标准、导出、性能、测试与限制 |
-| [mcp.md](mcp.md) | MCP 集成：传输方式、标准化契约、31 个工具、认证、Agent 配置示例 |
+| [mcp.md](mcp.md) | MCP 集成：传输方式、标准化契约、32 个工具、认证、Agent 配置示例 |
 | [llm.md](llm.md) | AI 助手：架构、Key 安全、对话持久化/浮动窗、AI 规则、模型切换、接口与测试 |
 | [asset-search.md](asset-search.md) | 联网素材搜索：提供商与 Key、声明式兜底、署名要求、SSRF 安全与 UI |
 | [brushes.md](brushes.md) | 自定义笔刷 JSON 导入格式与全部字段说明 |

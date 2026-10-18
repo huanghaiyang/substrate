@@ -4,7 +4,7 @@
 
 The studio ships with a built-in AI assistant entry in the top bar (**✦**). It can inspect and
 modify the node graph, paint strokes, evaluate, capture previews and export packages by calling
-the same 31 MCP tools that external agents use. DeepSeek is configured by default; additional
+the same 32 MCP tools that external agents use. DeepSeek is configured by default; additional
 OpenAI-compatible providers and models can be added and switched from the panel.
 
 ## Architecture

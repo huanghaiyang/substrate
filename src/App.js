@@ -25,6 +25,7 @@ import {
   setProxy,
   deleteSelected,
   duplicateSelected,
+  autoLayout,
   nodeById,
   defOf
 } from './engine/store.js'
@@ -159,6 +160,12 @@ export default defineComponent({
       }
     }
 
+    function doAutoLayout() {
+      const result = autoLayout()
+      nextTick(() => graphRef.value?.fit())
+      notify(t('toast.layoutDone', { n: result.moved }))
+    }
+
     function onResolution(e) {
       setResolution(Number(e.target.value))
     }
@@ -277,6 +284,7 @@ export default defineComponent({
       openPaint,
       closePaint,
       runSelfTest,
+      doAutoLayout,
       onResolution,
       onProxy,
       undo,
@@ -310,6 +318,7 @@ export default defineComponent({
         <div class="divider"></div>
         <button class="icon-btn" :title="$t('top.undo')" @click="undo">↺</button>
         <button class="icon-btn" :title="$t('top.redo')" @click="redo">↻</button>
+        <button class="icon-btn" :title="$t('top.autoLayout')" @click="doAutoLayout">⌗</button>
         <div class="divider"></div>
         <select class="top-select" :value="state.resolution" @change="onResolution" :title="$t('top.resolution')">
           <option v-for="r in RESOLUTIONS" :key="r" :value="r">{{ r }}²</option>

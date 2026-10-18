@@ -111,11 +111,14 @@ curl -s http://127.0.0.1:3000/api/mcp/call \
 // get_thumbnail：nodeId 可省略（默认输出节点）；id 从 get_graph 获取
 { "nodeId": "material_output-xxxxx" }
 
+// 自动整理：无需参数，一键整理整个节点图（可撤销）
+{}
+
 // connect：toPort 是目标输入端口名
 { "fromNode": "perlin-xxxxx", "fromPort": "out", "toNode": "material_output-xxxxx", "toPort": "height" }
 ```
 
-## 工具（31 个）
+## 工具（32 个）
 
 | 工具 | 类型 | 作用 |
 | --- | --- | --- |
@@ -138,6 +141,7 @@ curl -s http://127.0.0.1:3000/api/mcp/call \
 | `substrate_delete_node` | destructive | 删除节点及其连线 |
 | `substrate_duplicate_node` | write | 复制节点 |
 | `substrate_move_node` | write | 设置节点位置 |
+| `substrate_auto_layout` | write | 一键分层整理节点图（减少交叉、按真实节点高度排布、可撤销） |
 | `substrate_connect` | write | 连接输出 → 输入端口 |
 | `substrate_disconnect` | destructive | 按 id 删除连线 |
 | `substrate_set_param` | write | 设置任意节点参数（数值、颜色、向量、渐变） |
