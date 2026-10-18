@@ -517,3 +517,13 @@
   max-height: 130px;
   overflow-y: auto;
 }
+
+.ai-step-limit {
+  margin-top: 5px;
+  padding: 4px 7px;
+  border-radius: 5px;
+  font-size: 10px;
+  color: #e0b06a;
+  border: 1px solid rgba(224, 176, 106, 0.35);
+  background: rgba(224, 176, 106, 0.08);
+}

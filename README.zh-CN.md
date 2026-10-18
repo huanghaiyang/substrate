@@ -290,6 +290,7 @@ MCP client ──stdio──▶ mcp/server.mjs ──HTTP──▶ server/index.
 - **完整对话历史持久化**，刷新后恢复；**⤓** 导出 Markdown。回复进行中关闭面板会保持请求继续运行，并在右下角半透明浮动窗口显示实时记录（自动滚动，**⤢** 展开回完整面板）。
 - **AI 规则**（服务端强制执行）：助手只能通过工具操作本工作室，不能读取/修改源码、文件、环境变量、API Key 或系统信息。规则在 ⚙ 设置中只读展示，并由 `GET /api/llm/rules` 提供。
 - **联网素材搜索**：助手可调用 `substrate_search_open_assets` / `substrate_import_asset_url` 查找并导入开放授权图片，并报告作者与许可证。配置 `PEXELS_API_KEY`、`PIXABAY_API_KEY` 或 `UNSPLASH_ACCESS_KEY`（环境变量或 `asset-search.local.json`）可获得语义搜索；详见 [docs/zh/asset-search.md](docs/zh/asset-search.md)。
+- **长时间工具任务有步数保护并会给出汇总**：搭图过程若耗尽工具步数预算，助手会返回进度汇总（标记 `hitStepLimit`）而不是直接报错；该提示随对话保存，回复“继续”即可接着完成。
 - **◎** 运行 MCP 自检；帮助对话框也有同样入口。
 - 配置、接口与安全模型：[docs/zh/llm.md](docs/zh/llm.md)。
 

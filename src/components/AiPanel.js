@@ -248,6 +248,7 @@ export default defineComponent({
             <div v-if="m.pending" class="ai-thinking">{{ $t('ai.thinking') }}</div>
             <div v-else-if="m.content" class="ai-text">{{ m.content }}</div>
             <div v-if="m.interrupted" class="ai-error">{{ $t('ai.interrupted') }}</div>
+            <div v-if="m.hitStepLimit" class="ai-step-limit">{{ $t('ai.stepLimit') }}</div>
             <div v-if="m.error" class="ai-error">✕ {{ m.error }}</div>
             <div v-if="m.trace && m.trace.length" class="ai-trace">
               <div v-for="(tr, k) in m.trace" :key="k" class="ai-tool" :class="{ ok: tr.ok, bad: !tr.ok }">

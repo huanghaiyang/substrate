@@ -24,6 +24,7 @@ function readSaved() {
         error: m.error ? String(m.error) : undefined,
         pending: false,
         interrupted: !!m.pending || !!m.interrupted,
+        hitStepLimit: !!m.hitStepLimit,
         model: m.model || undefined,
         at: m.at || Date.now()
       }))
@@ -58,7 +59,8 @@ export function persistChatNow() {
       error: m.error,
       model: m.model,
       at: m.at,
-      interrupted: m.interrupted || undefined
+      interrupted: m.interrupted || undefined,
+      hitStepLimit: m.hitStepLimit || undefined
     }))
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, modelKey: aiChat.modelKey, messages, updatedAt: Date.now() }))
   } catch (e) {
@@ -80,7 +82,8 @@ export function persistChat() {
         model: m.model,
         at: m.at,
         pending: undefined,
-        interrupted: m.interrupted || undefined
+        interrupted: m.interrupted || undefined,
+        hitStepLimit: m.hitStepLimit || undefined
       }))
       localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, modelKey: aiChat.modelKey, messages, updatedAt: Date.now() }))
     } catch (e) {
@@ -135,7 +138,7 @@ export async function sendChat(text) {
       .filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.pending && m.content)
       .slice(-12)
       .map((m) => ({ role: m.role, content: m.content }))
-    const result = await chatWithAssistant({ modelKey: aiChat.modelKey, messages: history, maxSteps: 8 })
+    const result = await chatWithAssistant({ modelKey: aiChat.modelKey, messages: history, maxSteps: 20 })
     const idx = aiChat.messages.indexOf(pending)
     const final = {
       role: 'assistant',
@@ -143,6 +146,7 @@ export async function sendChat(text) {
       error: result?.ok ? undefined : result?.error?.message || '请求失败',
       trace: result?.toolCalls || [],
       model: result?.model || undefined,
+      hitStepLimit: !!result?.hitStepLimit,
       pending: false,
       at: Date.now()
     }
@@ -185,6 +189,7 @@ export function exportChatMarkdown() {
     lines.push('## ' + (m.role === 'user' ? 'User' : 'Assistant') + ' · ' + new Date(m.at || Date.now()).toISOString())
     if (m.content) lines.push('', m.content)
     if (m.error) lines.push('', '> Error: ' + m.error)
+    if (m.hitStepLimit) lines.push('', '> Tool-step limit reached; this is a progress summary.')
     if (m.trace && m.trace.length) {
       lines.push('', '**Tool calls**')
       for (const tr of m.trace) lines.push('- ' + (tr.ok ? '✓' : '✕') + ' ' + tr.name)

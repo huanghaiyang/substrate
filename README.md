@@ -388,6 +388,9 @@ OpenAI-compatible provider/model via the ⚙ settings.
   `substrate_import_asset_url` to find and import open-license images, reporting creator and license. Configure
   `PEXELS_API_KEY`, `PIXABAY_API_KEY` or `UNSPLASH_ACCESS_KEY` (env or `asset-search.local.json`) for semantic
   search; see [docs/asset-search.md](docs/asset-search.md).
+- **Long tool sessions are bounded and summarized**: if the graph-building tool-step budget is
+  exhausted, the assistant returns a progress summary (marked `hitStepLimit`) instead of a dead-end
+  error; the note persists with the conversation and replying "continue" resumes the work.
 - The **◎** button runs the MCP self-check; the help dialog has the same entry.
 - Setup, endpoints and security model: [docs/llm.md](docs/llm.md).
 

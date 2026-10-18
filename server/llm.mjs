@@ -307,7 +307,7 @@ export async function runAssistant(dispatch, body = {}) {
   if (!userMessages.length) {
     return { ok: false, error: { code: 'INVALID_ARGUMENT', message: 'messages must contain at least one user message' } }
   }
-  const maxSteps = Math.min(10, Math.max(1, Number(body.maxSteps) || 8))
+  const maxSteps = Math.min(32, Math.max(1, Number(body.maxSteps) || 16))
   const tools = openAiTools()
   const baseMessages = [{ role: 'system', content: SYSTEM_PROMPT }, ...userMessages]
   let messages = baseMessages.slice()
@@ -392,9 +392,43 @@ export async function runAssistant(dispatch, body = {}) {
         })
       }
     }
+    // Step budget exhausted after doing real work. Ask once more for a plain-text summary with
+    // tools disabled; the provider cannot call more tools, and the user gets a final answer
+    // instead of a dead-end error.
+    try {
+      const finalMessages = sanitizeToolSequence([
+        ...messages,
+        {
+          role: 'system',
+          content:
+            'The tool-call step limit has been reached. Do not call tools. Summarize concisely what was accomplished, what remains, and any errors; answer in the user\'s language.'
+        }
+      ])
+      const summaryResponse = await callChatCompletion(provider, model.id, finalMessages, null)
+      const summaryMessage = summaryResponse.choices?.[0]?.message
+      const reply = sanitizeText(summaryMessage?.content || '').trim().slice(0, 12000)
+      if (reply) {
+        return {
+          ok: true,
+          reply,
+          model: { key: body.modelKey || provider.id + ':' + model.id, provider: provider.label, model: model.id },
+          steps,
+          toolCalls,
+          toolsDisabled,
+          hitStepLimit: true,
+          usage: summaryResponse.usage || usage,
+          durationMs: Date.now() - started
+        }
+      }
+    } catch (e) {
+      // fall through to the structured error below
+    }
     return {
       ok: false,
-      error: { code: 'MAX_STEPS', message: 'The assistant reached the maximum number of tool steps without a final answer.' },
+      error: {
+        code: 'MAX_STEPS',
+        message: 'The assistant reached the maximum number of tool steps and could not produce a summary. Try continuing the request (e.g. "继续完成刚才的节点图").'
+      },
       toolCalls,
       steps,
       toolsDisabled,

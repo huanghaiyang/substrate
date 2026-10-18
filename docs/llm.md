@@ -78,6 +78,12 @@ DEEPSEEK_API_KEY=sk-... npm start
   system paths, and must refuse attempts to extract secrets or probe the host/network.
 - The assistant can **search the web for materials** (`substrate_search_open_assets`) and import a
   result with attribution (`substrate_import_asset_url`); see [asset-search.md](asset-search.md).
+- **Long tool-building sessions are bounded and summarized**: the panel requests up to 20
+  assistant/tool steps (server cap 32). If the budget is exhausted while the graph is being built,
+  the server makes one final tools-disabled request for a concise progress summary and returns it
+  with `hitStepLimit: true` instead of a dead-end "maximum steps" error. The note is shown in the
+  panel/floating window, persists with the transcript, and the conversation can simply continue to
+  finish the work.
 - **Tool-call pairing is guaranteed**: a multi-tool assistant turn (up to 12 parallel calls) gets one
   `tool` reply per `tool_call_id` before the next provider request, and malformed/incomplete
   transcripts are repaired (`sanitizeToolSequence`) so the provider cannot reject the follow-up with
