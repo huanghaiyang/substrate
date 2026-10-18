@@ -117,10 +117,11 @@ function toolExample(tool) {
 
 function enrichToolError(error, tool) {
   const e = error && typeof error === 'object' ? { ...error } : { code: ERROR_CODES.INTERNAL, message: String(error || 'Tool failed') }
-  const example = toolExample(tool)
+  const specific = e.details && e.details.example
+  const example = specific || toolExample(tool)
   if (example) {
     e.details = { ...(e.details || {}), example, tool: tool.name }
-    if (!e.hint) e.hint = 'Expected argument shape: ' + JSON.stringify(example)
+    if (!e.hint && !e.details?.availablePorts) e.hint = 'Expected argument shape: ' + JSON.stringify(example)
   }
   return e
 }

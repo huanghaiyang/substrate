@@ -357,6 +357,10 @@ MCP client ──stdio──▶ mcp/server.mjs ──HTTP──▶ server/index.
   (2D channel / 3D ball PNG), `substrate_search_open_assets`, `substrate_import_asset_url`,
   `substrate_list_assets`, `substrate_apply_asset`, `substrate_export`, `substrate_run_audit`,
   project save/load, …
+- **Graph link safety** — `substrate_get_graph` exposes every node's `inputPorts`; `substrate_connect`
+  rejects unknown ports with `details.availablePorts` (common `in` → single-input alias is corrected),
+  legacy projects are repaired on load, and the self-test reports `connectionPortsValid` so a
+  silently ignored link can no longer make a texture look "not sampled".
 - **Normalized contract** — stable `substrate_<verb>_<noun>` names, JSON-Schema validated arguments
   (including nested paint points), per-tool examples in the catalog, and actionable errors:
   `INVALID_ARGUMENT` includes `details.example`/input schema, `NOT_FOUND` includes
@@ -381,7 +385,7 @@ MCP client ──stdio──▶ mcp/server.mjs ──HTTP──▶ server/index.
 
 Full reference, curl examples, auth, self-check and limitations: [`docs/mcp.md`](docs/mcp.md). Online materials:
 [`docs/asset-search.md`](docs/asset-search.md).
-Test it with `npm run test:mcp` (needs the app tab open; 76 interface checks including LLM key-masking, AI
+Test it with `npm run test:mcp` (needs the app tab open; 79 interface checks including LLM key-masking, AI
 rules, online-search guards and the material-library API).
 
 ## AI assistant
@@ -541,7 +545,7 @@ and POSTed to `/api/debug/report` for CI.
 npm run test:mcp
 ```
 
-End-to-end validation of the external interface (76 pass / 2 skipped): gateway availability/catalog, stdio JSON-RPC logic
+End-to-end validation of the external interface (79 pass / 2 skipped): gateway availability/catalog, stdio JSON-RPC logic
 (initialize / tools/list / tools/call / ping), graph reads and mutations, evaluation, thumbnails and
 2D/3D preview capture, painting, project save/load/delete, export + zip, normalized error envelopes,
 HTTP JSON-RPC (`/mcp`), the plain JSON endpoint, `/api/mcp/selfcheck`, the LLM model/provider endpoints

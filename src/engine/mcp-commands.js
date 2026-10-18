@@ -18,6 +18,7 @@ import {
   setNodePosition,
   addConnection,
   removeConnection,
+  resolveInputPort,
   setNodeImage,
   autoLayout,
   commitStroke,
@@ -107,28 +108,44 @@ function summarize() {
       redo: state.redoStack.length
     },
     selection: { active: state.activeNodeId, selected: [...state.selectedIds] },
-    paintNodes: state.graph.nodes.filter((n) => n.type === 'paint').map((n) => ({ id: n.id, strokes: (n.data?.strokes || []).length }))
+    paintNodes: state.graph.nodes.filter((n) => n.type === 'paint').map((n) => ({ id: n.id, strokes: (n.data?.strokes || []).length })),
+  invalidConnections: state.graph.connections
+    .filter((c) => {
+      const target = state.graph.nodes.find((n) => n.id === c.to?.node)
+      return !(defOf(target)?.inputs || []).some((i) => i.name === c.to?.port)
+    })
+    .map((c) => ({ id: c.id, to: c.to }))
   }
 }
 
 function sanitizeGraph() {
   return {
-    nodes: state.graph.nodes.map((n) => ({
-      id: n.id,
-      type: n.type,
-      x: n.x,
-      y: n.y,
-      title: n.data?.title || undefined,
-      params: JSON.parse(JSON.stringify(n.params || {})),
-      paint: n.type === 'paint' ? { strokes: (n.data?.strokes || []).length } : undefined
-    })),
+    nodes: state.graph.nodes.map((n) => {
+      const def = defOf(n)
+      return {
+        id: n.id,
+        type: n.type,
+        x: n.x,
+        y: n.y,
+        title: n.data?.title || undefined,
+        inputPorts: (def?.inputs || []).map((i) => i.name),
+        params: JSON.parse(JSON.stringify(n.params || {})),
+        paint: n.type === 'paint' ? { strokes: (n.data?.strokes || []).length } : undefined
+      }
+    }),
     connections: state.graph.connections.map((c) => ({
       id: c.id,
       from: { node: c.from.node, port: c.from.port },
       to: { node: c.to.node, port: c.to.port }
     })),
     outputNodeId: outputNode()?.id || null,
-    resolution: state.resolution
+    resolution: state.resolution,
+    invalidConnections: state.graph.connections
+      .filter((c) => {
+        const target = state.graph.nodes.find((n) => n.id === c.to?.node)
+        return !(defOf(target)?.inputs || []).some((i) => i.name === c.to?.port)
+      })
+      .map((c) => ({ id: c.id, to: c.to }))
   }
 }
 
@@ -373,13 +390,29 @@ const handlers = {
   },
 
   async substrate_connect(args) {
-    requireNode(args.fromNode)
-    requireNode(args.toNode)
-    const ok = addConnection(args.fromNode, args.fromPort || 'out', args.toNode, args.toPort)
-    if (!ok) throw new ToolError(ERROR_CODES.INVALID_ARGUMENT, state.error || 'Connection rejected', { error: state.error })
+    const fromNode = requireNode(args.fromNode)
+    const toNode = requireNode(args.toNode)
+    const inputs = (defOf(toNode)?.inputs || []).map((i) => i.name)
+    const resolved = resolveInputPort(toNode, args.toPort)
+    if (!resolved) {
+      throw new ToolError(
+        ERROR_CODES.INVALID_ARGUMENT,
+        'No input port "' + args.toPort + '" on ' + toNode.type + '. Available input ports: ' + (inputs.join(', ') || '(none)'),
+        { availablePorts: inputs, nodeType: toNode.type, example: { fromNode: args.fromNode, fromPort: 'out', toNode: args.toNode, toPort: inputs[0] } }
+      )
+    }
+    const ok = addConnection(args.fromNode, args.fromPort || 'out', args.toNode, resolved)
+    if (!ok) throw new ToolError(ERROR_CODES.INVALID_ARGUMENT, state.error || 'Connection rejected', { error: state.error, availablePorts: inputs })
     await evaluate()
-    const conn = state.graph.connections.find((c) => c.to.node === args.toNode && c.to.port === args.toPort)
-    return { connectionId: conn?.id || null, from: args.fromNode, to: args.toNode, port: args.toPort, graph: { nodes: state.graph.nodes.length, connections: state.graph.connections.length } }
+    const conn = state.graph.connections.find((c) => c.to.node === args.toNode && c.to.port === resolved)
+    return {
+      connectionId: conn?.id || null,
+      from: args.fromNode,
+      to: args.toNode,
+      port: resolved,
+      correctedPort: resolved !== args.toPort ? args.toPort + ' -> ' + resolved : undefined,
+      graph: { nodes: state.graph.nodes.length, connections: state.graph.connections.length }
+    }
   },
 
   async substrate_disconnect(args) {

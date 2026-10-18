@@ -98,6 +98,23 @@ export function defOf(node) {
 export function nodeById(id) {
   return state.graph.nodes.find((n) => n.id === id)
 }
+
+/**
+ * Resolve a requested input port against the node definition. A few agents guess "in" for
+ * nodes whose only input is called "input" (e.g. Transform 2D); accepting that alias for a
+ * single-input node prevents a silent broken link. Returns null when no unambiguous match.
+ */
+export function resolveInputPort(node, requested) {
+  const inputs = defOf(node)?.inputs || []
+  if (!inputs.length) return null
+  const port = String(requested == null ? '' : requested)
+  if (inputs.some((i) => i.name === port)) return port
+  const alias = port.toLowerCase()
+  if (inputs.length === 1 && ['in', 'input', 'src', 'source', 'value', 'base', 'tex', 'texture'].includes(alias)) {
+    return inputs[0].name
+  }
+  return null
+}
 export function outputNode() {
   return state.graph.nodes.find((n) => NODE_MAP[n.type]?.isOutput)
 }
@@ -211,11 +228,33 @@ function normalizeNode(n) {
     data
   }
 }
+function repairConnectionPorts(nodes, connections) {
+  return (connections || [])
+    .filter((c) => c && c.from && c.to)
+    .map((c) => {
+      const target = nodes.find((n) => n.id === c.to.node)
+      let resolved = resolveInputPort(target, c.to.port)
+      if (!resolved) {
+        // Older agent-authored graphs also guessed generic "a"/"b" (or in1/in2) for nodes whose
+        // first/second inputs are named "input"/"warper" etc. Only repair on project load, where the
+        // alternative is a silently ignored link; new connections get an explicit port error.
+        const inputs = defOf(target)?.inputs || []
+        const requested = String(c.to.port || '').toLowerCase()
+        if (inputs.length >= 2) {
+          const index = requested === 'a' || requested === 'in1' || requested === 'input1' ? 0 : requested === 'b' || requested === 'in2' || requested === 'input2' ? 1 : -1
+          if (index >= 0 && inputs[index]) resolved = inputs[index].name
+        }
+      }
+      return resolved && resolved !== c.to.port ? { ...c, to: { ...c.to, port: resolved } } : c
+    })
+}
+
 function restoreGraphString(json) {
   try {
     const g = JSON.parse(json)
     state.graph.nodes = (g.nodes || []).map(normalizeNode).filter(Boolean)
-    state.graph.connections = (g.connections || []).filter((c) => c && c.from && c.to)
+    // Migrate old/agent-authored links that used an alias such as "in" for a single-input node.
+    state.graph.connections = repairConnectionPorts(state.graph.nodes, g.connections)
     state.selectedIds = state.selectedIds.filter((id) => nodeById(id))
     state.activeNodeId = state.selectedIds[0] || null
     for (const entry of paintCanvases.values()) entry.drawn = -1
@@ -329,9 +368,16 @@ export function addConnection(fromId, fromPort, toId, toPort) {
     state.error = check.reason
     return false
   }
+  const target = nodeById(toId)
+  const resolved = resolveInputPort(target, toPort)
+  if (!resolved) {
+    const ports = (defOf(target)?.inputs || []).map((i) => i.name)
+    state.error = t('error.portNotFound', { port: toPort, ports: ports.join(', ') })
+    return false
+  }
   pushHistory(t('history.connect'))
-  state.graph.connections = state.graph.connections.filter((c) => !(c.to.node === toId && c.to.port === toPort))
-  state.graph.connections.push({ id: uid('link'), from: { node: fromId, port: fromPort || 'out' }, to: { node: toId, port: toPort } })
+  state.graph.connections = state.graph.connections.filter((c) => !(c.to.node === toId && c.to.port === resolved))
+  state.graph.connections.push({ id: uid('link'), from: { node: fromId, port: fromPort || 'out' }, to: { node: toId, port: resolved } })
   requestEval()
   return true
 }
@@ -740,7 +786,9 @@ export function loadGraph(graph, opts = {}) {
     paintCanvases.delete(id)
   }
   state.graph.nodes = (graph.nodes || []).map(normalizeNode).filter(Boolean)
-  state.graph.connections = (graph.connections || []).filter((c) => c && c.from && c.to)
+  // Migrate old/agent-authored links that used an alias such as "in" for a single-input node
+  // (e.g. Transform 2D input is "input", not "in"). This prevents a silently broken basecolor.
+  state.graph.connections = repairConnectionPorts(state.graph.nodes, graph.connections)
   if (opts.name) state.projectName = opts.name
   state.resolution = opts.resolution || state.resolution
   state.selectedIds = []

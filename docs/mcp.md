@@ -124,9 +124,24 @@ input schema; missing nodes return `NOT_FOUND` with `details.availableNodes` (id
 // auto layout: no arguments — tidy the whole graph in one undoable step
 {}
 
+// connect: toPort MUST match one of the target node's inputPorts from get_graph
+// ("in" is auto-corrected to "input" only for single-input nodes)
+{ "fromNode": "image_input-xxxxx", "fromPort": "out", "toNode": "transform-xxxxx", "toPort": "input" }
+
 // connect: toPort is the target input name
 { "fromNode": "perlin-xxxxx", "fromPort": "out", "toNode": "material_output-xxxxx", "toPort": "height" }
 ```
+
+## Graph link validation
+
+- `substrate_get_graph` now exposes each node's `inputPorts`; use exactly one of those names for
+  `substrate_connect.toPort`.
+- Invalid ports return `INVALID_ARGUMENT` with `details.availablePorts` and a node-specific example
+  instead of creating a link the evaluator silently ignores.
+- Legacy/agent-authored projects are repaired on load for the common aliases (`in` → the single
+  input, generic `a`/`b`/`in1`/`in2` → first/second input). The self-test reports
+  `connectionPortsValid` and lists `graph.invalidConnections`; `substrate_get_graph`/`state` also
+  return `invalidConnections`.
 
 ## Tools (32)
 

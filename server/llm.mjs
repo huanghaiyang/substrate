@@ -55,6 +55,7 @@ Calling conventions:
 - get_thumbnail: nodeId is optional — omit it for the output node; find valid node ids with substrate_get_graph. If NOT_FOUND, refetch the graph and use a current node id.
 - get_preview: view is "2d" or "3d"; channel is one of basecolor/height/normal/roughness/metallic/ao/emissive/opacity.
 - connect: {fromNode, fromPort:"out", toNode, toPort}; toPort is the target input name (basecolor, height, a, b, ...).
+- connect: toPort MUST exactly match an inputPorts value from substrate_get_graph (Transform 2D uses "input", Warp uses "input"/"warper"); never guess generic "in"/"a"/"b" for multi-input nodes. If INVALID_ARGUMENT, use details.availablePorts and retry with a listed port.
 - If a tool returns INVALID_ARGUMENT or NOT_FOUND, read the error details/example, re-check ids with substrate_get_graph, fix the arguments and retry once; never repeat the same failing arguments.
 - When the user message includes image attachments, inspect them directly: describe what you actually see (subject, material, colours, patterns, scale, condition) before proposing values. Never claim to see an image that is missing or unreadable.`
 

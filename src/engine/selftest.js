@@ -1,5 +1,5 @@
 // Automated self-test used by the agent harness and the in-app "?selftest=1" mode.
-import { state, outputNode } from './store.js'
+import { state, outputNode, defOf } from './store.js'
 import { exportMaterial } from './exporter.js'
 
 function channelStats(data, width, height) {
@@ -85,6 +85,15 @@ export async function runSelfTest(engine, opts = {}) {
     error: state.error || ''
   }
 
+  // A link whose target port does not exist is silently ignored by the evaluator (the node
+  // then receives its default), which looks like "the texture is not sampled". Surface it.
+  report.graph.invalidConnections = (state.graph.connections || [])
+    .filter((c) => {
+      const target = state.graph.nodes.find((n) => n.id === c.to?.node)
+      return !(defOf(target)?.inputs || []).some((i) => i.name === c.to?.port)
+    })
+    .map((c) => ({ id: c.id, to: c.to }))
+
   report.shaders = engine.validateShaders()
   report.shaderAudit = { ok: report.shaders.ok, failures: report.shaders.failures.length }
 
@@ -162,7 +171,8 @@ export async function runSelfTest(engine, opts = {}) {
     outputNodePresent: report.graph.outputs === 1,
     evalNoGlError: report.eval.glError === 0,
     thumbnailsPresent: report.eval.nodesWithThumbnail > 0,
-    floatTargets: engine.isFloat
+    floatTargets: engine.isFloat,
+    connectionPortsValid: report.graph.invalidConnections.length === 0
   }
   if (wired.has('basecolor')) checks.baseColorVariance = report.channels.basecolor.max - report.channels.basecolor.min > 30
   if (wired.has('normal')) {

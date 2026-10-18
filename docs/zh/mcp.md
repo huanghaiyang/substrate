@@ -114,9 +114,22 @@ curl -s http://127.0.0.1:3000/api/mcp/call \
 // 自动整理：无需参数，一键整理整个节点图（可撤销）
 {}
 
+// connect：toPort 必须匹配 get_graph 中目标节点的 inputPorts
+// （单输入节点的 "in" 会自动纠正为 "input"）
+{ "fromNode": "image_input-xxxxx", "fromPort": "out", "toNode": "transform-xxxxx", "toPort": "input" }
+
 // connect：toPort 是目标输入端口名
 { "fromNode": "perlin-xxxxx", "fromPort": "out", "toNode": "material_output-xxxxx", "toPort": "height" }
 ```
+
+## 连线端口校验
+
+- `substrate_get_graph` 现在返回每个节点的 `inputPorts`；`substrate_connect.toPort` 必须使用其中的名字。
+- 端口不存在时返回 `INVALID_ARGUMENT`，`details.availablePorts` 给出可用端口和该节点的示例，
+  不再创建被求值器静默忽略的连线。
+- 旧项目/Agent 生成的项目在加载时自动修复常见别名（`in` → 单输入端口，通用
+  `a`/`b`/`in1`/`in2` → 第一/第二输入）。自检新增 `connectionPortsValid` 并列出
+  `graph.invalidConnections`；`substrate_get_graph`/`state` 也会返回 `invalidConnections`。
 
 ## 工具（32 个）
 

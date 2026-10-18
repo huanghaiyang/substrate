@@ -52,7 +52,7 @@ export const TOOLS = [
     name: 'substrate_get_graph',
     title: 'Get Node Graph',
     description:
-      'Return the full node graph (nodes with id, type, position and parameters; connections with ids and ports) plus the output node id. Thumbnails are omitted to keep the payload small.',
+      'Return the full node graph (nodes with id, type, position, inputPorts and parameters; connections with ids and ports) plus the output node id. Use inputPorts to choose valid toPort values for substrate_connect. Thumbnails are omitted to keep the payload small.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     annotations: readOnly,
     timeoutMs: 15000
@@ -302,7 +302,7 @@ export const TOOLS = [
     name: 'substrate_connect',
     title: 'Connect Nodes',
     description:
-      'Connect a source node output to a target node input port. Outputs are RGBA streams; toPort is the input port name (e.g. "basecolor", "height", "roughness", "a", "b"). Returns the connection id.',
+      'Connect a source node output to a target node input port. Outputs are RGBA streams; toPort MUST be one of the target node\'s inputPorts from substrate_get_graph (e.g. "basecolor", "height", "a", "b", or "input" for Transform 2D). A common alias like "in" is auto-corrected only for single-input nodes; otherwise the tool returns availablePorts. Returns the connection id.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -517,7 +517,8 @@ export const TOOL_EXAMPLES = {
     { type: 'paint', x: 640, y: 160 }
   ],
   substrate_connect: [
-    { fromNode: 'perlin-xxxxx', fromPort: 'out', toNode: 'material_output-xxxxx', toPort: 'height' }
+    { fromNode: 'perlin-xxxxx', fromPort: 'out', toNode: 'material_output-xxxxx', toPort: 'height' },
+    { fromNode: 'image_input-xxxxx', fromPort: 'out', toNode: 'transform-xxxxx', toPort: 'input' }
   ],
   substrate_auto_layout: [{}],
   substrate_set_param: [

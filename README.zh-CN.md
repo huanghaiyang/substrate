@@ -266,6 +266,9 @@ MCP client ──stdio──▶ mcp/server.mjs ──HTTP──▶ server/index.
 
 - **传输方式**——stdio（`node mcp/server.mjs`，配置示例在 [`mcp/`](mcp/)）、`POST /mcp` 的 HTTP JSON-RPC，以及 `POST /api/mcp/call` 的简易 JSON 端点。发现：`GET /api/mcp/tools`。
 - **32 个工具**——`substrate_get_state`、`substrate_get_graph`、`substrate_add_node`、`substrate_set_param`、`substrate_connect`、`substrate_paint_stroke`、`substrate_get_preview`（2D 通道 / 3D 材质球 PNG）、`substrate_search_open_assets`、`substrate_import_asset_url`、`substrate_list_assets`、`substrate_apply_asset`、`substrate_export`、`substrate_run_audit`、项目保存/加载……完整列表与调用规范见 [docs/zh/mcp.md](docs/zh/mcp.md)。
+- **连线端口安全**——`substrate_get_graph` 返回每个节点的 `inputPorts`；`substrate_connect` 对未知端口返回
+  `details.availablePorts`（单输入节点的 `in` 别名会自动纠正），旧项目加载时自动修复，自检新增
+  `connectionPortsValid`，避免“连线被静默忽略导致贴图看起来没采样”。
 - **标准化契约**——稳定的 `substrate_<verb>_<noun>` 命名、JSON-Schema 参数校验（含嵌套的绘制点）、工具目录内置示例、可操作的错误提示：`INVALID_ARGUMENT` 返回 `details.example` 与输入 schema，`NOT_FOUND` 返回 `details.availableNodes`；包含 `readOnlyHint`/`destructiveHint`/`idempotentHint` 注解、逐工具超时、`apiVersion`，以及统一信封：`{ ok, apiVersion, tool, data, meta }` 或 `{ ok:false, error:{ code, message } }`。
 - **要求**——工作室必须运行且浏览器标签页打开（图在那里由 GPU 求值）。设置 `MCP_TOKEN` 可要求外部端点携带 Bearer Token。
 
@@ -282,7 +285,7 @@ MCP client ──stdio──▶ mcp/server.mjs ──HTTP──▶ server/index.
 ```
 
 完整参考、curl 示例、认证、自检与限制：[docs/zh/mcp.md](docs/zh/mcp.md)。在线素材：[docs/zh/asset-search.md](docs/zh/asset-search.md)。
-用 `npm run test:mcp` 测试（需要应用标签页打开；76 项接口检查，覆盖 LLM Key 脱敏、AI 规则、联网搜索防护和素材库 API）。
+用 `npm run test:mcp` 测试（需要应用标签页打开；79 项接口检查，覆盖 LLM Key 脱敏、AI 规则、联网搜索防护和素材库 API）。
 
 ## AI 助手
 

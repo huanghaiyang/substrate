@@ -331,6 +331,37 @@ async function main() {
   )
   const layout = await httpJSON('/api/mcp/call', { method: 'POST', body: JSON.stringify({ name: 'substrate_auto_layout', arguments: {} }) })
   check('mcp: auto layout tool', layout.body?.ok === true && layout.body.data?.moved > 0 && layout.body.data?.layers > 0, JSON.stringify(layout.body?.data || layout.body?.error))
+  const graphNow = await httpJSON('/api/mcp/call', { method: 'POST', body: JSON.stringify({ name: 'substrate_get_graph', arguments: {} }) })
+  const graphNodes = graphNow.body?.data?.nodes || []
+  check(
+    'mcp: inputPorts exposed',
+    graphNodes.length > 0 && graphNodes.every((n) => Array.isArray(n.inputPorts)),
+    'inputPorts missing'
+  )
+  const perlinNode = graphNodes.find((n) => n.type === 'perlin')
+  const addedTransform = await httpJSON('/api/mcp/call', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'substrate_add_node', arguments: { type: 'transform', x: 40, y: 40 } })
+  })
+  const transformId = addedTransform.body?.data?.nodeId || addedTransform.body?.data?.id
+  const aliasConnect = await httpJSON('/api/mcp/call', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'substrate_connect', arguments: { fromNode: perlinNode?.id, fromPort: 'out', toNode: transformId, toPort: 'in' } })
+  })
+  check(
+    'mcp: connect corrects in alias',
+    aliasConnect.body?.ok === true && aliasConnect.body.data?.port === 'input' && /in -> input/.test(aliasConnect.body.data?.correctedPort || ''),
+    JSON.stringify(aliasConnect.body)
+  )
+  const badConnect = await httpJSON('/api/mcp/call', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'substrate_connect', arguments: { fromNode: perlinNode?.id, fromPort: 'out', toNode: transformId, toPort: 'nope' } })
+  })
+  check(
+    'mcp: connect reports available ports',
+    badConnect.body?.ok === false && badConnect.body.error?.code === 'INVALID_ARGUMENT' && (badConnect.body.error?.details?.availablePorts || []).includes('input'),
+    JSON.stringify(badConnect.body?.error)
+  )
   const assetsNow = await httpJSON('/api/mcp/call', { method: 'POST', body: JSON.stringify({ name: 'substrate_list_assets', arguments: {} }) })
   check('mcp: list assets tool', assetsNow.body?.ok === true && Array.isArray(assetsNow.body.data?.assets))
 
