@@ -1,8 +1,9 @@
 import { generatorDefs } from './generators.js'
+import { patternDefs } from './patterns.js'
 import { filterDefs } from './filters.js'
 import { outputDef } from './output.js'
 
-export const NODE_DEFS = [...generatorDefs, ...filterDefs, outputDef]
+export const NODE_DEFS = [...generatorDefs, ...patternDefs, ...filterDefs, outputDef]
 export const NODE_MAP = Object.fromEntries(NODE_DEFS.map((d) => [d.type, d]))
 
 export const CATEGORIES = ['Input', 'Noise', 'Pattern', 'Shape', 'Color', 'Paint', 'Filter', 'Blend', 'Adjust', 'Normal', 'Output']

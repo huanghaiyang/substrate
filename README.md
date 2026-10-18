@@ -16,7 +16,7 @@ paint on them by hand, preview the result as a lit 3D material, and export an in
 - **Node graph editor** — pan/zoom canvas, drag-to-connect with a live **curved link preview that snaps to input
   ports**, marquee select, undo/redo, node thumbnails rendered from the actual GPU result, right-click node creation
   with search.
-- **36 GPU nodes** — tileable fBm Perlin, Worley/cellular, grunge, patterns, SDF shapes, gradients, blurs, warps,
+- **44 GPU nodes** — tileable fBm Perlin, Worley/cellular, grunge, patterns, SDF shapes, gradients, blurs, warps,
   normal/AO/curvature generators, blend modes, channel packing helpers.
 - **Hand painting** — a real Paint Studio with **16 built-in brushes** in two groups: *Basic* (soft/hard round,
   pencil, ink, airbrush, marker, chalk, spray, sponge, flat) and *Nature* (**grass, leaf, flower, tree, fern,
@@ -116,7 +116,7 @@ PORT=3001 npm start  # custom port
 ```
 
 The first launch loads a built-in demo material in the browser language (add `?lang=zh` or `?lang=en` to force one).
-Press **? → Run self-test** at any time to execute the built-in 2,227-check audit.
+Press **? → Run self-test** at any time to execute the built-in 3,013-check audit.
 Edit, paint, export — everything is persisted to the browser (local autosave) and can be saved as named projects
 on the Node server.
 
@@ -283,7 +283,7 @@ whole application inspectable in the browser network panel.
 | --- | --- |
 | **Input** | Texture Input (bitmap loader), Constant Value (raw data), Flat Color |
 | **Noise** | Perlin Noise (tileable fBm), Cellular Noise (F1/F2/borders), Grunge |
-| **Pattern** | Wave Pattern, Checker, Brick Wall, Tile Generator (coloured tiles or bevel height) |
+| **Pattern** | Wave Pattern, Checker, Brick Wall, Tile Generator (colour or bevel height), **Wood Planks, Fur, Grass, Plastic Surface, Burlap, Fabric, Leather, Concrete** (colour or height, all tileable) |
 | **Shape** | Shape (rounded box / ellipse / polygon / star SDF) |
 | **Color** | Gradient (multi-stop, 4 modes), Gradient Map, Channel Combine |
 | **Paint** | Paint Layer (brush, symmetry, blend modes, mask input) |
@@ -516,7 +516,7 @@ wrapped-edge seam ratios, manifest structure, README sections, and every zip ent
 Latest run after the audit fixes: **4/4 demo packages passed** (all PNGs CRC-valid, correct colour spaces,
 seam ratios well below 1.0 with the percentile metric, clean zip entries each).
 
-### 3. Full application audit (2,227 checks + 148 opt-in UI checks)
+### 3. Full application audit (3,013 checks + 148 opt-in UI checks)
 
 `src/engine/audit.js` is a browser-side test harness that exercises the whole product, not just exports:
 
@@ -533,13 +533,13 @@ seam ratios well below 1.0 with the percentile metric, clean zip entries each).
 Run it either from the in-app help dialog (**Run self-test**), with the URL, or from the command line:
 
 ```bash
-node scripts/cdp.mjs audit all        # or: npm run audit   (2,227 checks, ~40 s)
+node scripts/cdp.mjs audit all        # or: npm run audit   (3,013 checks, ~40 s)
 npm run audit:ui                      # deep toolbar/right-panel/paint/AI pass (148 checks)
 npm run audit:quick                   # schema only
 ```
 
-It prints a per-section PASS/FAIL summary and returns a non-zero exit code on failure. Latest run: **2,227 checks, 0 failures**
-(schema 1,278 · render 628 · values 46 · actions 198 · dom 56 · i18n 21), plus the opt-in UI pass (148 checks) and the MCP self-check (30 checks). The same run is available as
+It prints a per-section PASS/FAIL summary and returns a non-zero exit code on failure. Latest run: **3,013 checks, 0 failures**
+(schema 1,783 · render 885 · values 46 · actions 198 · dom 56 · i18n 21), plus the opt-in UI pass (148 checks) and the MCP self-check (30 checks). The same run is available as
 `?audit=1` (all sections), `?audit=1&auditsection=render` or `?audit=1&auditsection=ui`, with the report available as `window.__AUDIT__`
 and POSTed to `/api/debug/report` for CI.
 

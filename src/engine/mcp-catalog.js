@@ -241,7 +241,7 @@ export const TOOLS = [
     name: 'substrate_add_node',
     title: 'Add Node',
     description:
-      'Add a node of the given type (see the node library types such as perlin, blend, gradient_map, normal, ao, paint, material_output). Returns the new node id.',
+      'Add a node of the given type. Common types: perlin, cellular, grunge, waves, checker, bricks, tiles, wood_planks, fur, grass, plastic, burlap, fabric, leather, concrete, shape, gradient, gradient_map, blend, normal, ao, paint, image_input, material_output. Returns the new node id.',
     inputSchema: {
       type: 'object',
       properties: {

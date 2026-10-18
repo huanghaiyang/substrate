@@ -306,6 +306,7 @@ const near3 = (a, b, eps = 1e-3) => near(a[0], b[0], eps) && near(a[1], b[1], ep
 // -------------------------------------------------------------- render audit ---
 const SEAMLESS = new Set([
   'perlin', 'cellular', 'grunge', 'waves', 'checker', 'bricks', 'tiles', 'shape', 'gradient_map',
+  'wood_planks', 'fur', 'grass', 'plastic', 'burlap', 'fabric', 'leather', 'concrete',
   'blur', 'directional_blur', 'sharpen', 'highpass', 'emboss', 'warp', 'levels', 'histogram_scan',
   'invert', 'hsl', 'normal', 'ao', 'curvature', 'edges', 'morphology', 'grayscale', 'threshold',
   'posterize', 'transform', 'channels', 'blend', 'paint', 'flat_value', 'flat_color', 'constant_value'
