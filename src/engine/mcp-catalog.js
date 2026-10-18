@@ -91,6 +91,32 @@ export const TOOLS = [
     timeoutMs: 45000
   },
   {
+    name: 'substrate_list_assets',
+    title: 'List Material Assets',
+    description:
+      'List images in the material library (id, name, url, dimensions, attribution). Use it to find images uploaded in the AI chat or imported by the user, then substrate_apply_asset to use one.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: readOnly,
+    timeoutMs: 15000
+  },
+  {
+    name: 'substrate_apply_asset',
+    title: 'Apply Material Asset',
+    description:
+      'Use an existing material-library asset: target "texture" loads it into a Texture Input node (created if missing), target "paint" fills the paint layer with it as a repeating pattern. Accepts assetId or name.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        assetId: { type: 'string', description: 'Asset id from substrate_list_assets' },
+        name: { type: 'string', description: 'Asset name (alternative to assetId)' },
+        target: { type: 'string', enum: ['texture', 'paint'], description: 'Where to apply the asset (default texture)' }
+      },
+      additionalProperties: false
+    },
+    annotations: write,
+    timeoutMs: 60000
+  },
+  {
     name: 'substrate_import_asset_url',
     title: 'Import Online Material',
     description:
@@ -467,6 +493,52 @@ export const TOOLS = [
   }
 ]
 
+/**
+ * Canonical argument examples shown to agents (in /api/mcp/tools and the LLM tool descriptions)
+ * and attached to validation/not-found errors. Keep them copy-pasteable and internally consistent.
+ */
+export const TOOL_EXAMPLES = {
+  substrate_get_thumbnail: [{}, { nodeId: 'material_output-xxxxx' }],
+  substrate_get_preview: [
+    { view: '2d', channel: 'basecolor', size: 256 },
+    { view: '3d', size: 256 }
+  ],
+  substrate_add_node: [
+    { type: 'perlin', x: 320, y: 160 },
+    { type: 'paint', x: 640, y: 160 }
+  ],
+  substrate_connect: [
+    { fromNode: 'perlin-xxxxx', fromPort: 'out', toNode: 'material_output-xxxxx', toPort: 'height' }
+  ],
+  substrate_set_param: [
+    { nodeId: 'perlin-xxxxx', key: 'scale', value: 12 },
+    { nodeId: 'gradient_map-xxxxx', key: 'gradient', value: [{ p: 0, c: '#1d2a12' }, { p: 1, c: '#9aa84f' }] }
+  ],
+  substrate_paint_stroke: [
+    {
+      nodeId: 'paint-xxxxx',
+      points: [{ x: 0.25, y: 0.5 }, { x: 0.75, y: 0.5 }],
+      brushId: 'soft-round',
+      color: '#ffffff',
+      size: 32,
+      opacity: 1
+    }
+  ],
+  substrate_load_demo: [{ id: 'mossy-rock' }],
+  substrate_export: [{ preset: 'gltf', resolution: 512 }],
+  substrate_save_project: [{ name: 'my-material' }],
+  substrate_load_project: [{ name: 'my-material' }],
+  substrate_set_locale: [{ locale: 'zh' }],
+  substrate_search_open_assets: [{ query: 'rusty metal plate', limit: 6 }],
+  substrate_import_asset_url: [{ url: 'https://example.com/texture.jpg', name: 'Rusty plate' }],
+  substrate_list_assets: [{}],
+  substrate_apply_asset: [{ assetId: 'a1b2c3d4e5f6', target: 'texture' }]
+}
+
+for (const tool of TOOLS) {
+  tool.examples = TOOL_EXAMPLES[tool.name] || []
+}
+
 export const TOOLS_BY_NAME = new Map(TOOLS.map((t) => [t.name, t]))
 
 export function getTool(name) {
@@ -486,7 +558,8 @@ export function publicCatalog(extra = {}) {
       description: t.description,
       inputSchema: t.inputSchema,
       annotations: t.annotations,
-      timeoutMs: t.timeoutMs
+      timeoutMs: t.timeoutMs,
+      examples: t.examples || []
     }))
   }
 }
@@ -498,6 +571,54 @@ function typeOf(value) {
 }
 
 /** Strict, dependency-free validation of the small JSON-Schema subset used above. */
+function validateNestedValue(value, schema, path, name) {
+  if (!schema) return
+  const fail = (message) => {
+    const err = new Error(path + ' ' + message + ' (tool ' + name + ')')
+    err.code = ERROR_CODES.INVALID_ARGUMENT
+    throw err
+  }
+  const actual = typeOf(value)
+  if (schema.type === 'integer') {
+    if (actual !== 'number' || !Number.isInteger(value)) fail('must be an integer')
+  } else if (schema.type === 'number') {
+    if (actual !== 'number' || !Number.isFinite(value)) fail('must be a finite number')
+  } else if (schema.type === 'array') {
+    if (actual !== 'array') fail('must be an array')
+    if (schema.minItems !== undefined && value.length < schema.minItems) fail('needs at least ' + schema.minItems + ' items')
+    if (schema.maxItems !== undefined && value.length > schema.maxItems) fail('has too many items (max ' + schema.maxItems + ')')
+    if (schema.items) value.forEach((item, i) => validateNestedValue(item, schema.items, path + '[' + i + ']', name))
+    return
+  } else if (schema.type === 'object') {
+    if (actual !== 'object') fail('must be an object')
+    for (const key of schema.required || []) {
+      if (value[key] === undefined) fail('is missing required property "' + key + '"')
+    }
+    const props = schema.properties || {}
+    for (const [key, v] of Object.entries(value)) {
+      if (v === undefined) continue
+      const child = props[key]
+      if (!child) {
+        if (schema.additionalProperties === false) fail('has unknown property "' + key + '"')
+        continue
+      }
+      validateNestedValue(v, child, path + '.' + key, name)
+    }
+    return
+  } else if (schema.type && actual !== schema.type) {
+    fail('must be of type ' + schema.type)
+  }
+  if (schema.enum && !schema.enum.includes(value)) fail('must be one of ' + JSON.stringify(schema.enum))
+  if (schema.type === 'number' || schema.type === 'integer') {
+    if (schema.minimum !== undefined && value < schema.minimum) fail('must be >= ' + schema.minimum)
+    if (schema.maximum !== undefined && value > schema.maximum) fail('must be <= ' + schema.maximum)
+  }
+  if (schema.type === 'string') {
+    if (schema.minLength !== undefined && value.length < schema.minLength) fail('must be at least ' + schema.minLength + ' chars')
+    if (schema.maxLength !== undefined && value.length > schema.maxLength) fail('must be at most ' + schema.maxLength + ' chars')
+  }
+}
+
 export function validateArguments(name, args) {
   const tool = getTool(name)
   if (!tool) {
@@ -591,6 +712,17 @@ export function validateArguments(name, args) {
       const err = new Error(`Argument "${key}" must be one of ${prop.enum.join(', ')}`)
       err.code = ERROR_CODES.INVALID_ARGUMENT
       throw err
+    }
+  }
+  // Validate nested object properties and array item schemas (e.g. paint points).
+  for (const [key, value] of Object.entries(args)) {
+    if (value === undefined) continue
+    const prop = (schema.properties || {})[key]
+    if (!prop) continue
+    if (prop.type === 'array' && prop.items) {
+      value.forEach((item, i) => validateNestedValue(item, prop.items, key + '[' + i + ']', name))
+    } else if (prop.type === 'object') {
+      validateNestedValue(value, prop, key, name)
     }
   }
   return args

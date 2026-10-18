@@ -107,7 +107,25 @@ curl -s http://127.0.0.1:3000/api/mcp/call \
 Error codes: `APP_NOT_CONNECTED`, `INVALID_ARGUMENT`, `NOT_FOUND`, `EVAL_FAILED`, `EXPORT_FAILED`,
 `TIMEOUT`, `UNAUTHORIZED`, `INTERNAL`, `UNKNOWN_TOOL`.
 
-## Tools (29)
+## Calling conventions
+
+The catalog ships copy-pasteable `examples` (also returned by `GET /api/mcp/tools` and included in
+the AI tool descriptions). Invalid arguments return `INVALID_ARGUMENT` with `details.example` and the
+input schema; missing nodes return `NOT_FOUND` with `details.availableNodes` (id + type).
+
+```jsonc
+// paint_stroke: normalised canvas coordinates, NOT pixels
+{ "nodeId": "paint-xxxxx", "points": [{"x":0.25,"y":0.5},{"x":0.75,"y":0.5}],
+  "brushId": "soft-round", "color": "#ffffff", "size": 32, "opacity": 1 }
+
+// get_thumbnail: nodeId is optional (omit for the output node); ids come from get_graph
+{ "nodeId": "material_output-xxxxx" }
+
+// connect: toPort is the target input name
+{ "fromNode": "perlin-xxxxx", "fromPort": "out", "toNode": "material_output-xxxxx", "toPort": "height" }
+```
+
+## Tools (31)
 
 | Tool | Kind | Purpose |
 | --- | --- | --- |
@@ -118,6 +136,8 @@ Error codes: `APP_NOT_CONNECTED`, `INVALID_ARGUMENT`, `NOT_FOUND`, `EVAL_FAILED`
 | `substrate_get_thumbnail` | read | 96 px PNG data URL of a node (default: output) |
 | `substrate_search_open_assets` | read | search open-license online materials (creator/license/source URLs) |
 | `substrate_import_asset_url` | write | download an online image into the material library with attribution |
+| `substrate_list_assets` | read | list material-library images (id, name, url, dimensions, attribution) |
+| `substrate_apply_asset` | write | use a material-library image as a Texture Input or as a paint-layer pattern |
 | `substrate_get_preview` | read | PNG data URL of one 2D channel or the shaded 3D material ball |
 | `substrate_evaluate` | read/write | force evaluation and return timing/passes/cache stats |
 | `substrate_run_selftest` | read | GPU pipeline self-test (shaders, channels, normals, seams) |

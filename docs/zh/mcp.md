@@ -97,7 +97,25 @@ curl -s http://127.0.0.1:3000/api/mcp/call \
 
 错误码：`APP_NOT_CONNECTED`、`INVALID_ARGUMENT`、`NOT_FOUND`、`EVAL_FAILED`、`EXPORT_FAILED`、`TIMEOUT`、`UNAUTHORIZED`、`INTERNAL`、`UNKNOWN_TOOL`。
 
-## 工具（29 个）
+## 调用规范
+
+工具目录自带可直接复制的 `examples`（`GET /api/mcp/tools` 会返回，也包含在 AI 工具描述中）。参数错误返回
+`INVALID_ARGUMENT`，`details` 中包含示例和输入 schema；节点不存在返回 `NOT_FOUND`，`details.availableNodes`
+给出当前节点 id 与类型。
+
+```jsonc
+// paint_stroke：归一化画布坐标（不是像素）
+{ "nodeId": "paint-xxxxx", "points": [{"x":0.25,"y":0.5},{"x":0.75,"y":0.5}],
+  "brushId": "soft-round", "color": "#ffffff", "size": 32, "opacity": 1 }
+
+// get_thumbnail：nodeId 可省略（默认输出节点）；id 从 get_graph 获取
+{ "nodeId": "material_output-xxxxx" }
+
+// connect：toPort 是目标输入端口名
+{ "fromNode": "perlin-xxxxx", "fromPort": "out", "toNode": "material_output-xxxxx", "toPort": "height" }
+```
+
+## 工具（31 个）
 
 | 工具 | 类型 | 作用 |
 | --- | --- | --- |
@@ -108,6 +126,8 @@ curl -s http://127.0.0.1:3000/api/mcp/call \
 | `substrate_get_thumbnail` | read | 节点的 96px PNG data URL（默认输出节点） |
 | `substrate_search_open_assets` | read | 搜索开放授权在线素材（作者/许可证/来源链接） |
 | `substrate_import_asset_url` | write | 下载在线图片到素材库并保存署名 |
+| `substrate_list_assets` | read | 列出素材库图片（id、名称、URL、尺寸、署名） |
+| `substrate_apply_asset` | write | 把素材库图片用作纹理输入或绘制层图案 |
 | `substrate_get_preview` | read | 单个 2D 通道或 3D 材质球的 PNG data URL |
 | `substrate_evaluate` | read/write | 强制求值并返回耗时/pass/缓存统计 |
 | `substrate_run_selftest` | read | GPU 管线自检（着色器、通道、法线、接缝） |

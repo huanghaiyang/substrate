@@ -20,6 +20,10 @@ export default defineComponent({
     const testing = ref(false)
     const testResult = ref('')
     const chatEl = ref(null)
+    const attachInput = ref(null)
+    const attachError = ref('')
+    const uploading = ref(false)
+    const pendingAttachments = computed(() => aiChat.draftAttachments || [])
     const form = ref({ id: '', label: '', baseUrl: 'https://api.deepseek.com', models: 'deepseek-chat', apiKey: '' })
 
     const currentModel = computed(() => models.value.find((m) => m.key === modelKey.value) || models.value[0] || null)
@@ -60,13 +64,75 @@ export default defineComponent({
       link.click()
       setTimeout(() => URL.revokeObjectURL(url), 2000)
     }
+    const TEXT_FILE = /\.(txt|md|markdown|json|csv|log|ya?ml)$/i
+    function openAttach() {
+      attachInput.value?.click()
+    }
+    async function uploadImage(file) {
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result)
+        reader.onerror = () => reject(new Error('read failed'))
+        reader.readAsDataURL(file)
+      })
+      const res = await fetch('/api/assets/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: file.name, dataUrl })
+      })
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error?.message || 'upload failed')
+      return { kind: 'image', name: data.asset.name, bytes: data.asset.bytes || file.size, assetId: data.asset.id, url: data.asset.url }
+    }
+    async function addFiles(files) {
+      attachError.value = ''
+      uploading.value = true
+      try {
+        for (const file of [...files].slice(0, 6)) {
+          if (pendingAttachments.value.length >= 6) break
+          if (/^image\/(png|jpeg|webp)$/i.test(file.type)) {
+            if (file.size > 32 * 1024 * 1024) throw new Error(t('ai.attachTooBig'))
+            aiChat.draftAttachments.push(await uploadImage(file))
+          } else if (TEXT_FILE.test(file.name) || /^text\//.test(file.type)) {
+            if (file.size > 256 * 1024) throw new Error(t('ai.attachTooBig'))
+            const text = await file.text()
+            aiChat.draftAttachments.push({ kind: 'text', name: file.name, bytes: file.size, text: text.slice(0, 60000) })
+          } else {
+            throw new Error(t('ai.attachUnsupported'))
+          }
+        }
+      } catch (e) {
+        attachError.value = String(e.message || e)
+      } finally {
+        uploading.value = false
+      }
+    }
+    function onAttachFile(event) {
+      const files = [...(event.target?.files || [])]
+      event.target.value = ''
+      addFiles(files)
+    }
+    function onDrop(event) {
+      event.preventDefault()
+      addFiles(event.dataTransfer?.files || [])
+    }
+    function onPaste(event) {
+      const files = [...(event.clipboardData?.files || [])]
+      if (files.length) {
+        event.preventDefault()
+        addFiles(files)
+      }
+    }
+    function removeAttachment(index) {
+      aiChat.draftAttachments.splice(index, 1)
+    }
     async function scrollChat() {
       await nextTick()
       if (chatEl.value) chatEl.value.scrollTop = chatEl.value.scrollHeight
     }
     async function send(text) {
       const content = String(text ?? input.value).trim()
-      if (!content || aiChat.busy) return
+      if ((!content && !pendingAttachments.value.length) || aiChat.busy) return
       if (!currentModel.value) {
         aiChat.error = t('ai.noModel')
         return
@@ -172,6 +238,15 @@ export default defineComponent({
       testing,
       testResult,
       chatEl,
+      attachInput,
+      attachError,
+      uploading,
+      pendingAttachments,
+      openAttach,
+      onAttachFile,
+      onDrop,
+      onPaste,
+      removeAttachment,
       form,
       quickPrompts,
       selectModel,
@@ -248,7 +323,12 @@ export default defineComponent({
           </div>
         </div>
         <div v-for="(m, i) in messages" :key="i" class="ai-msg" :class="m.role">
-          <div v-if="m.role === 'user'" class="ai-bubble user">{{ m.content }}</div>
+          <div v-if="m.role === 'user'" class="ai-bubble user">
+            <div>{{ m.content }}</div>
+            <div v-if="m.attachments && m.attachments.length" class="ai-msg-atts">
+              <span v-for="(att, ai) in m.attachments" :key="ai" class="ai-msg-att">{{ att.kind === 'image' ? '🖼' : '📎' }} {{ att.name }}</span>
+            </div>
+          </div>
           <div v-else class="ai-bubble assistant">
             <details v-if="m.reasoning && m.reasoning.length" class="ai-reasoning">
               <summary>{{ $t('ai.reasoning') }} · {{ m.reasoning.length }}</summary>
@@ -274,10 +354,22 @@ export default defineComponent({
       </div>
 
       <div v-if="error" class="ai-error ai-error-bar">{{ error }}</div>
-      <div class="ai-input-row">
-        <textarea v-model="input" :placeholder="$t('ai.placeholder')" rows="2" @keydown="onKeydown" :disabled="busy"></textarea>
-        <button class="btn primary" :disabled="busy || !input.trim()" @click="send()">{{ $t('ai.send') }}</button>
+      <div v-if="pendingAttachments.length || attachError" class="ai-attachments">
+        <div v-for="(att, i) in pendingAttachments" :key="i" class="ai-attachment-chip">
+          <img v-if="att.kind === 'image'" :src="att.url" :alt="att.name" />
+          <span>{{ att.kind === 'image' ? '🖼' : '📎' }} {{ att.name }}</span>
+          <button class="icon-btn" :title="$t('ai.removeAttachment')" @click="removeAttachment(i)">✕</button>
+        </div>
+        <div v-if="uploading" class="hint small">{{ $t('ai.attachUploading') }}</div>
+        <div v-if="attachError" class="ai-error">{{ attachError }}</div>
       </div>
+      <div class="ai-input-row" @dragover.prevent @drop.prevent="onDrop">
+        <button class="icon-btn ai-attach-btn" :title="$t('ai.attach')" @click="openAttach">📎</button>
+        <input ref="attachInput" type="file" multiple accept="image/png,image/jpeg,image/webp,.txt,.md,.markdown,.json,.csv,.log,.yaml,.yml" style="display: none" @change="onAttachFile" />
+        <textarea v-model="input" :placeholder="$t('ai.placeholder')" rows="2" @keydown="onKeydown" @paste="onPaste" :disabled="busy"></textarea>
+        <button class="btn primary" :disabled="busy || (!input.trim() && !pendingAttachments.length)" @click="send()">{{ $t('ai.send') }}</button>
+      </div>
+      <div class="hint small ai-foot">{{ $t('ai.attachHint') }}</div>
       <div class="hint small ai-foot">{{ $t('ai.hint') }}</div>
       <div class="hint small ai-foot">{{ $t('ai.reasoningHint') }}</div>
     </div>

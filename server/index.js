@@ -109,6 +109,22 @@ function finishMcpJob(id, envelope) {
  * Dispatch one normalized tool call to a connected browser client.
  * Resolves to the external envelope { ok, tool, data, meta } or { ok:false, error }.
  */
+function toolExample(tool) {
+  const examples = Array.isArray(tool?.examples) ? tool.examples : []
+  // Prefer an example that actually shows arguments (get_thumbnail's first example is {}).
+  return examples.find((e) => e && typeof e === 'object' && Object.keys(e).length) || examples[0] || null
+}
+
+function enrichToolError(error, tool) {
+  const e = error && typeof error === 'object' ? { ...error } : { code: ERROR_CODES.INTERNAL, message: String(error || 'Tool failed') }
+  const example = toolExample(tool)
+  if (example) {
+    e.details = { ...(e.details || {}), example, tool: tool.name }
+    if (!e.hint) e.hint = 'Expected argument shape: ' + JSON.stringify(example)
+  }
+  return e
+}
+
 function dispatchMcpTool(name, args, requestedTimeout) {
   const tool = getTool(name)
   const base = { apiVersion: API_VERSION }
@@ -123,7 +139,11 @@ function dispatchMcpTool(name, args, requestedTimeout) {
       ...base,
       ok: false,
       tool: name,
-      error: { code: e.code || ERROR_CODES.INVALID_ARGUMENT, message: e.message }
+      error: {
+        code: e.code || ERROR_CODES.INVALID_ARGUMENT,
+        message: e.message + (toolExample(tool) ? ' — example: ' + JSON.stringify(toolExample(tool)) : ''),
+        details: { tool: name, example: toolExample(tool), inputSchema: tool.inputSchema }
+      }
     })
   }
   const timeoutMs = toolTimeout(name, requestedTimeout)
@@ -141,7 +161,14 @@ function dispatchMcpTool(name, args, requestedTimeout) {
     }, timeoutMs)
     const waiter = {
       resolve: (data) =>
-        resolve({ ...base, tool: name, ok: data.ok, data: data.data, error: data.error, meta: data.meta }),
+        resolve({
+          ...base,
+          tool: name,
+          ok: data.ok,
+          data: data.data,
+          error: data.ok ? data.error : enrichToolError(data.error, tool),
+          meta: data.meta
+        }),
       timer,
       tool: name,
       clientId: null

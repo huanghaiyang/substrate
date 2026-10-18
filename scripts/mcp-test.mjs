@@ -296,6 +296,42 @@ async function main() {
   ])
   check('llm: complete tool turn preserved', complete.length === 3 && complete[0].tool_calls?.length === 2, JSON.stringify(complete))
 
+  // Calling conventions / attachment asset tools
+  const catalogNow = await httpJSON('/api/mcp/tools')
+  const toolsNow = catalogNow.body?.tools || []
+  check('mcp: 31 tools catalogued', toolsNow.length === 31, String(toolsNow.length))
+  check(
+    'mcp: tool examples provided',
+    toolsNow.find((t) => t.name === 'substrate_paint_stroke')?.examples?.length > 0 &&
+      toolsNow.find((t) => t.name === 'substrate_get_thumbnail')?.examples?.length > 0,
+    'examples missing'
+  )
+  check('mcp: list/apply asset tools', toolsNow.some((t) => t.name === 'substrate_list_assets') && toolsNow.some((t) => t.name === 'substrate_apply_asset'))
+  const badPaint = await httpJSON('/api/mcp/call', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'substrate_paint_stroke', arguments: { points: [{ x: 0.2 }] } })
+  })
+  check(
+    'mcp: invalid args include example',
+    badPaint.body?.ok === false &&
+      badPaint.body.error?.code === 'INVALID_ARGUMENT' &&
+      !!badPaint.body.error?.details?.example,
+    JSON.stringify(badPaint.body)
+  )
+  const badThumb = await httpJSON('/api/mcp/call', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'substrate_get_thumbnail', arguments: { nodeId: '__missing_node__' } })
+  })
+  check(
+    'mcp: not-found lists available nodes',
+    badThumb.body?.ok === false &&
+      badThumb.body.error?.code === 'NOT_FOUND' &&
+      Array.isArray(badThumb.body.error?.details?.availableNodes),
+    JSON.stringify(badThumb.body)
+  )
+  const assetsNow = await httpJSON('/api/mcp/call', { method: 'POST', body: JSON.stringify({ name: 'substrate_list_assets', arguments: {} }) })
+  check('mcp: list assets tool', assetsNow.body?.ok === true && Array.isArray(assetsNow.body.data?.assets))
+
   const catalog29 = await httpJSON('/api/mcp/tools')
   const toolNames = (catalog29.body?.tools || []).map((t) => t.name)
   check('mcp: online asset search tool', toolNames.includes('substrate_search_open_assets'))

@@ -4,7 +4,7 @@
 
 The studio ships with a built-in AI assistant entry in the top bar (**✦**). It can inspect and
 modify the node graph, paint strokes, evaluate, capture previews and export packages by calling
-the same 29 MCP tools that external agents use. DeepSeek is configured by default; additional
+the same 31 MCP tools that external agents use. DeepSeek is configured by default; additional
 OpenAI-compatible providers and models can be added and switched from the panel.
 
 ## Architecture
@@ -96,6 +96,19 @@ DEEPSEEK_API_KEY=sk-... npm start
   transcripts are repaired (`sanitizeToolSequence`) so the provider cannot reject the follow-up with
   *“assistant message with tool_calls must be followed by tool messages”*. If a model rejects tool
   calling entirely, the server retries once as plain chat from a clean message list.
+
+## Chat attachments
+
+The AI composer supports **images and text attachments** (📎 button, drag & drop, or paste):
+
+- **Images** (PNG/JPEG/WebP, ≤ 32 MB) are uploaded to the local **material library** and referenced
+  in the user message with their asset id/URL. The assistant can call `substrate_list_assets` and
+  `substrate_apply_asset` to use them as a Texture Input or as a paint-layer pattern (the model does
+  not receive raw pixels, so it works from the asset metadata).
+- **Text files** (.txt/.md/.markdown/.json/.csv/.log/.yaml, ≤ 256 KB) are read client-side and the
+  text is included in the message so the model can reason about it.
+- Up to 6 attachments; the uploaded asset appears in the material library immediately. Attachment
+  chips are shown in the transcript, persisted with the chat and included in the Markdown export.
 
 ## Switching models / adding providers
 

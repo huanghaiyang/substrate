@@ -559,6 +559,22 @@ export async function runUiCheck() {
       const modelOptions = qa('.ai-model option')
       r.add('ai: panel opens', !!q('.ai-panel'))
       r.add('ai: models listed', modelOptions.length >= 1, String(modelOptions.length))
+      r.add('ai: attachment button', !!q('.ai-attach-btn') && !!q('.ai-input-row input[type=file]'), 'attach control missing')
+      const attachInput = q('.ai-input-row input[type=file]')
+      if (attachInput) {
+        const textFile = new File(['attachment test content'], 'notes.txt', { type: 'text/plain' })
+        const dt = new DataTransfer()
+        dt.items.add(textFile)
+        attachInput.files = dt.files
+        attachInput.dispatchEvent(new Event('change', { bubbles: true }))
+        await sleep(500)
+        const chip = q('.ai-attachment-chip')
+        r.add('ai: text attachment chip', !!chip && /notes\.txt/.test(chip.textContent || ''), chip ? chip.textContent : 'chip missing')
+        const removeBtn = chip?.querySelector('button')
+        if (removeBtn) click(removeBtn)
+        await sleep(200)
+        r.add('ai: attachment removable', !q('.ai-attachment-chip'))
+      }
       const models = await (await fetch('/api/llm/models')).json()
       r.add('ai: model list has no key material', !/sk-[A-Za-z0-9_-]{8,}/.test(JSON.stringify(models)), 'key leaked in models response')
       r.add('ai: browser never shows key material', !/sk-[A-Za-z0-9_-]{8,}/.test(document.body.innerText), 'key visible in DOM')

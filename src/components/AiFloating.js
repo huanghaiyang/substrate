@@ -32,6 +32,7 @@ export default defineComponent({
           </details>
           <span v-if="m.pending" class="ai-thinking">{{ $t('ai.thinking') }}</span>
           <span v-else class="ai-float-text">{{ m.content || m.error || '' }}</span>
+          <span v-if="m.attachments && m.attachments.length" class="ai-float-atts">📎 {{ m.attachments.map(a => a.name).join(', ') }}</span>
           <div v-if="m.hitStepLimit" class="ai-step-limit">{{ $t('ai.stepLimit') }}</div>
           <div v-if="m.trace && m.trace.length" class="ai-float-tools">
             <span v-for="(tr, k) in m.trace.slice(-5)" :key="k" class="ai-float-tool" :class="{ ok: tr.ok, bad: !tr.ok }">

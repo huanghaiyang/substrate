@@ -46,7 +46,15 @@ Hard rules:
 - For online textures use substrate_search_open_assets / substrate_import_asset_url, and always mention the creator and license when using a result.
 - Keep answers short and practical, and reply in the language the user writes in.
 
-Rules available programmatically: ${AI_RULES.join(' | ')}`
+Rules available programmatically: ${AI_RULES.join(' | ')}
+
+Calling conventions:
+- Use the exact argument names and types from each tool schema; never rename arguments.
+- paint_stroke: points are normalised canvas coordinates [{x:0..1,y:0..1}] (NOT pixel coordinates); at least one point; optional nodeId/brushId/color/size/opacity.
+- get_thumbnail: nodeId is optional — omit it for the output node; find valid node ids with substrate_get_graph. If NOT_FOUND, refetch the graph and use a current node id.
+- get_preview: view is "2d" or "3d"; channel is one of basecolor/height/normal/roughness/metallic/ao/emissive/opacity.
+- connect: {fromNode, fromPort:"out", toNode, toPort}; toPort is the target input name (basecolor, height, a, b, ...).
+- If a tool returns INVALID_ARGUMENT or NOT_FOUND, read the error details/example, re-check ids with substrate_get_graph, fix the arguments and retry once; never repeat the same failing arguments.`
 
 function sanitizeText(text) {
   let out = String(text == null ? '' : text)
@@ -183,7 +191,13 @@ function resolveModel(modelKey) {
 function openAiTools() {
   return TOOLS.map((t) => ({
     type: 'function',
-    function: { name: t.name, description: t.description, parameters: t.inputSchema || { type: 'object', properties: {} } }
+    function: {
+      name: t.name,
+      description:
+        t.description +
+        (Array.isArray(t.examples) && t.examples.length ? '\nExamples: ' + JSON.stringify(t.examples.slice(0, 2)) : ''),
+      parameters: t.inputSchema || { type: 'object', properties: {} }
+    }
   }))
 }
 
@@ -254,7 +268,7 @@ function normalizeMessages(input) {
     if (!m || typeof m !== 'object') continue
     const role = m.role === 'assistant' ? 'assistant' : m.role === 'user' ? 'user' : null
     if (!role) continue
-    const content = String(m.content || '').slice(0, 6000)
+    const content = String(m.content || '').slice(0, 16000)
     if (content) out.push({ role, content })
   }
   return out

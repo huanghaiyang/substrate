@@ -18,6 +18,7 @@ import {
   setNodePosition,
   addConnection,
   removeConnection,
+  setNodeImage,
   commitStroke,
   clearPaint,
   requestEval,
@@ -130,20 +131,24 @@ function sanitizeGraph() {
   }
 }
 
+function availableNodeIds() {
+  return state.graph.nodes.slice(0, 80).map((n) => ({ id: n.id, type: n.type }))
+}
+
 function requireNode(nodeId) {
   const node = nodeById(nodeId)
-  if (!node) throw new ToolError(ERROR_CODES.NOT_FOUND, `Node not found: ${nodeId}`)
+  if (!node) throw new ToolError(ERROR_CODES.NOT_FOUND, `Node not found: ${nodeId}`, { availableNodes: availableNodeIds() })
   return node
 }
 
 function findPaintNode(nodeId) {
   if (nodeId) {
     const node = requireNode(nodeId)
-    if (node.type !== 'paint') throw new ToolError(ERROR_CODES.INVALID_ARGUMENT, `Node ${nodeId} is not a paint layer`)
+    if (node.type !== 'paint') throw new ToolError(ERROR_CODES.INVALID_ARGUMENT, `Node ${nodeId} is not a paint layer`, { availableNodes: availableNodeIds() })
     return node
   }
   const node = state.graph.nodes.find((n) => n.type === 'paint')
-  if (!node) throw new ToolError(ERROR_CODES.NOT_FOUND, 'The current material has no paint layer')
+  if (!node) throw new ToolError(ERROR_CODES.NOT_FOUND, 'The current material has no paint layer — add one with substrate_add_node {type:"paint"} first')
   return node
 }
 
@@ -190,6 +195,50 @@ const handlers = {
     const data = await res.json()
     if (!data?.ok) throw new ToolError(ERROR_CODES.INTERNAL, data?.error?.message || 'Asset import failed')
     return { asset: data.asset }
+  },
+
+  async substrate_list_assets() {
+    const data = await (await fetch('/api/assets')).json()
+    if (!data?.ok) throw new ToolError(ERROR_CODES.INTERNAL, 'Could not list material assets')
+    return { assets: data.assets || [] }
+  },
+
+  async substrate_apply_asset(args) {
+    const data = await (await fetch('/api/assets')).json()
+    const assets = data?.assets || []
+    const wanted = String(args.assetId || args.name || '').trim()
+    const asset =
+      assets.find((a) => a.id === args.assetId) ||
+      assets.find((a) => a.name === args.name) ||
+      assets.find((a) => a.name.toLowerCase() === wanted.toLowerCase())
+    if (!asset) {
+      throw new ToolError(ERROR_CODES.NOT_FOUND, 'Asset not found', {
+        availableAssets: assets.map((a) => ({ id: a.id, name: a.name })).slice(0, 80)
+      })
+    }
+    const target = args.target === 'paint' ? 'paint' : 'texture'
+    if (target === 'paint') {
+      const paintNode = state.graph.nodes.find((n) => n.type === 'paint')
+      if (!paintNode) throw new ToolError(ERROR_CODES.NOT_FOUND, 'The current material has no paint layer')
+      // commitStroke() preloads/decodes the image URL asynchronously and re-rasterises when ready
+      commitStroke(paintNode.id, { pattern: asset.url, patternScale: 1, opacity: 1 })
+      const evalInfo = await evaluate()
+      return { target, nodeId: paintNode.id, asset: { id: asset.id, name: asset.name, url: asset.url }, eval: evalInfo }
+    }
+    let node = state.graph.nodes.find((n) => n.type === 'image_input')
+    if (!node) node = addNode('image_input', { x: 120, y: 120 })
+    const res = await fetch(asset.url)
+    if (!res.ok) throw new ToolError(ERROR_CODES.INTERNAL, 'Could not download asset file')
+    const blob = await res.blob()
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result)
+      reader.onerror = () => reject(new Error('read failed'))
+      reader.readAsDataURL(blob)
+    })
+    setNodeImage(node.id, dataUrl, asset.name)
+    const evalInfo = await evaluate()
+    return { target, nodeId: node.id, asset: { id: asset.id, name: asset.name, url: asset.url }, eval: evalInfo }
   },
 
   async substrate_get_thumbnail(args) {
@@ -458,18 +507,37 @@ const handlers = {
 
 export const HANDLER_NAMES = Object.keys(handlers)
 
+function firstExample(tool) {
+  const examples = Array.isArray(tool?.examples) ? tool.examples : []
+  return examples.find((e) => e && typeof e === 'object' && Object.keys(e).length) || examples[0] || undefined
+}
+
 export async function executeTool(name, args = {}) {
   const tool = getTool(name)
   if (!tool) throw new ToolError(ERROR_CODES.UNKNOWN_TOOL, `Unknown tool: ${name}`)
   if (typeof handlers[name] !== 'function') {
     throw new ToolError(ERROR_CODES.UNKNOWN_TOOL, `No handler registered for: ${name}`)
   }
-  const validated = validateArguments(name, args || {})
+  let validated
+  try {
+    validated = validateArguments(name, args || {})
+  } catch (e) {
+    throw new ToolError(e.code || ERROR_CODES.INVALID_ARGUMENT, e.message, {
+      tool: name,
+      example: firstExample(tool),
+      inputSchema: tool.inputSchema
+    })
+  }
   try {
     const data = await handlers[name](validated)
     return data
   } catch (e) {
-    if (e instanceof ToolError) throw e
+    if (e instanceof ToolError) {
+      if (!e.details) e.details = {}
+      if (!e.details.example) e.details.example = firstExample(tool)
+      if (e.code === ERROR_CODES.NOT_FOUND && !e.details.availableNodes) e.details.availableNodes = availableNodeIds()
+      throw e
+    }
     throw new ToolError(ERROR_CODES.INTERNAL, e?.message || String(e), { stack: e?.stack })
   }
 }

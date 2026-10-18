@@ -23,6 +23,7 @@ function readSaved() {
         content: String(m.content || ''),
         trace: Array.isArray(m.trace) ? m.trace.slice(0, 24) : undefined,
         reasoning: Array.isArray(m.reasoning) ? m.reasoning.slice(0, 24) : undefined,
+        attachments: Array.isArray(m.attachments) ? m.attachments : undefined,
         error: m.error ? String(m.error) : undefined,
         pending: false,
         interrupted: !!m.pending || !!m.interrupted,
@@ -38,8 +39,31 @@ function readSaved() {
 
 const saved = typeof localStorage !== 'undefined' ? readSaved() : { messages: [], modelKey: '' }
 
+export function formatAttachmentForModel(att) {
+  if (!att) return ''
+  if (att.kind === 'image') {
+    return (
+      '[Image attachment "' +
+      att.name +
+      '" is stored in the material library' +
+      (att.assetId ? ' (assetId: ' + att.assetId + ')' : '') +
+      (att.url ? ', url: ' + att.url : '') +
+      '. Use substrate_list_assets / substrate_apply_asset to use it.]'
+    )
+  }
+  const text = String(att.text || '').slice(0, 6000)
+  return '[Text attachment "' + att.name + '" (' + (att.bytes || 0) + ' bytes)]\n' + text
+}
+
+function messageContentForModel(m) {
+  const base = String(m.content || '')
+  if (!Array.isArray(m.attachments) || !m.attachments.length) return base
+  return base + (base ? '\n\n' : '') + m.attachments.map(formatAttachmentForModel).join('\n\n')
+}
+
 export const aiChat = reactive({
   messages: saved.messages,
+  draftAttachments: [],
   modelKey: saved.modelKey,
   busy: false,
   error: '',
@@ -66,6 +90,7 @@ export function persistChatNow() {
       content: m.content,
       trace: m.trace,
       reasoning: m.reasoning,
+      attachments: m.attachments,
       error: m.error,
       model: m.model,
       at: m.at,
@@ -89,6 +114,7 @@ export function persistChat() {
         content: m.content,
         trace: m.trace,
         reasoning: m.reasoning,
+        attachments: m.attachments,
         error: m.error,
         model: m.model,
         at: m.at,
@@ -143,10 +169,12 @@ function scheduleFloatingHide() {
 }
 
 export async function sendChat(text) {
-  const content = String(text || '').trim()
-  if (!content || aiChat.busy) return false
+  const attachments = (aiChat.draftAttachments || []).slice(0, 6).map((a) => ({ ...a }))
+  const content = String(text || '').trim() || (attachments.length ? '请查看附件。' : '')
+  if ((!content && !attachments.length) || aiChat.busy) return false
   aiChat.error = ''
-  aiChat.messages.push({ role: 'user', content, at: Date.now() })
+  aiChat.draftAttachments.splice(0, aiChat.draftAttachments.length)
+  aiChat.messages.push({ role: 'user', content, attachments: attachments.length ? attachments : undefined, at: Date.now() })
   const pending = { role: 'assistant', content: '', pending: true, trace: [], at: Date.now() }
   aiChat.messages.push(pending)
   aiChat.busy = true
@@ -155,9 +183,9 @@ export async function sendChat(text) {
   persistChat()
   try {
     const history = aiChat.messages
-      .filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.pending && m.content)
+      .filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.pending && (m.content || m.attachments?.length))
       .slice(-12)
-      .map((m) => ({ role: m.role, content: m.content }))
+      .map((m) => ({ role: m.role, content: m.role === 'user' ? messageContentForModel(m) : m.content }))
     const result = await chatWithAssistant({ modelKey: aiChat.modelKey, messages: history, maxSteps: 20, showThinking: aiChat.showThinking })
     const idx = aiChat.messages.indexOf(pending)
     const final = {
@@ -191,6 +219,7 @@ export async function sendChat(text) {
 
 export function clearChat() {
   aiChat.messages.splice(0, aiChat.messages.length)
+  if (Array.isArray(aiChat.draftAttachments)) aiChat.draftAttachments.splice(0, aiChat.draftAttachments.length)
   aiChat.error = ''
   aiChat.floatingVisible = false
   persistChat()
@@ -210,6 +239,13 @@ export function exportChatMarkdown() {
     lines.push('## ' + (m.role === 'user' ? 'User' : 'Assistant') + ' · ' + new Date(m.at || Date.now()).toISOString())
     if (m.content) lines.push('', m.content)
     if (m.error) lines.push('', '> Error: ' + m.error)
+    if (m.attachments && m.attachments.length) {
+      lines.push('', '**Attachments**')
+      for (const att of m.attachments) {
+        lines.push('- ' + (att.kind === 'image' ? 'image' : 'file') + ': ' + att.name + (att.url ? ' — ' + att.url : ''))
+        if (att.kind === 'text' && att.text) lines.push('', '  ' + String(att.text).slice(0, 4000).replace(/\n/g, '\n  '))
+      }
+    }
     if (m.reasoning && m.reasoning.length) {
       lines.push('', '**Thinking / plan**')
       for (const r of m.reasoning) lines.push('- [' + (r.kind || 'thought') + ' · step ' + (r.step || '?') + '] ' + r.text)
