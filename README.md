@@ -702,3 +702,23 @@ docs/screenshots/          documentation images
 ## License
 
 MIT — use it, modify it, ship it.
+
+---
+
+## Built-in manual & glossary
+
+
+![Built-in manual and glossary](docs/screenshots/14-builtin-manual-zh.png)
+The **?** button in the top bar opens an in-app manual: 13 task-oriented chapters (quick start, graph editing,
+parameters, preview, paint studio, material library, export presets, projects, AI/MCP, shortcuts,
+troubleshooting) plus a **40-term technical glossary**.
+
+- Open **Manual** to walk a task; the left column lists the chapters, the search box filters across headings,
+  body text and tables.
+- Open **Technical glossary** for PBR / data-map / noise / pipeline / export terms. Each entry gives a general
+  definition and a second line, *“In this app:”*, pointing at the exact node, parameter or channel where you meet it.
+- Terms are tag-filtered (Colour, Data maps, Nodes & noise, GPU pipeline, Export & packaging) and searchable;
+  searching the manual also offers a jump into matching glossary terms.
+- Content is bilingual (`EN` / `中文`) and follows the UI language. It lives in
+  [`src/manual.js`](src/manual.js) — one `{en, zh}` pair per section/term — so the manual is versioned with the code
+  and can be extended without touching translation tables.

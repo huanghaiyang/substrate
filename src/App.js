@@ -32,6 +32,7 @@ import {
 import { buildPreview } from './engine/preview.js'
 import { RESOLUTIONS, PROXIES } from './ui/theme.js'
 import { locale, locales, setLocale, t, trText } from './i18n/index.js'
+import { MANUAL_SECTIONS, MANUAL_TAGS, GLOSSARY } from './manual.js'
 
 export default defineComponent({
   name: 'App',
@@ -51,6 +52,63 @@ export default defineComponent({
     const toast = ref({ msg: '', type: '' })
     let toastTimer = null
     let previewTimer = null
+
+    // Built-in manual / glossary panel state (content lives in src/manual.js)
+    const helpTab = ref('manual')
+    const helpQuery = ref('')
+    const helpSection = ref(MANUAL_SECTIONS[0].id)
+    const helpTag = ref('all')
+
+    /** current manual language — reactive through the global locale ref */
+    const helpLang = computed(() => (locale.value === 'zh' ? 'zh' : 'en'))
+    const manualSections = computed(() => MANUAL_SECTIONS)
+    const manualTags = computed(() => MANUAL_TAGS)
+
+    const matchText = (value, q) => !q || String(value).toLowerCase().includes(q)
+
+    /** section whose body is shown: search results, or the single selected section */
+    const visibleSections = computed(() => {
+      const lang = helpLang.value
+      const q = helpQuery.value.trim().toLowerCase()
+      if (!q) return MANUAL_SECTIONS.filter((s) => s.id === helpSection.value)
+      return MANUAL_SECTIONS.filter((s) => {
+        const hay = [s.title[lang], ...s.blocks.flatMap((b) => (b.type === 'p' ? [b[lang]] : b.type === 'table' ? b.rows.flat().map((c) => c[lang]) : (b[lang] || [])))].join(' ')
+        return matchText(hay, q)
+      })
+    })
+
+    const visibleGlossary = computed(() => {
+      const lang = helpLang.value
+      const q = helpQuery.value.trim().toLowerCase()
+      return GLOSSARY.filter((g) => helpTag.value === 'all' || g.tag === helpTag.value).filter(
+        (g) => !q || matchText(g.term[lang] + ' ' + g.desc[lang] + ' ' + g.app[lang], q)
+      )
+    })
+
+    /** cross-search: how many glossary terms match whatever is typed in the manual tab */
+    const glossaryMatches = computed(() => {
+      const q = helpQuery.value.trim().toLowerCase()
+      if (!q) return 0
+      const lang = helpLang.value
+      return GLOSSARY.filter((g) => matchText(g.term[lang] + ' ' + g.desc[lang] + ' ' + g.app[lang], q)).length
+    })
+
+    const helpCount = computed(() =>
+      helpTab.value === 'manual'
+        ? t('help.sectionCount', { n: helpQuery.value.trim() ? visibleSections.value.length : MANUAL_SECTIONS.length })
+        : t('help.termCount', { n: visibleGlossary.value.length })
+    )
+
+    /** tiny inline formatter for the manual text: **bold**, `code`, and newlines */
+    function rich(text) {
+      const esc = String(text == null ? '' : text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+      return esc
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+    }
 
     function notify(msg, type = '') {
       toast.value = { msg, type }
@@ -256,6 +314,18 @@ export default defineComponent({
       showProjects,
       showDemos,
       showHelp,
+      helpTab,
+      helpQuery,
+      helpSection,
+      helpTag,
+      helpLang,
+      manualSections,
+      manualTags,
+      visibleSections,
+      visibleGlossary,
+      helpCount,
+      glossaryMatches,
+      rich,
       aiChat,
       expandAi,
       toggleAi,
@@ -405,37 +475,100 @@ export default defineComponent({
       </div>
 
       <div v-if="showHelp" class="modal-backdrop" @click.self="showHelp = false">
-        <div class="modal">
+        <div class="modal wide manual-modal">
           <div class="modal-head">
             <div class="modal-title">{{ $t('help.title') }}</div>
+            <div class="manual-tabs">
+              <button class="manual-tab" :class="{ on: helpTab === 'manual' }" @click="helpTab = 'manual'">{{ $t('help.tabManual') }}</button>
+              <button class="manual-tab" :class="{ on: helpTab === 'glossary' }" @click="helpTab = 'glossary'">{{ $t('help.tabGlossary') }}</button>
+            </div>
             <button class="icon-btn" @click="showHelp = false">✕</button>
           </div>
-          <div class="modal-body">
-            <div class="side-title">{{ $t('help.graphTitle') }}</div>
-            <div class="hint" style="line-height: 1.9">{{ $t('help.graphBody') }}</div>
-            <div class="side-title">{{ $t('help.shortcutTitle') }}</div>
-            <div class="hint" style="line-height: 1.9">{{ $t('help.shortcutBody') }}</div>
-            <div class="side-title">{{ $t('help.paintTitle') }}</div>
-            <div class="hint" style="line-height: 1.9">{{ $t('help.paintBody') }}</div>
-            <div class="side-title">{{ $t('help.stdTitle') }}</div>
-            <div class="hint" style="line-height: 1.9">{{ $t('help.stdBody') }}</div>
-            <div class="side-title">{{ $t('help.docsTitle') }}</div>
-            <div class="hint" style="line-height: 1.9">
-              {{ $t('help.docsBody') }}
+
+          <div class="manual-toolbar">
+            <input
+              class="input manual-search"
+              v-model="helpQuery"
+              :placeholder="helpTab === 'manual' ? $t('help.search') : $t('help.searchGlossary')"
+            />
+            <select v-if="helpTab === 'glossary'" class="select manual-tag" v-model="helpTag">
+              <option v-for="tg in manualTags" :key="tg.id" :value="tg.id">{{ tg.label[helpLang] }}</option>
+            </select>
+            <span class="hint small manual-count">{{ helpCount }}</span>
+            <span class="hint small manual-docs">
               <a href="/README.zh-CN.md" target="_blank" rel="noopener">中文 README</a> ·
-              <a href="/docs/zh/README.md" target="_blank" rel="noopener">中文文档索引</a> ·
+              <a href="/docs/zh/README.md" target="_blank" rel="noopener">中文文档</a> ·
               <a href="/docs/mcp.md" target="_blank" rel="noopener">English docs</a>
-            </div>
-            <div v-if="mcpCheck" class="selfcheck-box" :class="mcpCheck.ok ? 'ok' : 'bad'">
-              <div>{{ mcpCheck.ok ? $t('ai.selfcheckPass') : $t('ai.selfcheckFail') }} · {{ mcpCheck.totals.passed }}/{{ mcpCheck.totals.passed + mcpCheck.totals.failed }}</div>
-              <div v-for="c in mcpCheck.checks.filter(c => !c.ok).slice(0, 6)" :key="c.name" class="hint small">✕ {{ c.name }} {{ c.info }}</div>
+            </span>
+          </div>
+
+          <div class="manual-body" :class="{ 'manual-body-single': helpTab !== 'manual' }">
+            <nav v-if="helpTab === 'manual'" class="manual-nav">
+              <button
+                v-for="s in manualSections"
+                :key="s.id"
+                class="manual-nav-item"
+                :class="{ on: s.id === helpSection && !helpQuery.trim() }"
+                @click="helpSection = s.id; helpQuery = ''"
+              >
+                {{ s.title[helpLang] }}
+              </button>
+            </nav>
+            <div class="manual-pages">
+              <template v-if="helpTab === 'manual'">
+                <article v-for="s in visibleSections" :key="s.id" class="manual-page">
+                  <h3 class="manual-h">{{ s.title[helpLang] }}</h3>
+                  <template v-for="(b, bi) in s.blocks" :key="bi">
+                    <p v-if="b.type === 'p'" class="manual-p" v-html="rich(b[helpLang])"></p>
+                    <ul v-else-if="b.type === 'ul' || b.type === 'steps'" class="manual-ul" :class="{ 'manual-steps': b.type === 'steps' }">
+                      <li v-for="(it, ii) in b[helpLang]" :key="ii" v-html="rich(it)"></li>
+                    </ul>
+                    <table v-else-if="b.type === 'table'" class="manual-table">
+                      <thead>
+                        <tr><th v-for="(h, hi) in b.head" :key="hi">{{ h[helpLang] }}</th></tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="(row, ri) in b.rows" :key="ri">
+                          <td v-for="(cell, ci) in row" :key="ci" v-html="rich(cell[helpLang])"></td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </template>
+                </article>
+              </template>
+              <template v-else>
+                <article v-for="g in visibleGlossary" :key="g.id" class="gloss-item">
+                  <div class="gloss-head">
+                    <span class="gloss-term">{{ g.term[helpLang] }}</span>
+                    <span class="gloss-tag">{{ (manualTags.find(t => t.id === g.tag) || {}).label?.[helpLang] || g.tag }}</span>
+                  </div>
+                  <p class="manual-p" v-html="rich(g.desc[helpLang])"></p>
+                  <p class="manual-p gloss-app"><strong>{{ $t('help.appliesHere') }}</strong> <span v-html="rich(g.app[helpLang])"></span></p>
+                </article>
+              </template>
+              <div v-if="helpTab === 'manual' ? !visibleSections.length : !visibleGlossary.length" class="hint manual-empty">
+                {{ $t('help.noResult') }}
+              </div>
+              <button
+                v-if="helpTab === 'manual' && helpQuery.trim() && glossaryMatches"
+                class="btn manual-jump"
+                @click="helpTab = 'glossary'; helpTag = 'all'"
+              >
+                {{ $t('help.glossaryHint', { n: glossaryMatches }) }}
+              </button>
             </div>
           </div>
+
+          <div v-if="mcpCheck" class="manual-selfcheck selfcheck-box" :class="mcpCheck.ok ? 'ok' : 'bad'">
+            <div>{{ mcpCheck.ok ? $t('ai.selfcheckPass') : $t('ai.selfcheckFail') }} · {{ mcpCheck.totals.passed }}/{{ mcpCheck.totals.passed + mcpCheck.totals.failed }}</div>
+            <div v-for="c in mcpCheck.checks.filter(c => !c.ok).slice(0, 6)" :key="c.name" class="hint small">✕ {{ c.name }} {{ c.info }}</div>
+          </div>
+
           <div class="modal-foot">
             <span class="hint">{{ $t('help.foot') }}</span>
             <div style="display: flex; gap: 8px">
               <button class="btn" @click="runSelfTest">{{ $t('audit.run') }}</button>
-        <button class="btn" @click="runMcpCheck" :disabled="mcpChecking">{{ $t('ai.selfcheck') }}</button>
+              <button class="btn" @click="runMcpCheck" :disabled="mcpChecking">{{ $t('ai.selfcheck') }}</button>
               <button class="btn" @click="showHelp = false">{{ $t('help.ok') }}</button>
             </div>
           </div>
