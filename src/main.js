@@ -24,6 +24,10 @@ function initEngine() {
     }
     window.__SUBSTRATE__ = { engine, state, ready: true }
     console.log('[substrate] engine ready:', state.engineInfo)
+    // external MCP gateway bridge (inert when ?mcp=off)
+    import('./engine/mcp-bridge.js')
+      .then((mod) => mod.startMcpBridge())
+      .catch((e) => console.warn('[substrate] MCP bridge unavailable', e))
     maybeSelfTest(engine)
     maybeAudit(engine)
   } catch (e) {

@@ -1,0 +1,9 @@
+# Codex MCP server configuration (merge into ~/.codex/config.toml)
+# Adjust the absolute path and port to match your checkout.
+
+[mcp_servers.substrate]
+command = "node"
+args = ["/absolute/path/to/texture-designer/mcp/server.mjs"]
+env = { SUBSTRATE_URL = "http://127.0.0.1:3000" }
+startup_timeout_sec = 20
+tool_timeout_sec = 300

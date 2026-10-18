@@ -13,7 +13,9 @@
     "cdp": "node scripts/cdp.mjs",
     "audit": "node scripts/cdp.mjs audit all",
     "audit:quick": "node scripts/cdp.mjs audit schema",
-    "audit:ui": "node scripts/cdp.mjs audit ui"
+    "audit:ui": "node scripts/cdp.mjs audit ui",
+    "mcp": "node mcp/server.mjs",
+    "test:mcp": "node scripts/mcp-test.mjs"
   },
   "dependencies": {
     "three": "^0.169.0",

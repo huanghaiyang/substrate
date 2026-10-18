@@ -31,6 +31,8 @@ paint on them by hand, preview the result as a lit 3D material, and export an in
 - **Industry-standard export** — five presets (glTF/three.js, Unreal, Unity HDRP, V-Ray/Arnold/generic,
   Substance Painter), correct sRGB vs linear handling, ORM / Mask Map packing, OpenGL↔DirectX normal flipping,
   16-bit height, adaptive-filter PNG encoder, `manifest.json` + `README.md` + zip package written by the Node server.
+- **MCP / agent integration** — a normalized external MCP gateway (stdio + HTTP JSON-RPC) with 27 tools to
+  inspect and mutate the graph, paint, evaluate, capture previews and export; plus in-page WebMCP tools.
 - **Verified pipeline** — a built-in self-test audits every GLSL program, evaluates the graph, validates normals
   and seamless tiling, and exports a package; an independent Node verifier decodes the PNGs, validates CRCs,
   chunk colour spaces, bit depths, zip integrity and tile seams.
@@ -170,12 +172,16 @@ per-file downloads, the zip, and copyable manifest/README text.
 │  engine/selftest.js   shader audit + graph/normal/seam validation + export test            │
 │  engine/paint.js       Catmull-Rom → cubic Bézier stroke smoothing + brush stamps + pen taper          │
 │  engine/brushes.js     built-in brush presets + preview thumbnails                        │
+│  engine/mcp-catalog.js shared MCP tool catalog + JSON-Schema validation                     │
+│  engine/mcp-commands.js browser handlers for the external tool catalog                     │
+│  engine/mcp-bridge.js  SSE bridge to the Node gateway (window.__MCP__)                      │
 │  engine/webmcp.js     WebMCP tool surface for agent-driven verification                    │
 │  i18n/                bilingual UI catalogue + localized node/parameter definitions         │
 └───────────────────────────────────────────┬───────────────────────────────────────────────┘
                                             │ /api (JSON, base64 PNG payloads)
 ┌───────────────────────────────────────────▼───────────────────────────────────────────────┐
 │  Node.js server (node:http, zero dependencies)                                            │
+│   MCP gateway: SSE bridge, tool dispatch, POST /mcp JSON-RPC, /api/mcp/call                │
 │   static app + /vendor ESM mapping · project save/load · export writer · zip (store/deflate)│
 │   debug report sink for automated self-tests                                               │
 └───────────────────────────────────────────────────────────────────────────────────────────┘
@@ -281,6 +287,44 @@ session is also autosaved to `localStorage` so a refresh restores your work.
 
 ---
 
+## MCP integration (external agents)
+
+Substrate ships a dependency-free **Model Context Protocol** gateway so agents can drive the studio
+through one normalized interface. The catalog is defined once in
+[`src/engine/mcp-catalog.js`](src/engine/mcp-catalog.js) and shared by the browser, the HTTP gateway
+and the stdio server.
+
+```
+MCP client ──stdio──▶ mcp/server.mjs ──HTTP──▶ server/index.js ──SSE──▶ browser tab (WebGL)
+```
+
+- **Transports** — stdio (`node mcp/server.mjs`, configs in [`mcp/`](mcp/)), HTTP JSON-RPC at
+  `POST /mcp`, and a plain JSON endpoint at `POST /api/mcp/call`. Discovery: `GET /api/mcp/tools`.
+- **27 tools** — `substrate_get_state`, `substrate_get_graph`, `substrate_add_node`,
+  `substrate_set_param`, `substrate_connect`, `substrate_paint_stroke`, `substrate_get_preview`
+  (2D channel / 3D ball PNG), `substrate_export`, `substrate_run_audit`, project save/load, …
+- **Normalized contract** — stable `substrate_<verb>_<noun>` names, JSON-Schema validated arguments,
+  `readOnlyHint`/`destructiveHint`/`idempotentHint` annotations, per-tool timeouts, `apiVersion`,
+  and a single envelope: `{ ok, apiVersion, tool, data, meta }` or `{ ok:false, error:{ code, message } }`
+  with codes such as `INVALID_ARGUMENT`, `NOT_FOUND`, `APP_NOT_CONNECTED`, `TIMEOUT`, `EXPORT_FAILED`.
+- **Requirement** — the studio must be running and a browser tab open (the graph is evaluated on the
+  GPU there). Set `MCP_TOKEN` to require a bearer token on external endpoints.
+
+```json
+{
+  "mcpServers": {
+    "substrate": {
+      "command": "node",
+      "args": ["/absolute/path/to/texture-designer/mcp/server.mjs"],
+      "env": { "SUBSTRATE_URL": "http://127.0.0.1:3000" }
+    }
+  }
+}
+```
+
+Full reference, curl examples, auth and limitations: [`docs/mcp.md`](docs/mcp.md).
+Test it with `npm run test:mcp` (needs the app tab open).
+
 ## Keyboard shortcuts
 
 | Keys | Action |
@@ -332,6 +376,7 @@ You can also run the same test through the page's **WebMCP** tools (registered o
 | `?selftest=1[&export=1][&res=512]` | Run the automated self-test (and export) on load. |
 | `?redact=1` | Hide the GPU/driver fingerprint in the status bar (used for documentation screenshots). |
 | `?audit=1[&auditsection=render]` | Run the full self-check suite on load (all sections or one). |
+| `?mcp=off` | Disable the MCP bridge for this tab (external tool calls then report `APP_NOT_CONNECTED`). |
 
 ### 2. Independent package verifier (Node)
 
@@ -374,7 +419,21 @@ It prints a per-section PASS/FAIL summary and returns a non-zero exit code on fa
 `?audit=1` (all sections), `?audit=1&auditsection=render` or `?audit=1&auditsection=ui`, with the report available as `window.__AUDIT__`
 and POSTed to `/api/debug/report` for CI.
 
-### 4. Browser automation helper
+### 4. MCP contract test
+
+```bash
+npm run test:mcp
+```
+
+End-to-end validation of the external interface: gateway availability/catalog, stdio JSON-RPC logic
+(initialize / tools/list / tools/call / ping), graph reads and mutations, evaluation, thumbnails and
+2D/3D preview capture, painting, project save/load/delete, export + zip, normalized error envelopes,
+HTTP JSON-RPC (`/mcp`) and the plain JSON endpoint. It prints a PASS/FAIL summary, cleans up the test
+project/export and restores the demo material. (The stdio line framing itself is verified by piping an
+`initialize` request into `node mcp/server.mjs`; the automated test skips spawning where the sandbox
+forbids child processes.)
+
+### 5. Browser automation helper
 
 `scripts/cdp.mjs` connects to Chrome's DevTools Protocol via Node's native WebSocket — useful for
 evaluating expressions in the running app, capturing screenshots to files and collecting console logs:
@@ -423,6 +482,11 @@ server/index.js            zero-dependency Node server (static, API, zip writer)
 scripts/build.mjs          copies app + vendor ESM into dist/
 scripts/verify-export.mjs  independent material-package verifier
 scripts/cdp.mjs            Chrome DevTools Protocol helper (eval/screenshot/logs)
+scripts/mcp-test.mjs       end-to-end MCP contract test
+mcp/server.mjs             stdio MCP server (translates JSON-RPC to the HTTP gateway)
+mcp/config.claude.json     Claude Desktop/Code configuration example
+mcp/config.codex.toml      Codex configuration example
+docs/mcp.md                MCP integration reference
 src/main.js                boot: mount app, create engine, restore session, self-test hook
 src/App.js                 layout, toolbar, dialogs, shortcuts, preview scheduling
 src/styles.css             dark studio theme
@@ -442,6 +506,9 @@ src/engine/selftest.js     automated pipeline validation
 src/engine/paint.js        stroke rasteriser: Catmull-Rom → cubic Bézier smoothing, brush stamps, pen taper
 src/engine/brushes.js      16 built-in brush presets (basic + nature motifs) + preview thumbnails
 src/engine/webmcp.js       WebMCP tool registration
+src/engine/mcp-catalog.js  shared MCP tool catalog + schema validation
+src/engine/mcp-commands.js browser handlers for external tools
+src/engine/mcp-bridge.js   SSE bridge between the page and the MCP gateway
 src/engine/audit.js        browser-side full audit: nodes, values, actions, DOM, i18n
 src/engine/ui-check.js     deep toolbar / right panel / paint interaction checks
 exports/                   generated material packages (git-ignored; produced by Export)
@@ -451,6 +518,9 @@ docs/screenshots/          documentation images
 ---
 
 ## Limitations & possible next steps
+
+- **MCP calls need an open studio tab.** The gateway relays tool calls to the WebGL app; without a connected tab
+  tools report `APP_NOT_CONNECTED`. Start with `npm start` and keep the page open (`MCP_TOKEN` optionally requires auth).
 
 - **Export file names are ASCII.** Material names are sanitized for portable file names (non-ASCII characters are
   dropped), so a Chinese material name exports as `Material_BaseColor.png`; the UI labels themselves are localized.

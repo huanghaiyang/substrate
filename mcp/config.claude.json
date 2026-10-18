@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "substrate": {
+      "command": "node",
+      "args": ["/absolute/path/to/texture-designer/mcp/server.mjs"],
+      "env": {
+        "SUBSTRATE_URL": "http://127.0.0.1:3000"
+      }
+    }
+  }
+}

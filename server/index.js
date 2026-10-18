@@ -6,6 +6,15 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { deflateRawSync } from 'node:zlib'
+import {
+  API_VERSION,
+  PROTOCOL_VERSION,
+  ERROR_CODES,
+  publicCatalog,
+  getTool,
+  validateArguments,
+  toolTimeout
+} from '../src/engine/mcp-catalog.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const USE_DIST = process.argv.includes('--dist')
@@ -17,6 +26,282 @@ const DEBUG_DIR = path.join(ROOT, 'debug')
 const BODY_LIMIT = 320 * 1024 * 1024
 
 for (const dir of [PROJECTS_DIR, EXPORTS_DIR, DEBUG_DIR]) mkdirSync(dir, { recursive: true })
+
+// ------------------------------------------------------------------- MCP gateway
+// The browser page keeps one SSE connection per tab. External clients (stdio MCP server or
+// HTTP JSON-RPC /mcp) enqueue tool calls; the page executes them and posts the result back.
+const MCP_TOKEN = String(process.env.MCP_TOKEN || '')
+const mcpClients = new Map() // clientId -> { res, busy, connectedAt, heartbeat }
+const mcpQueue = []
+const mcpJobs = new Map() // jobId -> { resolve, timer, tool, clientId }
+let mcpJobSeq = 0
+
+function mcpAuthorized(req, url) {
+  if (!MCP_TOKEN) return true
+  const header = String(req.headers.authorization || '')
+  const token = String(req.headers['x-mcp-token'] || '')
+  const queryToken = url ? String(url.searchParams.get('token') || '') : ''
+  return header === 'Bearer ' + MCP_TOKEN || token === MCP_TOKEN || queryToken === MCP_TOKEN
+}
+
+function mcpUnauthorized(res) {
+  return sendJSON(res, 401, {
+    ok: false,
+    apiVersion: API_VERSION,
+    error: { code: ERROR_CODES.UNAUTHORIZED, message: 'Missing or invalid MCP token' }
+  })
+}
+
+function mcpClientInfo() {
+  return [...mcpClients.entries()].map(([id, c]) => ({ id, busy: c.busy, connectedAt: c.connectedAt }))
+}
+
+function pumpMcpQueue() {
+  if (!mcpQueue.length) return
+  for (const [id, client] of mcpClients) {
+    if (client.busy) continue
+    const job = mcpQueue.shift()
+    if (!job) return
+    client.busy = true
+    job.clientId = id
+    const waiter = mcpJobs.get(job.id)
+    if (waiter) waiter.clientId = id
+    const payload = JSON.stringify({ id: job.id, tool: job.tool, arguments: job.args })
+    try {
+      client.res.write('event: job\ndata: ' + payload + '\n\n')
+      console.log('[mcp] dispatch', job.tool, job.id, '→', id)
+    } catch (e) {
+      client.busy = false
+      mcpQueue.unshift(job)
+      continue
+    }
+    return
+  }
+}
+
+function finishMcpJob(id, envelope) {
+  const job = mcpJobs.get(id)
+  if (!job) return false
+  mcpJobs.delete(id)
+  clearTimeout(job.timer)
+  if (job.clientId && mcpClients.has(job.clientId)) mcpClients.get(job.clientId).busy = false
+  job.resolve(envelope)
+  pumpMcpQueue()
+  return true
+}
+
+/**
+ * Dispatch one normalized tool call to a connected browser client.
+ * Resolves to the external envelope { ok, tool, data, meta } or { ok:false, error }.
+ */
+function dispatchMcpTool(name, args, requestedTimeout) {
+  const tool = getTool(name)
+  const base = { apiVersion: API_VERSION }
+  if (!tool) {
+    return Promise.resolve({ ...base, ok: false, error: { code: ERROR_CODES.UNKNOWN_TOOL, message: 'Unknown tool: ' + name } })
+  }
+  let validated
+  try {
+    validated = validateArguments(name, args || {})
+  } catch (e) {
+    return Promise.resolve({
+      ...base,
+      ok: false,
+      tool: name,
+      error: { code: e.code || ERROR_CODES.INVALID_ARGUMENT, message: e.message }
+    })
+  }
+  const timeoutMs = toolTimeout(name, requestedTimeout)
+  const id = 'mcp_' + Date.now().toString(36) + '_' + ++mcpJobSeq
+  const started = Date.now()
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      finishMcpJob(id, {
+        ...base,
+        ok: false,
+        tool: name,
+        error: { code: ERROR_CODES.TIMEOUT, message: 'Tool call timed out after ' + timeoutMs + ' ms' },
+        meta: { durationMs: Date.now() - started }
+      })
+    }, timeoutMs)
+    const waiter = {
+      resolve: (data) =>
+        resolve({ ...base, tool: name, ok: data.ok, data: data.data, error: data.error, meta: data.meta }),
+      timer,
+      tool: name,
+      clientId: null
+    }
+    mcpJobs.set(id, waiter)
+    mcpQueue.push({ id, tool: name, args: validated })
+    if (mcpClients.size === 0) {
+      // give a freshly loaded tab a moment to connect before reporting APP_NOT_CONNECTED
+      setTimeout(() => {
+        if (mcpJobs.has(id) && mcpClients.size === 0) {
+          finishMcpJob(id, {
+            ...base,
+            ok: false,
+            tool: name,
+            error: {
+              code: ERROR_CODES.APP_NOT_CONNECTED,
+              message: 'No Substrate app tab is connected. Open the studio in a browser (and keep this server running).'
+            },
+            meta: { durationMs: Date.now() - started }
+          })
+        }
+      }, 2500)
+    }
+    pumpMcpQueue()
+  })
+}
+
+function handleMcpEvents(req, res, url) {
+  if (!mcpAuthorized(req, url)) return mcpUnauthorized(res)
+  const clientId = 'tab_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7)
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  })
+  res.write('event: ready\ndata: ' + JSON.stringify({ clientId, apiVersion: API_VERSION, serverTime: Date.now() }) + '\n\n')
+  const heartbeat = setInterval(() => {
+    try {
+      res.write('event: ping\ndata: ' + Date.now() + '\n\n')
+    } catch (e) {
+      /* cleaned up below */
+    }
+  }, 20000)
+  if (heartbeat.unref) heartbeat.unref()
+  const client = { res, busy: false, connectedAt: Date.now(), heartbeat, clientId }
+  mcpClients.set(clientId, client)
+  console.log('[mcp] browser connected', clientId, '(' + mcpClients.size + ' tab(s))')
+  pumpMcpQueue()
+  req.on('close', () => {
+    clearInterval(heartbeat)
+    if (mcpClients.get(clientId) === client) mcpClients.delete(clientId)
+    console.log('[mcp] browser disconnected', clientId, '(' + mcpClients.size + ' tab(s))')
+    pumpMcpQueue()
+  })
+}
+
+function handleMcpResult(req, res) {
+  if (!mcpAuthorized(req)) return mcpUnauthorized(res)
+  return readBody(req, 64 * 1024 * 1024)
+    .then((buf) => {
+      const payload = JSON.parse(buf.toString('utf8'))
+      if (!payload || !payload.id) return sendJSON(res, 400, { ok: false, error: { code: ERROR_CODES.INVALID_ARGUMENT, message: 'Missing job id' } })
+      const envelope = {
+        ok: !!payload.ok,
+        data: payload.data,
+        error: payload.error || null,
+        meta: { durationMs: payload.durationMs || null, clientId: payload.clientId || null }
+      }
+      const known = finishMcpJob(payload.id, envelope)
+      console.log('[mcp] result', String(payload.id), payload.ok ? 'ok' : 'error', known ? '' : '(unknown job)')
+      sendJSON(res, known ? 200 : 202, { ok: true, accepted: known })
+    })
+    .catch((e) => sendJSON(res, 400, { ok: false, error: { code: ERROR_CODES.INVALID_ARGUMENT, message: e.message } }))
+}
+
+function handleMcpCall(req, res) {
+  if (!mcpAuthorized(req)) return mcpUnauthorized(res)
+  return readBody(req, 8 * 1024 * 1024)
+    .then((buf) => {
+      const payload = JSON.parse(buf.toString('utf8'))
+      const name = String(payload?.name || payload?.tool || '')
+      const args = payload?.arguments ?? payload?.args ?? {}
+      const timeout = payload?.timeoutMs
+      if (!name) {
+        return sendJSON(res, 200, {
+          ok: false,
+          apiVersion: API_VERSION,
+          error: { code: ERROR_CODES.INVALID_ARGUMENT, message: 'Missing tool name' }
+        })
+      }
+      return dispatchMcpTool(name, args, timeout).then((envelope) => sendJSON(res, 200, envelope))
+    })
+    .catch((e) => sendJSON(res, 400, { ok: false, apiVersion: API_VERSION, error: { code: ERROR_CODES.INVALID_ARGUMENT, message: e.message } }))
+}
+
+function mcpToolResult(envelope) {
+  if (envelope.ok) {
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ ok: true, tool: envelope.tool, data: envelope.data, meta: envelope.meta }, null, 2) }],
+      structuredContent: envelope.data,
+      isError: false
+    }
+  }
+  return {
+    content: [{ type: 'text', text: JSON.stringify({ ok: false, tool: envelope.tool, error: envelope.error }, null, 2) }],
+    structuredContent: { error: envelope.error },
+    isError: true
+  }
+}
+
+function handleMcpJsonRpc(req, res) {
+  if (!mcpAuthorized(req)) return mcpUnauthorized(res)
+  return readBody(req, 8 * 1024 * 1024)
+    .then(async (buf) => {
+      let msg
+      try {
+        msg = JSON.parse(buf.toString('utf8'))
+      } catch (e) {
+        return sendJSON(res, 200, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } })
+      }
+      const id = msg.id === undefined ? null : msg.id
+      if (!msg.method) {
+        return sendJSON(res, 200, { jsonrpc: '2.0', id, error: { code: -32600, message: 'Invalid Request' } })
+      }
+      if (msg.method.startsWith('notifications/')) {
+        res.writeHead(202)
+        return res.end()
+      }
+      let result
+      try {
+        switch (msg.method) {
+          case 'initialize': {
+            const requested = msg.params?.protocolVersion
+            result = {
+              protocolVersion: requested || PROTOCOL_VERSION,
+              capabilities: { tools: { listChanged: false }, resources: { listChanged: false }, prompts: { listChanged: false } },
+              serverInfo: { name: 'substrate-texture-designer', title: 'Substrate Texture Studio', version: API_VERSION },
+              instructions:
+                'Drive the Substrate procedural texture studio: inspect/mutate the node graph, paint strokes, evaluate and export standards-compliant PBR packages. The studio must be open in a browser tab connected to this server.'
+            }
+            break
+          }
+          case 'ping':
+            result = {}
+            break
+          case 'tools/list':
+            result = { tools: publicCatalog({ connectedClients: mcpClients.size }).tools }
+            break
+          case 'tools/call': {
+            const name = msg.params?.name
+            const args = msg.params?.arguments || {}
+            const envelope = await dispatchMcpTool(name, args)
+            result = mcpToolResult(envelope)
+            break
+          }
+          case 'resources/list':
+            result = { resources: [] }
+            break
+          case 'resources/templates/list':
+            result = { resourceTemplates: [] }
+            break
+          case 'prompts/list':
+            result = { prompts: [] }
+            break
+          default:
+            return sendJSON(res, 200, { jsonrpc: '2.0', id, error: { code: -32601, message: 'Method not found: ' + msg.method } })
+        }
+      } catch (e) {
+        return sendJSON(res, 200, { jsonrpc: '2.0', id, error: { code: -32603, message: e.message } })
+      }
+      return sendJSON(res, 200, { jsonrpc: '2.0', id, result })
+    })
+    .catch((e) => sendJSON(res, 400, { jsonrpc: '2.0', id: null, error: { code: -32700, message: e.message } }))
+}
 if (USE_DIST && !existsSync(path.join(WWW, 'index.html'))) {
   console.error('[substrate] dist/ not found — run: npm run build')
   process.exit(1)
@@ -412,7 +697,14 @@ const server = http.createServer((req, res) => {
       mode: USE_DIST ? 'dist' : 'source',
       node: process.version,
       projects: projectList().length,
-      exports: exportList().length
+      exports: exportList().length,
+      mcp: {
+        apiVersion: API_VERSION,
+        connectedClients: mcpClients.size,
+        pendingJobs: mcpJobs.size,
+        auth: MCP_TOKEN ? 'token' : 'none',
+        transports: ['stdio', 'http-jsonrpc']
+      }
     })
   }
   if (p === '/api/projects' && method === 'GET') return sendJSON(res, 200, { ok: true, projects: projectList() })
@@ -452,6 +744,31 @@ const server = http.createServer((req, res) => {
   if (p === '/api/debug/list' && method === 'GET') {
     const files = readdirSync(DEBUG_DIR).filter((f) => f.endsWith('.json'))
     return sendJSON(res, 200, { ok: true, reports: files })
+  }
+  if (p === '/api/mcp/tools' && method === 'GET') {
+    return sendJSON(
+      res,
+      200,
+      publicCatalog({
+        connectedClients: mcpClients.size,
+        clients: mcpClientInfo(),
+        transports: ['stdio (mcp/server.mjs)', 'http-jsonrpc POST /mcp', 'http POST /api/mcp/call'],
+        auth: MCP_TOKEN ? 'token' : 'none'
+      })
+    )
+  }
+  if (p === '/api/mcp/events' && method === 'GET') return handleMcpEvents(req, res, url)
+  if (p === '/api/mcp/result' && method === 'POST') return handleMcpResult(req, res)
+  if (p === '/api/mcp/call' && method === 'POST') return handleMcpCall(req, res)
+  if (p === '/mcp' && method === 'POST') return handleMcpJsonRpc(req, res)
+  if (p === '/mcp' && method === 'GET') {
+    return sendJSON(res, 200, {
+      ok: true,
+      apiVersion: API_VERSION,
+      transport: 'http-jsonrpc',
+      message: 'POST JSON-RPC 2.0 messages (initialize / tools/list / tools/call) to this endpoint',
+      tools: publicCatalog({ connectedClients: mcpClients.size }).tools.map((t) => t.name)
+    })
   }
   if (p.startsWith('/api/')) return sendJSON(res, 404, { ok: false, error: 'Unknown endpoint' })
 

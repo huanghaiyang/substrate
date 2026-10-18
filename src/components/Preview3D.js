@@ -190,7 +190,7 @@ export default defineComponent({
     }
 
     onMounted(() => {
-      renderer = new THREE.WebGLRenderer({ canvas: canvasRef.value, antialias: true, alpha: true })
+      renderer = new THREE.WebGLRenderer({ canvas: canvasRef.value, antialias: true, alpha: true, preserveDrawingBuffer: true })
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
       renderer.outputColorSpace = THREE.SRGBColorSpace
       renderer.toneMapping = THREE.ACESFilmicToneMapping
@@ -231,8 +231,27 @@ export default defineComponent({
       setShape('sphere')
       buildTextures()
       resize()
+      // PNG capture of the shaded material ball, used by the MCP tool substrate_get_preview
+      function capture(size = 256) {
+        try {
+          renderer.render(scene, camera)
+          const src = renderer.domElement
+          const scale = Math.min(1, Number(size) / Math.max(src.width, src.height))
+          const w = Math.max(16, Math.round(src.width * scale))
+          const h = Math.max(16, Math.round(src.height * scale))
+          const out = document.createElement('canvas')
+          out.width = w
+          out.height = h
+          out.getContext('2d').drawImage(src, 0, 0, w, h)
+          return out.toDataURL('image/png')
+        } catch (e) {
+          console.warn('[preview] capture failed', e)
+          return null
+        }
+      }
       window.__PREVIEW__ = {
         renderer,
+        capture,
         scene,
         camera,
         material,
