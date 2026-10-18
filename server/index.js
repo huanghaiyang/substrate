@@ -15,7 +15,7 @@ import {
   validateArguments,
   toolTimeout
 } from '../src/engine/mcp-catalog.js'
-import { initAssets, listAssets, importAsset, deleteAsset, assetFilePath, assetsCount, searchAssets, importAssetFromUrl } from './assets.mjs'
+import { initAssets, listAssets, importAsset, importSbsarAsset, readSbsarInspection, deleteAsset, assetFilePath, assetsCount, searchAssets, importAssetFromUrl } from './assets.mjs'
 import {
   loadConfig as loadLlmConfig,
   saveConfig as saveLlmConfig,
@@ -779,6 +779,28 @@ function handleAssetImport(req, res) {
     .catch((e) => sendJSON(res, 400, { ok: false, error: { code: 'ASSET_IMPORT_FAILED', message: String(e.message || e) } }))
 }
 
+function handleAssetImportSbsar(req, res) {
+  return readBody(req, 90 * 1024 * 1024)
+    .then((buf) => {
+      const payload = JSON.parse(buf.toString('utf8') || '{}')
+      const result = importSbsarAsset({ name: payload.name, data: payload.data || payload.dataUrl })
+      return sendJSON(res, 200, { ok: true, ...result })
+    })
+    .catch((e) =>
+      sendJSON(res, 400, { ok: false, error: { code: 'SBSAR_IMPORT_FAILED', message: String(e.message || e) } })
+    )
+}
+
+function handleAssetSbsarInspect(req, res, url) {
+  try {
+    const id = url.searchParams.get('id')
+    if (!id) throw new Error('Missing asset id')
+    return sendJSON(res, 200, { ok: true, inspection: readSbsarInspection(String(id)) })
+  } catch (e) {
+    return sendJSON(res, 400, { ok: false, error: { code: 'SBSAR_INSPECT_FAILED', message: String(e.message || e) } })
+  }
+}
+
 function handleAssetSearch(req, res, url) {
   return searchAssets(url.searchParams.get('q') || '', Math.min(24, Math.max(1, Number(url.searchParams.get('limit')) || 12)))
     .then((result) => sendJSON(res, 200, result))
@@ -953,6 +975,8 @@ const server = http.createServer((req, res) => {
   if (p === '/api/assets/search' && method === 'GET') return handleAssetSearch(req, res, url)
   if (p === '/api/assets/import-url' && method === 'POST') return handleAssetImportUrl(req, res)
   if (p === '/api/assets/import' && method === 'POST') return handleAssetImport(req, res)
+  if (p === '/api/assets/import-sbsar' && method === 'POST') return handleAssetImportSbsar(req, res)
+  if (p === '/api/assets/sbsar' && method === 'GET') return handleAssetSbsarInspect(req, res, url)
   if (p === '/api/assets/delete' && method === 'POST') return handleAssetDelete(req, res)
   if (p.startsWith('/assets/') && (method === 'GET' || method === 'HEAD')) {
     const file = assetFilePath(p)

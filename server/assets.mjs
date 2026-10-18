@@ -4,12 +4,14 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { inspectSbsar } from './sbsar.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 export const ASSETS_DIR = path.join(ROOT, 'assets')
 const INDEX_PATH = path.join(ASSETS_DIR, 'index.json')
 const MIME_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' }
 const MAX_BYTES = 32 * 1024 * 1024
+const MAX_SBSAR_BYTES = 64 * 1024 * 1024
 const MAX_ASSETS = 400
 
 export function initAssets() {
@@ -31,7 +33,7 @@ function writeIndex(list) {
 }
 
 function publicAsset(entry) {
-  return {
+  const base = {
     id: entry.id,
     name: entry.name,
     file: entry.file,
@@ -41,8 +43,17 @@ function publicAsset(entry) {
     width: entry.width || null,
     height: entry.height || null,
     createdAt: entry.createdAt,
-    attribution: entry.attribution || null
+    attribution: entry.attribution || null,
+    kind: entry.kind || 'bitmap',
+    role: entry.role || null,
+    parentId: entry.parentId || null
   }
+  if (entry.kind === 'sbsar') {
+    base.inspectionUrl = '/api/assets/sbsar?id=' + entry.id
+    base.inspection = entry.inspection || null
+    base.children = entry.children || []
+  }
+  return base
 }
 
 export function listAssets() {
@@ -95,35 +106,150 @@ function readJpegSize(buf) {
   return null
 }
 
-export function importAsset({ name, dataUrl }) {
-  initAssets()
-  const index = readIndex()
-  if (index.length >= MAX_ASSETS) throw new Error('Asset library is full (max ' + MAX_ASSETS + ' files)')
-  const { mime, buffer } = decodeDataUrl(dataUrl)
-  const id = createHash('sha1').update(buffer).digest('hex').slice(0, 12)
-  const existing = index.find((a) => a.id === id)
-  if (existing) return publicAsset(existing)
-  const ext = MIME_EXT[mime] || 'png'
-  const file = id + '.' + ext
-  writeFileSync(path.join(ASSETS_DIR, file), buffer)
-  const size = (mime === 'image/png' ? readPngSize(buffer) : mime === 'image/jpeg' ? readJpegSize(buffer) : null) || {}
-  const cleanName = String(name || '')
+const cleanAssetName = (name, id) =>
+  String(name || '')
     .replace(/[\\/:*?"<>|]/g, '')
     .trim()
     .slice(0, 80) || 'Asset ' + id.slice(0, 6)
+
+/** Write one decoded image into the library and return its index entry. */
+function storeImage({ buffer, mime, name, extra = {} }) {
+  if (buffer.length > MAX_BYTES) throw new Error('Image is too large (max 32 MB)')
+  const id = createHash('sha1').update(buffer).digest('hex').slice(0, 12)
+  const index = readIndex()
+  const existing = index.find((a) => a.id === id)
+  if (existing) return existing
+  if (index.length >= MAX_ASSETS) throw new Error('Asset library is full (max ' + MAX_ASSETS + ' files)')
+  const file = id + '.' + (MIME_EXT[mime] || 'png')
+  writeFileSync(path.join(ASSETS_DIR, file), buffer)
+  const size = (mime === 'image/png' ? readPngSize(buffer) : mime === 'image/jpeg' ? readJpegSize(buffer) : null) || {}
   const entry = {
     id,
-    name: cleanName,
+    name: cleanAssetName(name, id),
     file,
     mime,
     bytes: buffer.length,
     width: size.width || null,
     height: size.height || null,
-    createdAt: Date.now()
+    createdAt: Date.now(),
+    ...extra
   }
   index.push(entry)
   writeIndex(index)
-  return publicAsset(entry)
+  return entry
+}
+
+export function importAsset({ name, dataUrl }) {
+  initAssets()
+  const { mime, buffer } = decodeDataUrl(dataUrl)
+  return publicAsset(storeImage({ buffer, mime, name }))
+}
+
+/** decode `data:<mime>;base64,…` or a bare base64 string (used for non-image payloads like .sbsar) */
+function decodeArchivePayload(data) {
+  const text = String(data || '')
+  const m = /^data:[^;,]+;base64,([A-Za-z0-9+/=]+)$/.exec(text) || /^([A-Za-z0-9+/=]{64,})$/.exec(text)
+  if (!m) throw new Error('Expected base64 data (data URL or bare base64)')
+  const buffer = Buffer.from(m[1], 'base64')
+  if (!buffer.length) throw new Error('Empty file')
+  if (buffer.length > MAX_SBSAR_BYTES) throw new Error('Archive is too large (max 64 MB)')
+  return buffer
+}
+
+/**
+ * Import a Substance archive: keep the original file, store every extracted bitmap as a normal
+ * texture asset, and cache the inspection report next to it.
+ *
+ * NOTE: a .sbsar cannot be *evaluated* here (its .sbsasm is Adobe engine bytecode), so this import
+ * yields metadata + embedded bitmaps, never a baked PBR set. `inspection.canEvaluate` is always
+ * false and the UI states the reason.
+ */
+export function importSbsarAsset({ name, data }) {
+  initAssets()
+  const index = readIndex()
+  if (index.length >= MAX_ASSETS) throw new Error('Asset library is full (max ' + MAX_ASSETS + ' files)')
+  const buffer = decodeArchivePayload(data)
+  const id = createHash('sha1').update(buffer).digest('hex').slice(0, 12)
+  const existing = index.find((a) => a.id === id)
+  if (existing) return { asset: publicAsset(existing), inspection: readSbsarInspection(id) }
+
+  const inspection = inspectSbsar(buffer, { maxImages: 16 })
+  const file = 'sbsar-' + id + '.sbsar'
+  writeFileSync(path.join(ASSETS_DIR, file), buffer)
+
+  const label = cleanAssetName(name || 'Substance archive', id).replace(/\.sbsar$/i, '')
+  const children = []
+  inspection.imagePayloads.forEach((payload, i) => {
+    try {
+      const role = payload.role === 'preview' ? 'substance-preview' : 'substance-resource'
+      const entry = storeImage({
+        buffer: payload.bytes,
+        mime: payload.mime,
+        name: `${label} · ${payload.role === 'preview' ? 'preview' : 'resource'} ${i + 1}`,
+        extra: { role, parentId: id }
+      })
+      children.push(entry.id)
+    } catch (e) {
+      inspection.warnings.push(`image ${i + 1}: ${e.message}`)
+    }
+  })
+
+  const summary = {
+    container: inspection.container,
+    containerConfidence: inspection.containerConfidence,
+    graphs: inspection.graphs,
+    parameterCount: inspection.parameters.length,
+    parameters: inspection.parameters.slice(0, 40),
+    outputs: inspection.outputs,
+    metadata: inspection.metadata,
+    imageCount: inspection.images.length,
+    images: inspection.images.map(({ data, ...rest }) => rest),
+    assemblies: inspection.assemblies,
+    canEvaluate: false,
+    evaluateBlockedReason: inspection.evaluateBlockedReason,
+    warnings: inspection.warnings,
+    notes: inspection.notes,
+    sha256: inspection.sha256,
+    fileBytes: inspection.fileBytes,
+    graphXml: inspection.graphXml,
+    entryCount: inspection.entryCount
+  }
+
+  const entry = {
+    id,
+    kind: 'sbsar',
+    name: label + '.sbsar',
+    file,
+    mime: 'application/octet-stream',
+    bytes: buffer.length,
+    width: null,
+    height: null,
+    createdAt: Date.now(),
+    children,
+    inspection: summary
+  }
+  // re-read: storeImage() below already wrote the extracted bitmaps into the index
+  const fresh = readIndex()
+  fresh.push(entry)
+  writeIndex(fresh)
+  try {
+    writeFileSync(path.join(ASSETS_DIR, 'sbsar-' + id + '.json'), JSON.stringify({ ...inspection, imagePayloads: undefined }, null, 2), 'utf8')
+  } catch (e) {
+    /* the sidecar is a convenience copy; the index summary is authoritative */
+  }
+  return { asset: publicAsset(entry), inspection: summary }
+}
+
+/** Full cached inspection report of an imported archive (falls back to the index summary). */
+export function readSbsarInspection(id) {
+  const entry = readIndex().find((a) => a.id === id)
+  if (!entry) throw new Error('Asset not found')
+  if (entry.kind !== 'sbsar') throw new Error('Asset is not a Substance archive')
+  try {
+    return JSON.parse(readFileSync(path.join(ASSETS_DIR, 'sbsar-' + entry.id + '.json'), 'utf8'))
+  } catch (e) {
+    return entry.inspection || null
+  }
 }
 
 export function deleteAsset(id) {
@@ -131,13 +257,24 @@ export function deleteAsset(id) {
   const index = readIndex()
   const entry = index.find((a) => a.id === id)
   if (!entry) throw new Error('Asset not found')
+  // an archive owns the bitmaps it extracted
+  const owned = entry.kind === 'sbsar' ? index.filter((a) => a.parentId === id) : []
+  for (const child of owned) {
+    try {
+      rmSync(path.join(ASSETS_DIR, child.file), { force: true })
+    } catch (e) {
+      /* best effort */
+    }
+  }
   try {
     rmSync(path.join(ASSETS_DIR, entry.file), { force: true })
+    if (entry.kind === 'sbsar') rmSync(path.join(ASSETS_DIR, 'sbsar-' + entry.id + '.json'), { force: true })
   } catch (e) {
     /* best effort */
   }
-  writeIndex(index.filter((a) => a.id !== id))
-  return { ok: true, deleted: id }
+  const drop = new Set([id, ...owned.map((c) => c.id)])
+  writeIndex(index.filter((a) => !drop.has(a.id)))
+  return { ok: true, deleted: id, children: owned.length }
 }
 
 /** Resolve a request pathname (/assets/<file>) to a file inside the asset directory. */

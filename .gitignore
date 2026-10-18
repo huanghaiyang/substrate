@@ -15,3 +15,4 @@ llm.config.local.json
 .env
 secrets/
 docs/reports/polyhaven/
+docs/reports/sbsar-import/

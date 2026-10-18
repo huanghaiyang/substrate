@@ -722,3 +722,35 @@ troubleshooting) plus a **40-term technical glossary**.
 - Content is bilingual (`EN` / `中文`) and follows the UI language. It lives in
   [`src/manual.js`](src/manual.js) — one `{en, zh}` pair per section/term — so the manual is versioned with the code
   and can be extended without touching translation tables.
+
+---
+
+## Substance archives (.sbsar)
+
+**Material Library → Import .sbsar** (or drop a `.sbsar` on the dialog) reads a Substance archive and
+turns it into something usable in this app:
+
+- **Metadata**: package metadata, the graph list, every input parameter with type, default value, range
+  and step (read-only), and the declared output usages (`baseColor`, `roughness`, `normal`…).
+- **Embedded bitmaps**: thumbnails/icons and resource bitmaps are extracted and registered as ordinary
+  textures, so they can drive a **Texture Input** node or a paint pattern.
+- The full inspection report is served as JSON (`GET /api/assets/sbsar?id=…`) and linked from the card.
+
+![Substance archive card](docs/screenshots/17-substance-archive-import.png)
+
+**What it cannot do:** bake the Substance graph. A `.sbsar` carries an `.sbsasm` assembly — proprietary
+Adobe Substance Engine bytecode — so regenerating the material at another resolution or from different
+parameter values needs Adobe's engine, not a browser. The card says so explicitly
+(*preview only · no bake*) instead of pretending.
+
+Container handling is layered: a zip-shaped archive is read from its entry table (authoritative); the
+native Allegorithmic container is undocumented, so its contents are recovered by scanning for descriptor
+XML, zlib-compressed XML and PNG/JPEG blobs, and everything found that way is marked *heuristic* in the UI.
+Files without any archive landmark are rejected with a clear error rather than imported as empty.
+
+Unit tests for the reader (fixtures generated in memory, no binary assets in the repo):
+
+```bash
+npm run fixtures:sbsar   # regenerate demo archives in docs/reports/sbsar-import/fixtures
+npm run test:sbsar       # 25 assertions: containers, XML, parameters, bitmaps, rejection paths
+```

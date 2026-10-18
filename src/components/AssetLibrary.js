@@ -17,6 +17,8 @@ export default defineComponent({
     const searchResults = ref([])
     const searchError = ref('')
     const searchWarning = ref('')
+    const sbsarInput = ref(null)
+    const expanded = ref('')
 
     async function searchOnline() {
       const q = String(searchQuery.value || '').trim()
@@ -83,14 +85,71 @@ export default defineComponent({
     function openPicker() {
       fileInput.value?.click()
     }
+    function openSbsarPicker() {
+      sbsarInput.value?.click()
+    }
+
+    /** .sbsar import: metadata + embedded bitmaps (the graph itself needs Adobe's engine, see note) */
+    async function importSbsarFile(file) {
+      const data = await new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result)
+        reader.onerror = () => reject(new Error('read failed'))
+        reader.readAsDataURL(file)
+      })
+      const res = await fetch('/api/assets/import-sbsar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: file.name, data })
+      })
+      const payload = await res.json().catch(() => ({}))
+      if (!payload.ok) throw new Error(payload.error?.message || 'sbsar import failed')
+      const ins = payload.inspection || {}
+      expanded.value = payload.asset.id
+      return `${file.name}: ${ins.container} · ${(ins.graphs || []).length} 图 · ${ins.parameterCount || 0} 参数 · ${ins.imageCount || 0} 图片`
+    }
+
+    async function onSbsarFile(event) {
+      const files = [...(event.target?.files || [])]
+      event.target.value = ''
+      if (!files.length) return
+      busy.value = true
+      try {
+        const done = []
+        for (const file of files) done.push(await importSbsarFile(file))
+        status.value = '✓ ' + done.join(' | ')
+        await load()
+      } catch (e) {
+        status.value = '✕ ' + (e.message || String(e))
+      } finally {
+        busy.value = false
+      }
+    }
+
+    const toggleExpand = (asset) => {
+      expanded.value = expanded.value === asset.id ? '' : asset.id
+    }
+    const childAssets = (asset) => assets.value.filter((a) => a.parentId === asset.id)
+    const fmtParam = (p) => {
+      const bits = []
+      if (p.type) bits.push(p.type)
+      if (p.default !== null && p.default !== undefined && p.default !== '') bits.push('= ' + p.default)
+      if (p.min !== null && p.max !== null) bits.push(`[${p.min} … ${p.max}${p.step ? ' / ' + p.step : ''}]`)
+      return bits.join(' · ')
+    }
     async function onFile(event) {
       const files = [...(event.target?.files || [])]
       event.target.value = ''
       if (!files.length) return
       busy.value = true
       try {
+        const done = []
         for (const file of files) {
-          if (!/^image\/(png|jpeg|webp)$/.test(file.type)) throw new Error('PNG/JPEG/WebP only')
+          if (/\.sbsar$/i.test(file.name)) {
+            done.push(await importSbsarFile(file))
+            continue
+          }
+          if (!/^image\/(png|jpeg|webp)$/.test(file.type)) throw new Error('PNG/JPEG/WebP/.sbsar only')
           const dataUrl = await new Promise((resolve, reject) => {
             const reader = new FileReader()
             reader.onload = () => resolve(reader.result)
@@ -104,8 +163,9 @@ export default defineComponent({
           })
           const data = await res.json()
           if (!data.ok) throw new Error(data.error?.message || 'import failed')
+          done.push(file.name)
         }
-        status.value = '✓ 已导入 ' + files.length + ' 个素材'
+        status.value = '✓ 已导入 ' + done.length + ' 个素材'
         await load()
       } catch (e) {
         status.value = '✕ ' + (e.message || String(e))
@@ -212,8 +272,15 @@ export default defineComponent({
       searchOnline,
       importSearchResult,
       fileInput,
+      sbsarInput,
       openPicker,
+      openSbsarPicker,
       onFile,
+      onSbsarFile,
+      expanded,
+      toggleExpand,
+      childAssets,
+      fmtParam,
       onDrop,
       useAsTexture,
       useInPaint,
@@ -229,11 +296,14 @@ export default defineComponent({
           <div class="modal-title">{{ $t('assets.title') }}</div>
           <div class="spacer"></div>
           <button class="btn" @click="openPicker" :disabled="busy">{{ $t('assets.import') }}</button>
-          <input ref="fileInput" type="file" accept="image/png,image/jpeg,image/webp" multiple style="display: none" @change="onFile" />
+          <button class="btn" @click="openSbsarPicker" :disabled="busy" :title="$t('assets.sbsarTitle')">{{ $t('assets.importSbsar') }}</button>
+          <input ref="fileInput" type="file" accept="image/png,image/jpeg,image/webp,.sbsar" multiple style="display: none" @change="onFile" />
+          <input ref="sbsarInput" type="file" accept=".sbsar" multiple style="display: none" @change="onSbsarFile" />
           <button class="icon-btn" @click="close">✕</button>
         </div>
         <div class="modal-body">
           <div class="hint">{{ $t('assets.hint') }}</div>
+          <div class="hint small sbsar-hint">{{ $t('assets.sbsarHint') }}</div>
           <div class="asset-search">
             <input v-model="searchQuery" :placeholder="$t('assets.searchPlaceholder')" @keydown.enter="searchOnline" />
             <button class="btn" :disabled="searching" @click="searchOnline">{{ searching ? $t('assets.searching') : $t('assets.searchOnline') }}</button>
@@ -256,19 +326,78 @@ export default defineComponent({
             <button class="btn" @click="openPicker">{{ $t('assets.importFirst') }}</button>
           </div>
           <div v-else class="asset-library">
-            <div v-for="a in assets" :key="a.id" class="asset-card">
-              <img :src="a.url" :alt="a.name" loading="lazy" />
-              <div class="asset-card-body">
-                <div class="asset-name" :title="a.name">{{ a.name }}</div>
-                <div class="dim small">{{ Math.round(a.bytes / 1024) }} KB<span v-if="a.width"> · {{ a.width }}×{{ a.height }}</span></div>
-                <div v-if="a.attribution" class="asset-attribution">{{ a.attribution.provider }} · {{ a.attribution.creator }} · {{ a.attribution.license }}</div>
-                <div class="asset-actions">
-                  <button class="btn tiny" @click="useAsTexture(a)">{{ $t('assets.useTexture') }}</button>
-                  <button class="btn tiny" @click="useInPaint(a)">{{ $t('assets.usePaint') }}</button>
-                  <button class="btn tiny" @click="quoteUrl(a)">{{ $t('assets.copyUrl') }}</button>
-                  <button class="btn tiny danger" @click="removeAsset(a)">✕</button>
+            <div v-for="a in assets" :key="a.id" class="asset-card" :class="{ 'asset-card-sbsar': a.kind === 'sbsar' }">
+              <template v-if="a.kind === 'sbsar'">
+                <div class="sbsar-head" @click="toggleExpand(a)">
+                  <div class="sbsar-icon">SA</div>
+                  <div class="sbsar-head-body">
+                    <div class="asset-name" :title="a.name">{{ a.name }}</div>
+                    <div class="sbsar-badges">
+                      <span class="sbsar-badge">{{ a.inspection?.container || '?' }}</span>
+                      <span class="sbsar-badge">{{ (a.inspection?.graphs || []).length }} {{ $t('assets.sbsarGraphs') }}</span>
+                      <span class="sbsar-badge">{{ a.inspection?.parameterCount || 0 }} {{ $t('assets.sbsarParams') }}</span>
+                      <span class="sbsar-badge">{{ a.inspection?.imageCount || 0 }} {{ $t('assets.sbsarImages') }}</span>
+                      <span class="sbsar-badge warn">{{ $t('assets.sbsarNoBake') }}</span>
+                    </div>
+                  </div>
+                  <button class="icon-btn" @click.stop="toggleExpand(a)">{{ expanded === a.id ? '▾' : '▸' }}</button>
                 </div>
-              </div>
+                <div v-if="expanded === a.id" class="sbsar-detail">
+                  <div class="sbsar-note">{{ a.inspection?.evaluateBlockedReason }}</div>
+                  <div v-for="(n, i) in (a.inspection?.notes || [])" :key="'note' + i" class="sbsar-note soft">{{ n }}</div>
+                  <div v-if="a.inspection?.metadata && Object.keys(a.inspection.metadata).length" class="sbsar-block">
+                    <div class="sbsar-label">{{ $t('assets.sbsarMetadata') }}</div>
+                    <div v-for="(v, k) in a.inspection.metadata" :key="k" class="sbsar-row"><span>{{ k }}</span><b>{{ v }}</b></div>
+                  </div>
+                  <div v-if="(a.inspection?.graphs || []).length" class="sbsar-block">
+                    <div class="sbsar-label">{{ $t('assets.sbsarGraphsTitle') }}</div>
+                    <div v-for="g in a.inspection.graphs" :key="g.identifier" class="sbsar-row"><span>{{ g.identifier }}</span><b>{{ g.label }}</b></div>
+                  </div>
+                  <div v-if="(a.inspection?.outputs || []).length" class="sbsar-block">
+                    <div class="sbsar-label">{{ $t('assets.sbsarOutputs') }}</div>
+                    <div class="sbsar-chips"><span v-for="o in a.inspection.outputs" :key="o.usage" class="sbsar-chip">{{ o.usage }}</span></div>
+                  </div>
+                  <div v-if="(a.inspection?.parameters || []).length" class="sbsar-block">
+                    <div class="sbsar-label">{{ $t('assets.sbsarParamsTitle') }} <span class="hint small">{{ $t('assets.sbsarReadOnly') }}</span></div>
+                    <div v-for="p in a.inspection.parameters" :key="p.id" class="sbsar-row">
+                      <span>{{ p.label !== p.id ? p.label + '  (' + p.id + ')' : p.id }}</span><b>{{ fmtParam(p) }}</b>
+                    </div>
+                  </div>
+                  <div v-if="(a.inspection?.warnings || []).length" class="sbsar-block">
+                    <div class="sbsar-label">{{ $t('assets.sbsarWarnings') }}</div>
+                    <div v-for="(w, i) in a.inspection.warnings" :key="i" class="sbsar-warn">{{ w }}</div>
+                  </div>
+                  <div v-if="childAssets(a).length" class="sbsar-block">
+                    <div class="sbsar-label">{{ $t('assets.sbsarExtracted') }}</div>
+                    <div class="sbsar-thumbs">
+                      <div v-for="c in childAssets(a)" :key="c.id" class="sbsar-thumb">
+                        <img :src="c.url" :alt="c.name" loading="lazy" />
+                        <div class="dim small">{{ c.width }}×{{ c.height }} · {{ Math.round(c.bytes / 1024) }} KB</div>
+                        <button class="btn tiny" @click="useAsTexture(c)">{{ $t('assets.useTexture') }}</button>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="asset-actions">
+                    <a class="btn tiny" :href="a.inspectionUrl" target="_blank" rel="noopener">{{ $t('assets.sbsarJson') }}</a>
+                    <button class="btn tiny danger" @click="removeAsset(a)">✕</button>
+                  </div>
+                </div>
+              </template>
+              <template v-else>
+                <img :src="a.url" :alt="a.name" loading="lazy" />
+                <div class="asset-card-body">
+                  <div class="asset-name" :title="a.name">{{ a.name }}</div>
+                  <div class="dim small">{{ Math.round(a.bytes / 1024) }} KB<span v-if="a.width"> · {{ a.width }}×{{ a.height }}</span></div>
+                  <div v-if="a.role && a.role.indexOf('substance') === 0" class="dim small">{{ $t('assets.sbsarChild') }}</div>
+                  <div v-if="a.attribution" class="asset-attribution">{{ a.attribution.provider }} · {{ a.attribution.creator }} · {{ a.attribution.license }}</div>
+                  <div class="asset-actions">
+                    <button class="btn tiny" @click="useAsTexture(a)">{{ $t('assets.useTexture') }}</button>
+                    <button class="btn tiny" @click="useInPaint(a)">{{ $t('assets.usePaint') }}</button>
+                    <button class="btn tiny" @click="quoteUrl(a)">{{ $t('assets.copyUrl') }}</button>
+                    <button class="btn tiny danger" @click="removeAsset(a)">✕</button>
+                  </div>
+                </div>
+              </template>
             </div>
           </div>
           <div v-if="status" class="asset-status">{{ status }}</div>
