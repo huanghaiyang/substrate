@@ -132,7 +132,7 @@ export default defineComponent({
     }
     async function send(text) {
       const content = String(text ?? input.value).trim()
-      if ((!content && !pendingAttachments.value.length) || aiChat.busy) return
+      if ((!content && !pendingAttachments.value.length) || aiChat.busy || uploading.value) return
       if (!currentModel.value) {
         aiChat.error = t('ai.noModel')
         return
@@ -326,7 +326,10 @@ export default defineComponent({
           <div v-if="m.role === 'user'" class="ai-bubble user">
             <div>{{ m.content }}</div>
             <div v-if="m.attachments && m.attachments.length" class="ai-msg-atts">
-              <span v-for="(att, ai) in m.attachments" :key="ai" class="ai-msg-att">{{ att.kind === 'image' ? '🖼' : '📎' }} {{ att.name }}</span>
+              <span v-for="(att, ai) in m.attachments" :key="ai" class="ai-msg-att">
+                <img v-if="att.kind === 'image' && att.url" :src="att.url" :alt="att.name" />
+                {{ att.kind === 'image' ? '🖼' : '📎' }} {{ att.name }}
+              </span>
             </div>
           </div>
           <div v-else class="ai-bubble assistant">
@@ -341,6 +344,9 @@ export default defineComponent({
             <div v-else-if="m.content" class="ai-text">{{ m.content }}</div>
             <div v-if="m.interrupted" class="ai-error">{{ $t('ai.interrupted') }}</div>
             <div v-if="m.hitStepLimit" class="ai-step-limit">{{ $t('ai.stepLimit') }}</div>
+            <div v-if="m.vision && m.vision.requested > 0 && (!m.vision.sent || m.vision.fallback)" class="ai-vision-warn">
+              {{ $t('ai.visionFallbackNote') }}
+            </div>
             <div v-if="m.error" class="ai-error">✕ {{ m.error }}</div>
             <div v-if="m.trace && m.trace.length" class="ai-trace">
               <div v-for="(tr, k) in m.trace" :key="k" class="ai-tool" :class="{ ok: tr.ok, bad: !tr.ok }">
@@ -367,7 +373,7 @@ export default defineComponent({
         <button class="icon-btn ai-attach-btn" :title="$t('ai.attach')" @click="openAttach">📎</button>
         <input ref="attachInput" type="file" multiple accept="image/png,image/jpeg,image/webp,.txt,.md,.markdown,.json,.csv,.log,.yaml,.yml" style="display: none" @change="onAttachFile" />
         <textarea v-model="input" :placeholder="$t('ai.placeholder')" rows="2" @keydown="onKeydown" @paste="onPaste" :disabled="busy"></textarea>
-        <button class="btn primary" :disabled="busy || (!input.trim() && !pendingAttachments.length)" @click="send()">{{ $t('ai.send') }}</button>
+        <button class="btn primary" :disabled="busy || uploading || (!input.trim() && !pendingAttachments.length)" @click="send()">{{ $t('ai.send') }}</button>
       </div>
       <div class="hint small ai-foot">{{ $t('ai.attachHint') }}</div>
       <div class="hint small ai-foot">{{ $t('ai.hint') }}</div>

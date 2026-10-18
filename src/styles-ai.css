@@ -641,3 +641,25 @@
   font-size: 9px;
   color: var(--text-faint);
 }
+
+.ai-vision-warn {
+  margin-top: 6px;
+  padding: 5px 7px;
+  border: 1px solid rgba(216, 166, 66, 0.45);
+  border-radius: 5px;
+  background: rgba(216, 166, 66, 0.08);
+  color: #d8b25a;
+  font-size: 10px;
+  line-height: 1.45;
+}
+.ai-msg-att {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.ai-msg-att img {
+  width: 26px;
+  height: 26px;
+  object-fit: cover;
+  border-radius: 3px;
+}

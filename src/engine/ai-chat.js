@@ -23,6 +23,7 @@ function readSaved() {
         content: String(m.content || ''),
         trace: Array.isArray(m.trace) ? m.trace.slice(0, 24) : undefined,
         reasoning: Array.isArray(m.reasoning) ? m.reasoning.slice(0, 24) : undefined,
+        vision: m.vision && typeof m.vision === 'object' ? m.vision : undefined,
         attachments: Array.isArray(m.attachments) ? m.attachments : undefined,
         error: m.error ? String(m.error) : undefined,
         pending: false,
@@ -91,6 +92,7 @@ export function persistChatNow() {
       trace: m.trace,
       reasoning: m.reasoning,
       attachments: m.attachments,
+      vision: m.vision,
       error: m.error,
       model: m.model,
       at: m.at,
@@ -115,6 +117,7 @@ export function persistChat() {
         trace: m.trace,
         reasoning: m.reasoning,
         attachments: m.attachments,
+        vision: m.vision,
         error: m.error,
         model: m.model,
         at: m.at,
@@ -184,13 +187,24 @@ export async function sendChat(text) {
   try {
     const recent = aiChat.messages.filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.pending && (m.content || m.attachments?.length)).slice(-12)
     const lastUser = recent.map((m) => m.role).lastIndexOf('user')
+    // Keep the most recent image-bearing user turn in the request even when the user has sent
+    // follow-up text in the meantime. Otherwise the model loses the pixels on the next question.
+    let lastImageUser = -1
+    for (let i = recent.length - 1; i >= 0; i--) {
+      if (recent[i].role === 'user' && Array.isArray(recent[i].attachments) && recent[i].attachments.some((a) => a && a.kind === 'image')) {
+        lastImageUser = i
+        break
+      }
+    }
     const history = recent.map((m, i) => ({
-        role: m.role,
-        content: m.content,
-        // the server reads image files from the material library and builds multimodal content
-        // only the latest user turn carries images: older images are represented by the assistant reply
-        attachments: i === lastUser && Array.isArray(m.attachments) && m.attachments.length ? m.attachments : undefined
-      }))
+      role: m.role,
+      content: m.content,
+      // the server reads image files from the material library and builds multimodal content
+      attachments:
+        m.role === 'user' && (i === lastUser || i === lastImageUser) && Array.isArray(m.attachments) && m.attachments.length
+          ? m.attachments
+          : undefined
+    }))
     const result = await chatWithAssistant({ modelKey: aiChat.modelKey, messages: history, maxSteps: 20, showThinking: aiChat.showThinking })
     const idx = aiChat.messages.indexOf(pending)
     const final = {
@@ -201,6 +215,7 @@ export async function sendChat(text) {
       reasoning: Array.isArray(result?.reasoning) ? result.reasoning : [],
       model: result?.model || undefined,
       hitStepLimit: !!result?.hitStepLimit,
+      vision: result?.vision,
       pending: false,
       at: Date.now()
     }

@@ -41,7 +41,9 @@ paint on them by hand, preview the result as a lit 3D material, and export an in
   Chat attachments: images (PNG/JPEG/WebP) are added to the material library **and sent to
   vision-capable models for real image recognition** (DeepSeek's endpoint supports vision; non-vision
   providers fall back to metadata), and can be applied through `substrate_list_assets`/`substrate_apply_asset`;
-  text files are included in the message.
+  text files are included in the message. The most recent image-bearing turn stays in context across
+  follow-up questions, and the UI warns if image content could not be delivered (with a
+  `vision:{requested,sent,fallback}` diagnostic from the server).
   Tools carry copy-pasteable examples and return actionable hints (`details.example`/`details.availableNodes`)
   when arguments are wrong.
 - **Persistent AI conversation** — full history and tool traces are saved and restored after reloads, can be

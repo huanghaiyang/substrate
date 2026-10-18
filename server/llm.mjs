@@ -289,6 +289,24 @@ function imageAttachmentPart(att, assets) {
   }
 }
 
+function countRequestedImages(messages) {
+  let count = 0
+  for (const m of Array.isArray(messages) ? messages : []) {
+    if (!m || m.role !== 'user' || !Array.isArray(m.attachments)) continue
+    count += m.attachments.filter((a) => a && a.kind === 'image').length
+  }
+  return count
+}
+
+function countImageParts(messages) {
+  let count = 0
+  for (const m of Array.isArray(messages) ? messages : []) {
+    if (!m || !Array.isArray(m.content)) continue
+    count += m.content.filter((part) => part && part.type === 'image_url').length
+  }
+  return count
+}
+
 async function normalizeMessages(input) {
   if (!Array.isArray(input)) return []
   const assets = listAssets()
@@ -398,7 +416,11 @@ export function sanitizeToolSequence(messages) {
 export async function runAssistant(dispatch, body = {}) {
   const started = Date.now()
   const { provider, model } = resolveModel(body.modelKey || body.model)
+  const requestedImages = countRequestedImages(body.messages)
   const userMessages = await normalizeMessages(body.messages)
+  const sentImages = countImageParts(userMessages)
+  let visionFallback = requestedImages > 0 && sentImages === 0
+  if (requestedImages > 0) console.log('[llm] vision requested=' + requestedImages + ' sent=' + sentImages)
   if (!userMessages.length) {
     return { ok: false, error: { code: 'INVALID_ARGUMENT', message: 'messages must contain at least one user message' } }
   }
@@ -441,6 +463,7 @@ export async function runAssistant(dispatch, body = {}) {
         let lastError = e
         let recovered = false
         if ((e.code === 'LLM_HTTP_ERROR' || e.code === 'LLM_BAD_RESPONSE') && hasImageContent(messages)) {
+          visionFallback = true
           messages = stripImageContent(messages)
           try {
             response = await callChatCompletion(provider, model.id, sanitizeToolSequence(messages), toolsEnabled ? tools : null)
@@ -487,6 +510,7 @@ export async function runAssistant(dispatch, body = {}) {
           reasoning,
           toolsDisabled,
           usage,
+          vision: { requested: requestedImages, sent: visionFallback ? 0 : sentImages, fallback: visionFallback },
           durationMs: Date.now() - started
         }
       }
@@ -553,6 +577,7 @@ export async function runAssistant(dispatch, body = {}) {
           toolsDisabled,
           hitStepLimit: true,
           usage: summaryResponse.usage || usage,
+          vision: { requested: requestedImages, sent: visionFallback ? 0 : sentImages, fallback: visionFallback },
           durationMs: Date.now() - started
         }
       }
@@ -570,6 +595,7 @@ export async function runAssistant(dispatch, body = {}) {
       steps,
       toolsDisabled,
       usage,
+      vision: { requested: requestedImages, sent: visionFallback ? 0 : sentImages, fallback: visionFallback },
       durationMs: Date.now() - started
     }
   } catch (e) {
@@ -578,6 +604,7 @@ export async function runAssistant(dispatch, body = {}) {
       error: { code: e.code || 'LLM_ERROR', message: sanitizeText(e.message || String(e)) },
       toolCalls,
       steps,
+      vision: { requested: requestedImages, sent: visionFallback ? 0 : sentImages, fallback: visionFallback },
       durationMs: Date.now() - started
     }
   }

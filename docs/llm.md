@@ -113,6 +113,10 @@ The AI composer supports **images and text attachments** (📎 button, drag & dr
   text is included in the message so the model can reason about it.
 - Up to 6 attachments; the uploaded asset appears in the material library immediately. Attachment
   chips are shown in the transcript, persisted with the chat and included in the Markdown export.
+- **Image context survives follow-ups**: the most recent image-bearing user turn is kept in the
+  request even after later text-only messages, so "look at the image again" still reaches the vision
+  model. The server reports `vision:{requested,sent,fallback}`; when an image was requested but could
+  not be delivered, the reply shows a warning instead of silently answering from metadata.
 
 ## Switching models / adding providers
 
