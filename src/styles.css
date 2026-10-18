@@ -1628,3 +1628,11 @@ code {
 .taper-length {
   margin-top: 6px;
 }
+
+.hint a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.hint a:hover {
+  text-decoration: underline;
+}

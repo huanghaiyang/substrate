@@ -410,6 +410,13 @@ export default defineComponent({
             <div class="hint" style="line-height: 1.9">{{ $t('help.paintBody') }}</div>
             <div class="side-title">{{ $t('help.stdTitle') }}</div>
             <div class="hint" style="line-height: 1.9">{{ $t('help.stdBody') }}</div>
+            <div class="side-title">{{ $t('help.docsTitle') }}</div>
+            <div class="hint" style="line-height: 1.9">
+              {{ $t('help.docsBody') }}
+              <a href="/README.zh-CN.md" target="_blank" rel="noopener">中文 README</a> ·
+              <a href="/docs/zh/README.md" target="_blank" rel="noopener">中文文档索引</a> ·
+              <a href="/docs/mcp.md" target="_blank" rel="noopener">English docs</a>
+            </div>
             <div v-if="mcpCheck" class="selfcheck-box" :class="mcpCheck.ok ? 'ok' : 'bad'">
               <div>{{ mcpCheck.ok ? $t('ai.selfcheckPass') : $t('ai.selfcheckFail') }} · {{ mcpCheck.totals.passed }}/{{ mcpCheck.totals.passed + mcpCheck.totals.failed }}</div>
               <div v-for="c in mcpCheck.checks.filter(c => !c.ok).slice(0, 6)" :key="c.name" class="hint small">✕ {{ c.name }} {{ c.info }}</div>

@@ -1,5 +1,7 @@
 # MCP integration — external agent interface
 
+**English** · [简体中文](zh/mcp.md)
+
 Substrate exposes its authoring pipeline to MCP clients (Claude Desktop/Code, Codex, Cursor, custom
 agents) through a **normalized tool catalog**. The heavy lifting (WebGL graph evaluation, painting,
 export baking) still happens in the browser app; a small local gateway relays tool calls to the

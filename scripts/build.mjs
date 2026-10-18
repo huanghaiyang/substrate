@@ -22,6 +22,10 @@ const copy = (from, to) => {
 copy('index.html', 'index.html')
 copy('src', 'src')
 copy('public', 'public')
+// Documentation (English + Chinese) is served by the app and linked from the Help dialog.
+copy('README.md', 'README.md')
+copy('README.zh-CN.md', 'README.zh-CN.md')
+copy('docs', 'docs')
 copy('node_modules/vue/dist/vue.esm-browser.prod.js', 'vendor/vue.esm-browser.prod.js')
 copy('node_modules/three/build/three.module.js', 'vendor/three.module.js')
 copy('node_modules/three/examples/jsm/controls/OrbitControls.js', 'vendor/addons/controls/OrbitControls.js')

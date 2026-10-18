@@ -16,6 +16,7 @@
     "audit:ui": "node scripts/cdp.mjs audit ui",
     "mcp": "node mcp/server.mjs",
     "test:mcp": "node scripts/mcp-test.mjs",
+    "test:docs": "node scripts/check-docs.mjs",
     "audit:mcp": "node scripts/cdp.mjs audit mcp"
   },
   "dependencies": {

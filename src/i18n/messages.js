@@ -274,6 +274,8 @@ export const EN = {
   'help.paintBody':
     'Double-click a Paint Layer node (or use its properties button) to open Paint Studio. Brush colour, size, opacity, hardness and X/Y symmetry are stored per stroke, so undo works.',
   'help.stdTitle': 'Standards',
+  'help.docsTitle': 'Documentation',
+  'help.docsBody': 'Full documentation is available in English and Simplified Chinese (Markdown, opens in a new tab).',
   'help.stdBody':
     'All processing happens in linear light on RGBA16F targets. Base colour and emissive are sRGB-encoded on export; normal / roughness / metallic / AO / height stay linear. Export presets pack ORM (glTF/Unreal) and Mask Map (Unity), with manifest.json + README.md describing colour spaces and normal convention.',
   'help.foot': 'Substrate 1.0 · Vue 3 + Three.js + Node (zero-bundler ESM)',
@@ -591,6 +593,8 @@ export const ZH = {
   'help.paintBody':
     '双击「绘制图层」节点（或使用属性面板中的按钮）打开绘制工作室。笔刷颜色、大小、不透明度、硬度与 X/Y 对称都按笔触存储，因此撤销可用。',
   'help.stdTitle': '行业标准',
+  'help.docsTitle': '文档',
+  'help.docsBody': '完整文档提供英文与简体中文版本（Markdown，在新标签页打开）。',
   'help.stdBody':
     '全部处理都在 RGBA16F 目标的线性光空间完成。基础色与自发光在导出时做 sRGB 编码；法线 / 粗糙度 / 金属度 / AO / 高度保持线性。导出预设会打包 ORM（glTF/Unreal）与 Mask Map（Unity），并生成描述色彩空间与法线约定的 manifest.json + README.md。',
   'help.foot': 'Substrate 1.0 · Vue 3 + Three.js + Node（零打包 ESM）',

@@ -1,5 +1,7 @@
 # Substrate — Procedural Texture Studio
 
+**English** · [简体中文](README.zh-CN.md) · [Chinese docs index](docs/zh/README.md)
+
 A **Substance Designer–style** material authoring tool: build node graphs that generate PBR textures on the GPU,
 paint on them by hand, preview the result as a lit 3D material, and export an industry-standard texture package.
 
@@ -70,6 +72,19 @@ titles) is never rewritten — material names are additionally kept ASCII-friend
 ![中文界面 · 2D 通道贴图](docs/screenshots/06-zh-maps.png)
 
 ![中文界面 · 绘制工作室](docs/screenshots/07-zh-paint.png)
+
+---
+
+## Documentation
+
+- **English**: this README · [`docs/mcp.md`](docs/mcp.md) · [`docs/llm.md`](docs/llm.md) ·
+  [`docs/asset-search.md`](docs/asset-search.md) · [`docs/brushes.md`](docs/brushes.md)
+- **简体中文**: [`README.zh-CN.md`](README.zh-CN.md) · [Chinese docs index](docs/zh/README.md) ·
+  [`docs/zh/mcp.md`](docs/zh/mcp.md) · [`docs/zh/llm.md`](docs/zh/llm.md) ·
+  [`docs/zh/asset-search.md`](docs/zh/asset-search.md) · [`docs/zh/brushes.md`](docs/zh/brushes.md)
+
+Documentation changes are validated by `npm run test:docs` (language pairing, language-switch links,
+relative links and image references).
 
 ---
 
@@ -530,6 +545,17 @@ node scripts/cdp.mjs shot docs/screenshots/01-graph-3d.png
 node scripts/cdp.mjs logs 3000
 ```
 
+### 6. Documentation consistency
+
+```bash
+npm run test:docs
+```
+
+Checks that every English document has a paired Chinese translation, both directions carry the
+`English · 简体中文` switch link, all relative documentation links and screenshot references resolve,
+the Chinese docs contain real translated text with matching section structure, and the Chinese docs
+index links every document.
+
 ---
 
 ## Performance notes
@@ -568,6 +594,7 @@ scripts/build.mjs          copies app + vendor ESM into dist/
 scripts/verify-export.mjs  independent material-package verifier
 scripts/cdp.mjs            Chrome DevTools Protocol helper (eval/screenshot/logs)
 scripts/mcp-test.mjs       end-to-end MCP contract test
+scripts/check-docs.mjs     English/Chinese documentation consistency + link checker
 mcp/server.mjs             stdio MCP server (translates JSON-RPC to the HTTP gateway)
 mcp/config.claude.json     Claude Desktop/Code configuration example
 mcp/config.codex.toml      Codex configuration example
@@ -575,6 +602,7 @@ docs/mcp.md                MCP integration reference
 docs/llm.md                AI assistant / provider configuration and key security
 docs/asset-search.md       online material providers, attribution and SSRF policy
 docs/brushes.md            custom brush JSON format
+docs/zh/                   Chinese translations of the docs + Chinese docs index
 server/llm.mjs             server-side LLM proxy + tool-calling agent loop
 server/assets.mjs          material-library storage/import/validation
 src/main.js                boot: mount app, create engine, restore session, self-test hook

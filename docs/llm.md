@@ -1,5 +1,7 @@
 # AI assistant (LLM) — setup and security
 
+**English** · [简体中文](zh/llm.md)
+
 The studio ships with a built-in AI assistant entry in the top bar (**✦**). It can inspect and
 modify the node graph, paint strokes, evaluate, capture previews and export packages by calling
 the same 29 MCP tools that external agents use. DeepSeek is configured by default; additional

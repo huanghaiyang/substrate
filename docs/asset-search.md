@@ -1,5 +1,7 @@
 # Online material search
 
+**English** · [简体中文](zh/asset-search.md)
+
 The AI assistant and the material library can search the web for reference textures, then import a
 result into the local material library (with attribution). The same capability is exposed to
 external MCP clients:

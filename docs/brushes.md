@@ -1,5 +1,7 @@
 # Custom brushes — import format
 
+**English** · [简体中文](zh/brushes.md)
+
 The Paint Studio supports importing brushes from JSON: open **绘制工作室 → 导入笔刷** and choose a
 `.json` file, or import the same structure programmatically with
 `importCustomBrushJson(text)` from `src/engine/brushes.js`. Imported brushes are stored in
@@ -66,4 +68,3 @@ A single brush object, an array of brush objects, or `{ "brushes": [...] }`:
 
 Unknown fields are ignored; invalid values are clamped or replaced with sensible defaults. Invalid
 JSON or a missing `name` produces an inline error in the Paint Studio and nothing is imported.
-```
