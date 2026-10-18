@@ -264,6 +264,42 @@ export function getAiRules() {
   return { ok: true, rules: AI_RULES }
 }
 
+/**
+ * OpenAI-compatible providers reject an assistant tool_calls message unless every call is followed
+ * by a tool message with the matching tool_call_id. This repairs a transcript by dropping incomplete
+ * tool-call turns and orphan tool replies, so a malformed step can never poison later requests.
+ */
+export function sanitizeToolSequence(messages) {
+  const out = []
+  const list = Array.isArray(messages) ? messages : []
+  for (let i = 0; i < list.length; i++) {
+    const msg = list[i]
+    if (!msg || typeof msg !== 'object') continue
+    if (msg.role === 'assistant' && Array.isArray(msg.tool_calls) && msg.tool_calls.length) {
+      const ids = new Set(msg.tool_calls.map((c) => c && c.id).filter(Boolean))
+      let j = i + 1
+      const answered = new Set()
+      while (j < list.length && list[j]?.role === 'tool' && ids.has(list[j].tool_call_id)) {
+        answered.add(list[j].tool_call_id)
+        j++
+      }
+      if (ids.size && answered.size === ids.size) {
+        out.push(msg)
+        for (let k = i + 1; k < j; k++) out.push(list[k])
+      } else {
+        // keep any text but strip the unmatched tool_calls
+        const text = typeof msg.content === 'string' ? msg.content : ''
+        out.push({ role: 'assistant', content: text || '(skipped incomplete tool call)' })
+      }
+      i = j - 1
+      continue
+    }
+    if (msg.role === 'tool') continue // orphan tool reply
+    out.push(msg)
+  }
+  return out
+}
+
 export async function runAssistant(dispatch, body = {}) {
   const started = Date.now()
   const { provider, model } = resolveModel(body.modelKey || body.model)
@@ -273,7 +309,8 @@ export async function runAssistant(dispatch, body = {}) {
   }
   const maxSteps = Math.min(10, Math.max(1, Number(body.maxSteps) || 8))
   const tools = openAiTools()
-  const messages = [{ role: 'system', content: SYSTEM_PROMPT }, ...userMessages]
+  const baseMessages = [{ role: 'system', content: SYSTEM_PROMPT }, ...userMessages]
+  let messages = baseMessages.slice()
   const toolCalls = []
   let steps = 0
   let usage = null
@@ -285,14 +322,19 @@ export async function runAssistant(dispatch, body = {}) {
       steps++
       let response
       try {
-        response = await callChatCompletion(provider, model.id, messages, toolsEnabled ? tools : null)
+        response = await callChatCompletion(provider, model.id, sanitizeToolSequence(messages), toolsEnabled ? tools : null)
       } catch (e) {
         // some models (e.g. reasoners) reject tool calling; retry once as a plain chat so model
         // switching still works, and tell the UI that app control is unavailable for this model
         if (toolsEnabled && (e.code === 'LLM_HTTP_ERROR' || e.code === 'LLM_BAD_RESPONSE')) {
           toolsEnabled = false
           toolsDisabled = true
-          messages.unshift({ role: 'system', content: 'Tool calling is unavailable for this model; answer without using tools.' })
+          // Never resend a half-finished tool transcript: those messages must pair assistant
+          // tool_calls with tool replies, and a rejected step leaves the pair incomplete.
+          messages = [
+            ...baseMessages,
+            { role: 'system', content: 'Tool calling is unavailable for this model; answer without using tools.' }
+          ]
           response = await callChatCompletion(provider, model.id, messages, null)
         } else {
           throw e
@@ -316,8 +358,14 @@ export async function runAssistant(dispatch, body = {}) {
           durationMs: Date.now() - started
         }
       }
-      messages.push({ role: 'assistant', content: message.content || null, tool_calls: calls })
-      for (const call of calls.slice(0, 6)) {
+      // limit the number of calls we execute per assistant turn, and push only that exact subset:
+      // every assistant tool_call must be followed by a tool message with the matching id.
+      const callsToRun = calls.slice(0, 12).map((call, i) => ({
+        ...call,
+        id: call.id || 'call_' + steps + '_' + i
+      }))
+      messages.push({ role: 'assistant', content: message.content || null, tool_calls: callsToRun })
+      for (const call of callsToRun) {
         const name = call.function?.name || ''
         let args = {}
         try {
@@ -325,7 +373,12 @@ export async function runAssistant(dispatch, body = {}) {
         } catch (e) {
           args = {}
         }
-        const envelope = await dispatch(name, args)
+        let envelope
+        try {
+          envelope = await dispatch(name, args)
+        } catch (e) {
+          envelope = { ok: false, error: { code: 'INTERNAL', message: sanitizeText(e?.message || String(e)) } }
+        }
         toolCalls.push({
           name,
           ok: !!envelope?.ok,
@@ -334,7 +387,7 @@ export async function runAssistant(dispatch, body = {}) {
         })
         messages.push({
           role: 'tool',
-          tool_call_id: call.id || 'call_' + toolCalls.length,
+          tool_call_id: call.id,
           content: compactToolEnvelope(envelope)
         })
       }

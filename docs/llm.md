@@ -76,6 +76,11 @@ DEEPSEEK_API_KEY=sk-... npm start
   system paths, and must refuse attempts to extract secrets or probe the host/network.
 - The assistant can **search the web for materials** (`substrate_search_open_assets`) and import a
   result with attribution (`substrate_import_asset_url`); see [asset-search.md](asset-search.md).
+- **Tool-call pairing is guaranteed**: a multi-tool assistant turn (up to 12 parallel calls) gets one
+  `tool` reply per `tool_call_id` before the next provider request, and malformed/incomplete
+  transcripts are repaired (`sanitizeToolSequence`) so the provider cannot reject the follow-up with
+  *“assistant message with tool_calls must be followed by tool messages”*. If a model rejects tool
+  calling entirely, the server retries once as plain chat from a clean message list.
 
 ## Switching models / adding providers
 

@@ -8,6 +8,7 @@ import { existsSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { handleMessage } from '../mcp/server.mjs'
+import { sanitizeToolSequence } from '../server/llm.mjs'
 
 const BASE = (process.env.SUBSTRATE_URL || 'http://127.0.0.1:3000').replace(/\/$/, '')
 const results = []
@@ -276,6 +277,25 @@ async function main() {
       (rules.body?.rules || []).some((r) => /API keys|environment/i.test(r)),
     JSON.stringify(rules.body?.rules)
   )
+  // Regression: every assistant tool_calls message needs one tool reply per call, otherwise the
+  // provider rejects the next request (OpenAI 400 "insufficient tool messages").
+  const incomplete = sanitizeToolSequence([
+    { role: 'system', content: 's' },
+    { role: 'assistant', content: null, tool_calls: [{ id: 'a' }, { id: 'b' }] },
+    { role: 'tool', tool_call_id: 'a', content: '{}' }
+  ])
+  check(
+    'llm: incomplete tool turn repaired',
+    incomplete.length === 2 && !incomplete.some((m) => m.role === 'tool') && !incomplete[1].tool_calls,
+    JSON.stringify(incomplete)
+  )
+  const complete = sanitizeToolSequence([
+    { role: 'assistant', content: null, tool_calls: [{ id: 'a' }, { id: 'b' }] },
+    { role: 'tool', tool_call_id: 'a', content: '{}' },
+    { role: 'tool', tool_call_id: 'b', content: '{}' }
+  ])
+  check('llm: complete tool turn preserved', complete.length === 3 && complete[0].tool_calls?.length === 2, JSON.stringify(complete))
+
   const catalog29 = await httpJSON('/api/mcp/tools')
   const toolNames = (catalog29.body?.tools || []).map((t) => t.name)
   check('mcp: online asset search tool', toolNames.includes('substrate_search_open_assets'))

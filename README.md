@@ -350,7 +350,7 @@ MCP client ──stdio──▶ mcp/server.mjs ──HTTP──▶ server/index.
 
 Full reference, curl examples, auth, self-check and limitations: [`docs/mcp.md`](docs/mcp.md). Online materials:
 [`docs/asset-search.md`](docs/asset-search.md).
-Test it with `npm run test:mcp` (needs the app tab open; 67 interface checks including LLM key-masking, AI
+Test it with `npm run test:mcp` (needs the app tab open; 69 interface checks including LLM key-masking, AI
 rules, online-search guards and the material-library API).
 
 ## AI assistant
@@ -502,7 +502,7 @@ and POSTed to `/api/debug/report` for CI.
 npm run test:mcp
 ```
 
-End-to-end validation of the external interface (67 pass / 2 skipped): gateway availability/catalog, stdio JSON-RPC logic
+End-to-end validation of the external interface (69 pass / 2 skipped): gateway availability/catalog, stdio JSON-RPC logic
 (initialize / tools/list / tools/call / ping), graph reads and mutations, evaluation, thumbnails and
 2D/3D preview capture, painting, project save/load/delete, export + zip, normalized error envelopes,
 HTTP JSON-RPC (`/mcp`), the plain JSON endpoint, `/api/mcp/selfcheck`, the LLM model/provider endpoints
