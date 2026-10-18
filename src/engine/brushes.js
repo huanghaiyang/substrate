@@ -274,10 +274,172 @@ export const BRUSH_GROUPS = [
   { key: 'brush.catNature', items: NATURE_BRUSHES }
 ]
 
+// ---------------------------------------------------------------- custom (imported) brushes
+const CUSTOM_BRUSH_KEY = 'substrate.customBrushes'
+const CUSTOM_SHAPES = ['round', 'flat', 'spray', 'flora']
+const CUSTOM_MOTIFS = ['grass', 'leaf', 'flower', 'tree', 'fern', 'branch']
+let customBrushes = []
+const customMap = new Map()
+
+function clampNum(value, min, max, fallback) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return fallback
+  return Math.min(max, Math.max(min, n))
+}
+
+function brushSlug(name) {
+  return String(name || 'brush')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32) || 'brush'
+}
+
+function normalizeCustomBrush(def, index = 0) {
+  if (!def || typeof def !== 'object') throw new Error('Brush definition must be an object')
+  const name = String(def.name || def.label || '').trim().slice(0, 48)
+  if (!name) throw new Error('Brush needs a "name"')
+  const shape = CUSTOM_SHAPES.includes(def.shape) ? def.shape : 'round'
+  const brush = {
+    id: 'custom-' + brushSlug(name) + '-' + (index + 1),
+    name,
+    nameKey: null,
+    source: 'custom',
+    category: 'custom',
+    shape,
+    hardness: clampNum(def.hardness, 0, 0.999, shape === 'round' ? 0.8 : 0.7),
+    spacing: clampNum(def.spacing, 0.01, 1, 0.1),
+    flow: clampNum(def.flow, 0.01, 1, 0.8),
+    grain: clampNum(def.grain, 0, 1, 0),
+    scatter: clampNum(def.scatter, 0, 2, 0),
+    angle: clampNum(def.angle, -360, 360, 0),
+    flatness: clampNum(def.flatness, 0.05, 1, 1),
+    rotateJitter: clampNum(def.rotateJitter, 0, 360, 0),
+    scaleJitter: clampNum(def.scaleJitter, 0, 1, 0),
+    sizeScale: clampNum(def.sizeScale, 0.1, 4, 1),
+    pressureSize: def.pressureSize !== false,
+    pressureFlow: def.pressureFlow === true
+  }
+  if (shape === 'spray') {
+    brush.dots = Math.round(clampNum(def.dots, 1, 40, 8))
+    brush.dotScale = clampNum(def.dotScale, 0.01, 1, 0.16)
+  }
+  if (shape === 'flora') {
+    brush.motif = CUSTOM_MOTIFS.includes(def.motif) ? def.motif : 'leaf'
+    if (!brush.rotateJitter) brush.rotateJitter = 45
+    if (!brush.scaleJitter) brush.scaleJitter = 0.2
+  }
+  return brush
+}
+
+function persistCustomBrushes() {
+  try {
+    localStorage.setItem(CUSTOM_BRUSH_KEY, JSON.stringify(customBrushes))
+  } catch (e) {
+    /* storage may be unavailable */
+  }
+}
+
+export function loadCustomBrushes() {
+  customBrushes = []
+  customMap.clear()
+  try {
+    const raw = JSON.parse(localStorage.getItem(CUSTOM_BRUSH_KEY) || '[]')
+    if (Array.isArray(raw)) {
+      raw.forEach((def, i) => {
+        try {
+          const brush = normalizeCustomBrush(def, i)
+          // preserve the stored id if it is the expected shape
+          if (typeof def.id === 'string' && def.id.startsWith('custom-')) brush.id = def.id
+          if (!customMap.has(brush.id)) {
+            customBrushes.push(brush)
+            customMap.set(brush.id, brush)
+          }
+        } catch (e) {
+          /* skip invalid entries */
+        }
+      })
+    }
+  } catch (e) {
+    customBrushes = []
+  }
+  return customBrushes.slice()
+}
+
+loadCustomBrushes()
+
+export function getAllBrushes() {
+  return [...BRUSHES, ...customBrushes]
+}
+
+export function getBrushGroups() {
+  const groups = [...BRUSH_GROUPS]
+  if (customBrushes.length) groups.push({ key: 'brush.catCustom', items: customBrushes.slice() })
+  return groups
+}
+
+export function getCustomBrushes() {
+  return customBrushes.slice()
+}
+
+function uniqueCustomId(base) {
+  let id = base
+  let n = 2
+  while (customMap.has(id) || BRUSHES.some((b) => b.id === id)) id = base + '-' + n++
+  return id
+}
+
+/** Validate + register one brush definition (object) and persist the library. */
+export function addCustomBrush(def) {
+  const brush = normalizeCustomBrush(def, customBrushes.length)
+  brush.id = uniqueCustomId(brush.id)
+  customBrushes.push(brush)
+  customMap.set(brush.id, brush)
+  persistCustomBrushes()
+  return { ...brush }
+}
+
+export function removeCustomBrush(id) {
+  const before = customBrushes.length
+  customBrushes = customBrushes.filter((b) => b.id !== id)
+  customMap.delete(id)
+  if (customBrushes.length !== before) persistCustomBrushes()
+  return customBrushes.length !== before
+}
+
+/**
+ * Import brushes from a JSON string. Accepts a single brush object, an array of brushes, or
+ * { "brushes": [...] }. Also accepts { "version": 1, "brushes": [...] }.
+ */
+export function importCustomBrushJson(text) {
+  let parsed
+  try {
+    parsed = JSON.parse(String(text || ''))
+  } catch (e) {
+    throw new Error('Invalid JSON: ' + e.message)
+  }
+  const list = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.brushes) ? parsed.brushes : parsed && typeof parsed === 'object' ? [parsed] : []
+  if (!list.length) throw new Error('No brush definitions found')
+  const added = []
+  for (const def of list.slice(0, 50)) added.push(addCustomBrush(def))
+  return added
+}
+
+export function resetCustomBrushes() {
+  customBrushes = []
+  customMap.clear()
+  try {
+    localStorage.removeItem(CUSTOM_BRUSH_KEY)
+  } catch (e) {
+    /* ignore */
+  }
+}
+
+
 export const DEFAULT_BRUSH_ID = 'soft-round'
 
 export function brushById(id) {
-  return BRUSHES.find((b) => b.id === id) || BRUSHES[0]
+  return customMap.get(id) || BRUSHES.find((b) => b.id === id) || BRUSHES[0]
 }
 
 /** Merge stroke overrides with the selected brush preset. */

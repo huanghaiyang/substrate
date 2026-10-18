@@ -10,8 +10,16 @@ import {
   savePaintBrush
 } from '../engine/store.js'
 import { drawStroke } from '../engine/paint.js'
-import { BRUSHES, BRUSH_GROUPS, brushById, brushPreview } from '../engine/brushes.js'
-import { trNode } from '../i18n/index.js'
+import {
+  getAllBrushes,
+  getBrushGroups,
+  brushById,
+  brushPreview,
+  importCustomBrushJson,
+  removeCustomBrush
+} from '../engine/brushes.js'
+import { loadPattern } from '../engine/paint.js'
+import { t, trNode } from '../i18n/index.js'
 
 export default defineComponent({
   name: 'PaintStudio',
@@ -22,9 +30,22 @@ export default defineComponent({
     const wrapRef = ref(null)
     const cursorEl = ref(null)
     const brush = state.paintBrush
-    const brushes = BRUSHES
-    const brushGroups = BRUSH_GROUPS
+    const brushVersion = ref(0)
+    const brushes = computed(() => {
+      void brushVersion.value
+      return getAllBrushes()
+    })
+    const brushGroups = computed(() => {
+      void brushVersion.value
+      return getBrushGroups()
+    })
+    const brushStatus = ref('')
+    const brushFileInput = ref(null)
+    const assetFileInput = ref(null)
+    const assets = ref([])
+    const assetStatus = ref('')
     const node = computed(() => nodeById(props.nodeId))
+    const brushName = (b) => (b && b.nameKey ? t(b.nameKey) : b?.name || '')
     const currentBrush = computed(() => brushById(brush.brushId))
     const brushValue = (key) => {
       const v = brush[key]
@@ -37,9 +58,85 @@ export default defineComponent({
     }
     function selectBrush(b) {
       brush.brushId = b.id
-      brush.hardness = b.hardness
-      brush.flow = b.flow
-      brush.spacing = b.spacing
+      if (b.hardness !== undefined) brush.hardness = b.hardness
+      brush.flow = b.flow ?? null
+      brush.spacing = b.spacing ?? null
+    }
+    function removeBrush(b) {
+      if (!b || b.source !== 'custom') return
+      if (removeCustomBrush(b.id)) {
+        if (brush.brushId === b.id) brush.brushId = 'soft-round'
+        brushVersion.value++
+        brushStatus.value = ''
+      }
+    }
+    function openBrushImport() {
+      brushFileInput.value?.click()
+    }
+    async function onBrushFile(event) {
+      const file = event.target?.files?.[0]
+      event.target.value = ''
+      if (!file) return
+      try {
+        const text = await file.text()
+        const added = importCustomBrushJson(text)
+        brushVersion.value++
+        brushStatus.value = t('paint.brushImportOk', { n: added.length })
+        if (added[0]) selectBrush(added[0])
+      } catch (e) {
+        brushStatus.value = t('paint.brushImportFail', { msg: e.message || String(e) })
+      }
+    }
+
+    // ---- material library usage inside the Paint Studio ----
+    async function refreshAssets() {
+      try {
+        const res = await fetch('/api/assets')
+        const data = await res.json()
+        if (data?.ok) assets.value = data.assets || []
+      } catch (e) {
+        assets.value = []
+      }
+    }
+    function openAssetImport() {
+      assetFileInput.value?.click()
+    }
+    async function onAssetFile(event) {
+      const file = event.target?.files?.[0]
+      event.target.value = ''
+      if (!file) return
+      try {
+        if (!/^image\/(png|jpeg|webp)$/.test(file.type)) throw new Error('PNG/JPEG/WebP only')
+        const dataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(reader.result)
+          reader.onerror = () => reject(new Error('read failed'))
+          reader.readAsDataURL(file)
+        })
+        const res = await fetch('/api/assets/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: file.name, dataUrl })
+        })
+        const data = await res.json()
+        if (!data.ok) throw new Error(data.error?.message || 'import failed')
+        assetStatus.value = t('assets.imported', { name: data.asset.name })
+        await refreshAssets()
+      } catch (e) {
+        assetStatus.value = t('assets.importFail', { msg: e.message || String(e) })
+      }
+    }
+    async function fillWithAsset(asset) {
+      if (!asset || !canvasRef.value) return
+      try {
+        await loadPattern(asset.url)
+        commitStroke(props.nodeId, { pattern: asset.url, patternScale: 1, opacity: 1 })
+        canvasRef.value.getContext('2d').clearRect(0, 0, canvasRef.value.width, canvasRef.value.height)
+        attachPaintCanvas(props.nodeId, canvasRef.value)
+        assetStatus.value = t('assets.applied', { name: asset.name })
+      } catch (e) {
+        assetStatus.value = t('assets.applyFail', { msg: e.message || String(e) })
+      }
     }
     let brushSaveTimer = null
     watch(
@@ -214,7 +311,10 @@ export default defineComponent({
       attachPaintCanvas(props.nodeId, canvasRef.value)
     }
 
-    onMounted(() => nextTick(attach))
+    onMounted(() => {
+      nextTick(attach)
+      refreshAssets()
+    })
     watch(() => props.nodeId, () => nextTick(attach))
 
     return {
@@ -227,7 +327,19 @@ export default defineComponent({
       brushGroups,
       currentBrush,
       brushThumbFor,
+      brushName,
       selectBrush,
+      removeBrush,
+      openBrushImport,
+      onBrushFile,
+      brushFileInput,
+      brushStatus,
+      assets,
+      assetStatus,
+      refreshAssets,
+      openAssetImport,
+      onAssetFile,
+      fillWithAsset,
       brushValue,
       node,
       title,
@@ -259,7 +371,7 @@ export default defineComponent({
           <div class="brush-preview"><div class="brush-dot" :style="brushDotStyle"></div></div>
           <div class="brush-head">
             <span>{{ $t('paint.brushes') }}</span>
-            <span class="dim small">{{ $t(currentBrush.nameKey) }}</span>
+            <span class="dim small">{{ brushName(currentBrush) }}</span>
           </div>
           <div v-for="g in brushGroups" :key="g.key" class="brush-group">
             <div class="brush-group-label">{{ $t(g.key) }}</div>
@@ -269,13 +381,33 @@ export default defineComponent({
                 :key="b.id"
                 class="brush-item"
                 :class="{ on: brush.brushId === b.id }"
-                :title="$t(b.nameKey)"
+                :title="brushName(b)"
                 @click="selectBrush(b)"
               >
                 <img :src="brushThumbFor(b)" alt="" draggable="false" />
-                <span>{{ $t(b.nameKey) }}</span>
+                <span>{{ brushName(b) }}</span>
+                <span v-if="b.source === 'custom'" class="brush-del" :title="$t('paint.brushDelete')" @click.stop="removeBrush(b)">×</span>
               </button>
             </div>
+          </div>
+          <div class="brush-import-row">
+            <button class="btn tiny" @click="openBrushImport">{{ $t('paint.importBrush') }}</button>
+            <input ref="brushFileInput" type="file" accept=".json,application/json" style="display: none" @change="onBrushFile" />
+            <span v-if="brushStatus" class="brush-status">{{ brushStatus }}</span>
+          </div>
+          <div class="paint-assets">
+            <div class="brush-head">
+              <span>{{ $t('paint.assets') }}</span>
+              <button class="btn tiny" @click="openAssetImport">{{ $t('paint.assetImport') }}</button>
+              <input ref="assetFileInput" type="file" accept="image/png,image/jpeg,image/webp" style="display: none" @change="onAssetFile" />
+            </div>
+            <div v-if="assets.length" class="asset-strip">
+              <button v-for="a in assets" :key="a.id" class="asset-thumb" :title="a.name" @click="fillWithAsset(a)">
+                <img :src="a.url" :alt="a.name" />
+              </button>
+            </div>
+            <div v-else class="hint small">{{ $t('paint.noAssets') }}</div>
+            <div v-if="assetStatus" class="brush-status">{{ assetStatus }}</div>
           </div>
           <div class="param">
             <div class="param-label"><span>{{ $t('paint.color') }}</span><span class="val">{{ brush.color }}</span></div>

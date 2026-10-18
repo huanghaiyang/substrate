@@ -235,6 +235,59 @@ async function main() {
   const directInvalid = await httpJSON('/api/mcp/call', { method: 'POST', body: JSON.stringify({ name: 'substrate_load_demo', arguments: { id: 'nope' } }) })
   check('http: /api/mcp/call normalized error', directInvalid.body?.ok === false && directInvalid.body.error.code === 'INVALID_ARGUMENT', JSON.stringify(directInvalid.body))
 
+  // ---------------------------------------------------------------- MCP self-check endpoint
+  const selfcheck = await httpJSON('/api/mcp/selfcheck')
+  check('selfcheck: endpoint ok', selfcheck.body?.ok === true, JSON.stringify(selfcheck.body?.totals || selfcheck.body))
+  check('selfcheck: reports bridge', (selfcheck.body?.checks || []).some((c) => c.name.includes('bridge') && c.ok), JSON.stringify(selfcheck.body?.checks))
+
+  // ---------------------------------------------------------------- LLM gateway (no secrets in responses)
+  const models = await httpJSON('/api/llm/models')
+  check('llm: models listed', models.body?.ok === true && (models.body.models || []).length >= 1, JSON.stringify(models.body?.error))
+  check('llm: no API key leaked', !/sk-[A-Za-z0-9_-]{8,}/.test(JSON.stringify(models.body)), 'key material found in /api/llm/models')
+  check('llm: provider masks key as hasKey', (models.body?.providers || []).every((p) => !('apiKey' in p) && 'hasKey' in p), JSON.stringify(models.body?.providers))
+  const chatInvalid = await httpJSON('/api/llm/chat', { method: 'POST', body: JSON.stringify({ modelKey: models.body?.defaultModel, messages: [] }) })
+  check('llm: chat validates empty messages', chatInvalid.body?.ok === false && chatInvalid.body.error.code === 'INVALID_ARGUMENT', JSON.stringify(chatInvalid.body))
+
+  const customProvider = await httpJSON('/api/llm/providers', {
+    method: 'POST',
+    body: JSON.stringify({ id: 'mcp-test-provider', label: 'MCP Test Provider', baseUrl: 'https://example.com/v1', models: [{ id: 'test-model', label: 'Test Model' }], apiKey: 'sk-test-secret-should-not-leak' })
+  })
+  check('llm: custom provider saved', customProvider.body?.ok === true, JSON.stringify(customProvider.body?.error))
+  check('llm: custom provider key masked', !/sk-test-secret-should-not-leak/.test(JSON.stringify(customProvider.body)), 'key material echoed by provider save')
+  const modelsAfter = await httpJSON('/api/llm/models')
+  check('llm: custom provider listed without key', (modelsAfter.body?.providers || []).some((p) => p.id === 'mcp-test-provider' && p.hasKey === true) && !/sk-test-secret/.test(JSON.stringify(modelsAfter.body)))
+  const providerDeleted = await httpJSON('/api/llm/providers/delete', { method: 'POST', body: JSON.stringify({ id: 'mcp-test-provider' }) })
+  check('llm: custom provider deleted', providerDeleted.body?.ok === true, JSON.stringify(providerDeleted.body?.error))
+
+  if (process.env.SUBSTRATE_TEST_LLM === '1') {
+    const chat = await httpJSON('/api/llm/chat', {
+      method: 'POST',
+      body: JSON.stringify({ modelKey: models.body?.defaultModel, messages: [{ role: 'user', content: '只回复 OK，不要调用工具' }], maxSteps: 2 })
+    })
+    check('llm: live chat call', chat.body?.ok === true, JSON.stringify(chat.body?.error))
+  } else {
+    skip('llm: live chat call', 'set SUBSTRATE_TEST_LLM=1 to call the configured provider')
+  }
+
+  // ---------------------------------------------------------------- material library CRUD
+  const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAFUlEQVR42mP8z8BQz0AEYBxVSF+FABJADveWkH6oAAAAAElFTkSuQmCC'
+  const assetImport = await httpJSON('/api/assets/import', { method: 'POST', body: JSON.stringify({ name: 'mcp-test.png', dataUrl: tinyPng }) })
+  check('assets: import', assetImport.body?.ok === true && !!assetImport.body.asset?.id, JSON.stringify(assetImport.body?.error))
+  const assetList = await httpJSON('/api/assets')
+  const asset = (assetList.body?.assets || []).find((a) => a.id === assetImport.body?.asset?.id)
+  check('assets: list contains imported asset', !!asset && !!asset.url, JSON.stringify(assetList.body?.assets))
+  if (asset) {
+    const fileRes = await fetch(BASE + asset.url)
+    check('assets: file served', fileRes.ok && (await fileRes.arrayBuffer()).byteLength > 0)
+    const deleted = await httpJSON('/api/assets/delete', { method: 'POST', body: JSON.stringify({ id: asset.id }) })
+    check('assets: delete', deleted.body?.ok === true, JSON.stringify(deleted.body?.error))
+  } else {
+    check('assets: file served', false, 'asset missing')
+    check('assets: delete', false, 'asset missing')
+  }
+  const badAsset = await httpJSON('/api/assets/import', { method: 'POST', body: JSON.stringify({ name: 'bad.txt', dataUrl: 'data:text/plain;base64,aGVsbG8=' }) })
+  check('assets: rejects non-image uploads', badAsset.body?.ok === false && badAsset.body.error.code === 'ASSET_IMPORT_FAILED', JSON.stringify(badAsset.body))
+
   const restore = await httpJSON('/api/mcp/call', { method: 'POST', body: JSON.stringify({ name: 'substrate_load_demo', arguments: { id: 'weathered-steel' } }) })
   check('cleanup: restore demo', restore.body?.ok === true, JSON.stringify(restore.body?.error))
 

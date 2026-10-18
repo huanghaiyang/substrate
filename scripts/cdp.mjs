@@ -96,6 +96,23 @@ async function main() {
     }
   })
   try {
+    if (cmd === 'viewport') {
+      // set a deterministic capture viewport: node scripts/cdp.mjs viewport 1920 937 2
+      const width = Number(args[1]) || 1920
+      const height = Number(args[2]) || 937
+      const dpr = Number(args[3]) || 2
+      await client.send('Emulation.setDeviceMetricsOverride', {
+        width,
+        height,
+        deviceScaleFactor: dpr,
+        mobile: false,
+        screenWidth: width,
+        screenHeight: height
+      })
+      console.log('viewport', width + 'x' + height + ' @' + dpr)
+      return
+    }
+
     if (cmd === 'audit') {
       // foreground the page: background tabs throttle timers, which stalls the in-page suite
       try {
@@ -179,6 +196,15 @@ async function main() {
         /* ignore */
       }
       await new Promise((r) => setTimeout(r, 350))
+      await client.send('Emulation.setDeviceMetricsOverride', {
+        width: 1920,
+        height: 937,
+        deviceScaleFactor: 2,
+        mobile: false,
+        screenWidth: 1920,
+        screenHeight: 937
+      }).catch(() => {})
+      await new Promise((r) => setTimeout(r, 500))
       const result = await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false })
       writeFileSync(out, Buffer.from(result.data, 'base64'))
       console.log('wrote ' + out)

@@ -6,6 +6,50 @@ import { resolveBrush, stampDab } from './brushes.js'
 
 export const PAINT_SIZE = 1024
 
+// Pattern fills (material-library images) are decoded once into an offscreen canvas. A stroke
+// stores the image URL; until the image is decoded the fill is skipped and re-rasterised by
+// preloadPatterns().
+const patternCache = new Map()
+const patternLoading = new Map()
+
+export function isPatternReady(url) {
+  return !!url && patternCache.has(url)
+}
+
+export function loadPattern(url) {
+  if (!url) return Promise.resolve(null)
+  if (patternCache.has(url)) return Promise.resolve(patternCache.get(url))
+  if (patternLoading.has(url)) return patternLoading.get(url)
+  const promise = new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => {
+      const max = 1024
+      const scale = Math.min(1, max / Math.max(img.width || max, img.height || max))
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.max(1, Math.round((img.width || max) * scale))
+      canvas.height = Math.max(1, Math.round((img.height || max) * scale))
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height)
+      patternCache.set(url, canvas)
+      patternLoading.delete(url)
+      resolve(canvas)
+    }
+    img.onerror = () => {
+      patternLoading.delete(url)
+      resolve(null)
+    }
+    img.src = url
+  })
+  patternLoading.set(url, promise)
+  return promise
+}
+
+/** Load every pattern referenced by a stroke list (used when a paint canvas is attached). */
+export async function preloadPatterns(strokes) {
+  const urls = [...new Set((strokes || []).map((s) => s.pattern).filter(Boolean))]
+  await Promise.all(urls.filter((u) => !patternCache.has(u)).map((u) => loadPattern(u)))
+  return urls.length
+}
+
 export function createPaintCanvas(size = PAINT_SIZE) {
   const canvas = document.createElement('canvas')
   canvas.width = size
@@ -91,6 +135,26 @@ export function strokeSamples(points, width, height, step, opts = {}) {
 export function drawStroke(ctx, stroke, width, height) {
   const brush = resolveBrush(stroke)
   const colStr = colorString(stroke.color)
+  if (stroke.pattern) {
+    const patternCanvas = patternCache.get(stroke.pattern)
+    if (!patternCanvas) return
+    ctx.save()
+    ctx.globalCompositeOperation = stroke.erase ? 'destination-out' : 'source-over'
+    ctx.globalAlpha = Math.min(1, Math.max(0, Number(stroke.opacity ?? 1)))
+    const pattern = ctx.createPattern(patternCanvas, 'repeat')
+    if (!pattern) {
+      ctx.restore()
+      return
+    }
+    const scale = Math.max(0.05, Number(stroke.patternScale ?? 1))
+    if (typeof DOMMatrix !== 'undefined' && pattern.setTransform) {
+      pattern.setTransform(new DOMMatrix([scale, 0, 0, scale, Number(stroke.patternOffsetX ?? 0) * width, Number(stroke.patternOffsetY ?? 0) * height]))
+    }
+    ctx.fillStyle = pattern
+    ctx.fillRect(0, 0, width, height)
+    ctx.restore()
+    return
+  }
   if (stroke.fill) {
     ctx.save()
     ctx.globalCompositeOperation = brush.erase ? 'destination-out' : 'source-over'

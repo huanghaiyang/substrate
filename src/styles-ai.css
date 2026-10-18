@@ -1,0 +1,354 @@
+/* ---- AI assistant panel ---- */
+.ai-btn {
+  color: var(--accent);
+}
+.ai-panel {
+  position: fixed;
+  top: 46px;
+  right: 0;
+  bottom: 0;
+  width: 396px;
+  display: flex;
+  flex-direction: column;
+  background: #14181f;
+  border-left: 1px solid var(--line);
+  box-shadow: -18px 0 40px rgba(0, 0, 0, 0.35);
+  z-index: 45;
+}
+.ai-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.ai-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  color: var(--text);
+  white-space: nowrap;
+}
+.ai-model {
+  min-width: 0;
+  flex: 1;
+  max-width: 170px;
+  height: 24px;
+  font-size: 10.5px;
+}
+.ai-settings {
+  border-bottom: 1px solid var(--line);
+  padding: 10px;
+  max-height: 46%;
+  overflow-y: auto;
+  background: var(--bg1);
+}
+.ai-provider {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 0;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.06);
+}
+.ai-provider-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+  font-size: 10.5px;
+}
+.ai-key-state {
+  font-size: 9px;
+  color: #e07b7b;
+}
+.ai-key-state.ok {
+  color: #69d69b;
+}
+.ai-form {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.ai-form input {
+  background: var(--bg0);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 5px 7px;
+}
+.ai-form-row {
+  display: flex;
+  gap: 6px;
+}
+.ai-test {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  margin: 6px 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ai-check {
+  margin: 8px 10px 0;
+  padding: 7px 9px;
+  border-radius: 6px;
+  font-size: 11px;
+  border: 1px solid var(--line);
+}
+.ai-check.ok {
+  color: #69d69b;
+  border-color: rgba(105, 214, 155, 0.4);
+}
+.ai-check.bad {
+  color: #ff8b8b;
+  border-color: rgba(255, 139, 139, 0.4);
+}
+.ai-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ai-empty {
+  color: var(--text-dim);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ai-empty-title {
+  font-size: 13px;
+  color: var(--text);
+}
+.ai-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+.ai-msg {
+  display: flex;
+  flex-direction: column;
+}
+.ai-msg.user {
+  align-items: flex-end;
+}
+.ai-bubble {
+  padding: 7px 9px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-width: 100%;
+}
+.ai-bubble.user {
+  background: var(--accent-soft);
+  border: 1px solid rgba(224, 87, 74, 0.35);
+}
+.ai-bubble.assistant {
+  background: var(--bg1);
+  border: 1px solid var(--line);
+}
+.ai-thinking {
+  opacity: 0.7;
+  font-style: italic;
+}
+.ai-error {
+  color: #ff8b8b;
+  font-size: 10.5px;
+  white-space: pre-wrap;
+}
+.ai-error-bar {
+  padding: 6px 10px;
+  border-top: 1px solid var(--line);
+}
+.ai-trace {
+  margin-top: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.ai-tool {
+  font-size: 9.5px;
+  color: #e0b06a;
+  border-left: 2px solid #6b5a3a;
+  padding-left: 6px;
+  display: flex;
+  flex-direction: column;
+}
+.ai-tool.ok {
+  color: #69d69b;
+  border-color: #3a6b52;
+}
+.ai-tool.bad {
+  color: #ff8b8b;
+  border-color: #6b3a3a;
+}
+.ai-input-row {
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px 4px;
+  border-top: 1px solid var(--line);
+}
+.ai-input-row textarea {
+  flex: 1;
+  resize: none;
+  background: var(--bg0);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 11.5px;
+  padding: 6px 8px;
+  min-height: 44px;
+}
+.ai-input-row .btn {
+  align-self: flex-end;
+}
+.ai-foot {
+  padding: 0 10px 8px;
+}
+
+/* ---- material library ---- */
+.asset-modal {
+  width: 760px;
+  max-width: 94vw;
+}
+.asset-library {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+.asset-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg1);
+  display: flex;
+  flex-direction: column;
+}
+.asset-card img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  background: #0e1014;
+}
+.asset-card-body {
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.asset-name {
+  font-size: 11px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.asset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 2px;
+}
+.asset-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 18px 0;
+  color: var(--text-dim);
+}
+.asset-status {
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.asset-strip {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.asset-thumb {
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--bg1);
+  cursor: pointer;
+  aspect-ratio: 1;
+}
+.asset-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.asset-thumb:hover {
+  border-color: var(--accent);
+}
+.paint-assets {
+  border-top: 1px solid var(--line);
+  padding-top: 7px;
+  margin-bottom: 8px;
+}
+
+/* ---- custom brushes ---- */
+.brush-item {
+  position: relative;
+}
+.brush-del {
+  position: absolute;
+  top: 1px;
+  right: 3px;
+  font-size: 11px;
+  color: var(--text-faint);
+  line-height: 1;
+}
+.brush-del:hover {
+  color: #ff8b8b;
+}
+.brush-import-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.brush-status {
+  font-size: 9.5px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+.btn.tiny {
+  padding: 3px 7px;
+  font-size: 10px;
+  height: auto;
+  min-height: 0;
+}
+.btn.danger {
+  color: #ff8b8b;
+}
+
+/* ---- MCP self-check result ---- */
+.selfcheck-box {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 11px;
+}
+.selfcheck-box.ok {
+  border-color: rgba(105, 214, 155, 0.4);
+  color: #69d69b;
+}
+.selfcheck-box.bad {
+  border-color: rgba(255, 139, 139, 0.4);
+  color: #ff8b8b;
+}

@@ -6,6 +6,9 @@ import Preview3D from './components/Preview3D.js'
 import MapPanel from './components/MapPanel.js'
 import PaintStudio from './components/PaintStudio.js'
 import ExportDialog from './components/ExportDialog.js'
+import AiPanel from './components/AiPanel.js'
+import AssetLibrary from './components/AssetLibrary.js'
+import { runMcpSelfCheck } from './engine/mcp-selfcheck.js'
 import {
   state,
   newProject,
@@ -29,13 +32,17 @@ import { locale, locales, setLocale, t, trText } from './i18n/index.js'
 
 export default defineComponent({
   name: 'App',
-  components: { NodePalette, GraphEditor, Inspector, Preview3D, MapPanel, PaintStudio, ExportDialog },
+  components: { NodePalette, GraphEditor, Inspector, Preview3D, MapPanel, PaintStudio, ExportDialog, AiPanel, AssetLibrary },
   setup() {
     const graphRef = ref(null)
     const showExport = ref(false)
     const showProjects = ref(false)
     const showDemos = ref(false)
     const showHelp = ref(false)
+    const showAi = ref(false)
+    const showAssets = ref(false)
+    const mcpCheck = ref(null)
+    const mcpChecking = ref(false)
     const projects = ref([])
     const loadingProjects = ref(false)
     const toast = ref({ msg: '', type: '' })
@@ -110,6 +117,20 @@ export default defineComponent({
       state.mode = 'graph'
       state.activePaintId = null
       requestEval(true)
+    }
+
+    async function runMcpCheck() {
+      mcpChecking.value = true
+      try {
+        const report = await runMcpSelfCheck()
+        mcpCheck.value = report
+        notify(report.ok ? t('ai.selfcheckPass') + ' · ' + report.totals.passed : t('ai.selfcheckFail') + ' · ' + report.totals.failed, report.ok ? 'info' : 'error')
+      } catch (e) {
+        mcpCheck.value = { ok: false, totals: { passed: 0, failed: 1 }, checks: [{ name: String(e.message || e), ok: false }] }
+        notify(String(e.message || e), 'error')
+      } finally {
+        mcpChecking.value = false
+      }
     }
 
     async function runSelfTest() {
@@ -217,6 +238,11 @@ export default defineComponent({
       showProjects,
       showDemos,
       showHelp,
+      showAi,
+      showAssets,
+      mcpCheck,
+      mcpChecking,
+      runMcpCheck,
       projects,
       loadingProjects,
       toast,
@@ -281,6 +307,8 @@ export default defineComponent({
         <div class="lang-switch" :title="$t('lang.label')">
           <button v-for="l in locales" :key="l.id" :class="{ on: locale.value === l.id }" @click="setLocale(l.id)">{{ l.label }}</button>
         </div>
+        <button class="icon-btn ai-btn" :title="$t('ai.title')" @click="showAi = !showAi">✦</button>
+        <button class="icon-btn" :title="$t('assets.title')" @click="showAssets = true">▦</button>
         <button class="icon-btn" :title="$t('top.help')" @click="showHelp = true">?</button>
         <button class="btn primary" @click="showExport = true">{{ $t('top.export') }}</button>
       </header>
@@ -324,6 +352,8 @@ export default defineComponent({
       </footer>
 
       <ExportDialog v-if="showExport" @close="showExport = false" />
+    <AiPanel v-if="showAi" @close="showAi = false" />
+    <AssetLibrary v-if="showAssets" @close="showAssets = false" />
 
       <div v-if="showProjects" class="modal-backdrop" @click.self="showProjects = false">
         <div class="modal">
@@ -365,11 +395,16 @@ export default defineComponent({
             <div class="hint" style="line-height: 1.9">{{ $t('help.paintBody') }}</div>
             <div class="side-title">{{ $t('help.stdTitle') }}</div>
             <div class="hint" style="line-height: 1.9">{{ $t('help.stdBody') }}</div>
+            <div v-if="mcpCheck" class="selfcheck-box" :class="mcpCheck.ok ? 'ok' : 'bad'">
+              <div>{{ mcpCheck.ok ? $t('ai.selfcheckPass') : $t('ai.selfcheckFail') }} · {{ mcpCheck.totals.passed }}/{{ mcpCheck.totals.passed + mcpCheck.totals.failed }}</div>
+              <div v-for="c in mcpCheck.checks.filter(c => !c.ok).slice(0, 6)" :key="c.name" class="hint small">✕ {{ c.name }} {{ c.info }}</div>
+            </div>
           </div>
           <div class="modal-foot">
             <span class="hint">{{ $t('help.foot') }}</span>
             <div style="display: flex; gap: 8px">
               <button class="btn" @click="runSelfTest">{{ $t('audit.run') }}</button>
+        <button class="btn" @click="runMcpCheck" :disabled="mcpChecking">{{ $t('ai.selfcheck') }}</button>
               <button class="btn" @click="showHelp = false">{{ $t('help.ok') }}</button>
             </div>
           </div>

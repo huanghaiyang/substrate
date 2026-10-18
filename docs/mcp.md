@@ -20,6 +20,22 @@ transport, and a plain JSON convenience endpoint at `POST /api/mcp/call`.
 > The studio must be running (`npm start`) and a browser tab showing the app must be open, because
 > the material graph is evaluated on the GPU in that page.
 
+## Starts with the app
+
+The MCP gateway is part of the normal studio server: `npm start` exposes `/mcp`, `/api/mcp/*` and the SSE
+bridge on the same port. Opening the studio connects the tab automatically (disable per tab with `?mcp=off`).
+
+A built-in self-check is available in three places:
+
+```bash
+curl -s http://127.0.0.1:3000/api/mcp/selfcheck   # catalog + validation + bridge round-trip (JSON report)
+npm run audit:mcp                                # same checks inside the audit runner
+```
+
+In the UI it is the **◎** button in the AI panel and the **MCP self-check** button in the help dialog. The
+check verifies: catalog shape/version/unique names, browser handlers ↔ catalog parity, argument validation,
+error codes, bridge connection, a live `substrate_get_state` round-trip and the normalized result envelope.
+
 ## Quick start
 
 ```bash
@@ -141,7 +157,8 @@ tools/list, tools/call, ping), graph reads/mutations, evaluation, thumbnails, 2D
 painting, project save/load/delete, export + zip, normalized error envelopes, HTTP JSON-RPC
 (`/mcp`) and the plain JSON endpoint. It prints a PASS/FAIL summary and restores the demo material.
 
-The stdio framing itself is a newline-delimited JSON-RPC loop: piping an `initialize` request into
+The extended test also covers the MCP self-check endpoint, the LLM model/provider API (key-leak assertions,
+provider CRUD masking) and the material-library API. The stdio framing itself is a newline-delimited JSON-RPC loop: piping an `initialize` request into
 `node mcp/server.mjs` returns the server info line (validated in CI environments that allow child
 processes).
 

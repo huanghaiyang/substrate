@@ -15,6 +15,16 @@ import {
   validateArguments,
   toolTimeout
 } from '../src/engine/mcp-catalog.js'
+import { initAssets, listAssets, importAsset, deleteAsset, assetFilePath, assetsCount } from './assets.mjs'
+import {
+  loadConfig as loadLlmConfig,
+  saveConfig as saveLlmConfig,
+  publicModels,
+  upsertProvider,
+  removeProvider,
+  runAssistant,
+  testModel
+} from './llm.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const USE_DIST = process.argv.includes('--dist')
@@ -26,6 +36,7 @@ const DEBUG_DIR = path.join(ROOT, 'debug')
 const BODY_LIMIT = 320 * 1024 * 1024
 
 for (const dir of [PROJECTS_DIR, EXPORTS_DIR, DEBUG_DIR]) mkdirSync(dir, { recursive: true })
+initAssets()
 
 // ------------------------------------------------------------------- MCP gateway
 // The browser page keeps one SSE connection per tab. External clients (stdio MCP server or
@@ -679,6 +690,110 @@ function serveApp(res, urlPath) {
 }
 
 // ----------------------------------------------------------------------- main
+function handleLlmModels(req, res) {
+  return sendJSON(res, 200, publicModels())
+}
+
+function handleLlmProviderSave(req, res) {
+  return readBody(req, 1024 * 1024)
+    .then((buf) => {
+      const payload = JSON.parse(buf.toString('utf8') || '{}')
+      const result = upsertProvider(payload || {})
+      return sendJSON(res, 200, { ok: true, ...result })
+    })
+    .catch((e) => sendJSON(res, 400, { ok: false, error: { code: 'LLM_CONFIG_ERROR', message: String(e.message || e) } }))
+}
+
+function handleLlmProviderDelete(req, res) {
+  return readBody(req, 256 * 1024)
+    .then((buf) => {
+      const payload = JSON.parse(buf.toString('utf8') || '{}')
+      if (!payload.id) throw new Error('Missing provider id')
+      const result = removeProvider(String(payload.id))
+      return sendJSON(res, 200, { ok: true, ...result })
+    })
+    .catch((e) => sendJSON(res, 400, { ok: false, error: { code: 'LLM_CONFIG_ERROR', message: String(e.message || e) } }))
+}
+
+function handleLlmChat(req, res) {
+  return readBody(req, 4 * 1024 * 1024)
+    .then((buf) => {
+      const payload = JSON.parse(buf.toString('utf8') || '{}')
+      return runAssistant((name, args) => dispatchMcpTool(name, args), payload).then((result) => sendJSON(res, 200, result))
+    })
+    .catch((e) => sendJSON(res, 400, { ok: false, error: { code: 'INVALID_ARGUMENT', message: String(e.message || e) } }))
+}
+
+function handleLlmTest(req, res) {
+  return readBody(req, 256 * 1024)
+    .then((buf) => {
+      const payload = JSON.parse(buf.toString('utf8') || '{}')
+      return testModel(payload.modelKey || payload.model).then((result) => sendJSON(res, 200, result))
+    })
+    .catch((e) => sendJSON(res, 400, { ok: false, error: { code: 'INVALID_ARGUMENT', message: String(e.message || e) } }))
+}
+
+function handleAssetsList(req, res) {
+  return sendJSON(res, 200, { ok: true, assets: listAssets(), dir: 'assets/' })
+}
+
+function handleAssetImport(req, res) {
+  return readBody(req, 40 * 1024 * 1024)
+    .then((buf) => {
+      const payload = JSON.parse(buf.toString('utf8') || '{}')
+      const asset = importAsset({ name: payload.name, dataUrl: payload.dataUrl || payload.data })
+      return sendJSON(res, 200, { ok: true, asset })
+    })
+    .catch((e) => sendJSON(res, 400, { ok: false, error: { code: 'ASSET_IMPORT_FAILED', message: String(e.message || e) } }))
+}
+
+function handleAssetDelete(req, res) {
+  return readBody(req, 256 * 1024)
+    .then((buf) => {
+      const payload = JSON.parse(buf.toString('utf8') || '{}')
+      if (!payload.id) throw new Error('Missing asset id')
+      return sendJSON(res, 200, { ok: true, ...deleteAsset(String(payload.id)) })
+    })
+    .catch((e) => sendJSON(res, 400, { ok: false, error: { code: 'ASSET_DELETE_FAILED', message: String(e.message || e) } }))
+}
+
+async function mcpSelfcheckReport() {
+  const checks = []
+  const add = (name, ok, info = '') => checks.push({ name, ok: !!ok, info: ok ? '' : String(info) })
+  const catalog = publicCatalog({ connectedClients: mcpClients.size })
+  add('catalog: apiVersion present', catalog.apiVersion === API_VERSION, catalog.apiVersion)
+  add('catalog: tools present', Array.isArray(catalog.tools) && catalog.tools.length > 0, String(catalog.tools?.length))
+  const names = catalog.tools.map((t) => t.name)
+  add('catalog: tool names unique', new Set(names).size === names.length, names.length + ' tools')
+  add('catalog: tools have schemas', catalog.tools.every((t) => t.inputSchema && t.description), 'missing schema/description')
+  add('catalog: names normalized', names.every((n) => /^substrate_[a-z0-9_]+$/.test(n)), 'bad tool name')
+  add('catalog: server knows every tool', names.every((n) => !!getTool(n)), 'unknown tool id')
+  let validationOk = false
+  try {
+    validateArguments('substrate_add_node', {})
+  } catch (e) {
+    validationOk = e.code === ERROR_CODES.INVALID_ARGUMENT
+  }
+  add('validation: rejects missing arguments', validationOk, 'missing-argument validation did not fire')
+  add('validation: unknown tool rejected', getTool('substrate_nope') === null)
+  add('bridge: app tab connected', mcpClients.size > 0, 'no browser tab connected')
+  if (mcpClients.size > 0) {
+    const envelope = await dispatchMcpTool('substrate_get_state', {}, 10000)
+    add('bridge: live round-trip (get_state)', !!envelope.ok, JSON.stringify(envelope.error || {}))
+    add('bridge: normalized envelope', envelope.apiVersion === API_VERSION && 'ok' in envelope && !!envelope.meta, JSON.stringify(envelope))
+  }
+  const failed = checks.filter((c) => !c.ok).length
+  return {
+    ok: failed === 0,
+    apiVersion: API_VERSION,
+    generatedAt: new Date().toISOString(),
+    checks,
+    totals: { passed: checks.length - failed, failed },
+    bridge: { connectedClients: mcpClients.size },
+    auth: MCP_TOKEN ? 'token' : 'none'
+  }
+}
+
 const server = http.createServer((req, res) => {
   let url
   try {
@@ -704,6 +819,12 @@ const server = http.createServer((req, res) => {
         pendingJobs: mcpJobs.size,
         auth: MCP_TOKEN ? 'token' : 'none',
         transports: ['stdio', 'http-jsonrpc']
+      },
+      assets: { count: assetsCount() },
+      llm: {
+        providers: loadLlmConfig().providers.length,
+        models: publicModels().models.length,
+        configured: loadLlmConfig().providers.some((p) => !!p.apiKey)
       }
     })
   }
@@ -770,6 +891,29 @@ const server = http.createServer((req, res) => {
       tools: publicCatalog({ connectedClients: mcpClients.size }).tools.map((t) => t.name)
     })
   }
+  if (p === '/api/mcp/selfcheck' && method === 'GET') {
+    return mcpSelfcheckReport()
+      .then((report) => sendJSON(res, 200, report))
+      .catch((e) => sendJSON(res, 500, { ok: false, error: { code: 'INTERNAL', message: String(e.message || e) } }))
+  }
+  if (p === '/api/llm/models' && method === 'GET') return handleLlmModels(req, res)
+  if (p === '/api/llm/providers' && method === 'POST') return handleLlmProviderSave(req, res)
+  if (p === '/api/llm/providers/delete' && method === 'POST') return handleLlmProviderDelete(req, res)
+  if (p === '/api/llm/chat' && method === 'POST') return handleLlmChat(req, res)
+  if (p === '/api/llm/test' && method === 'POST') return handleLlmTest(req, res)
+  if (p === '/api/assets' && method === 'GET') return handleAssetsList(req, res)
+  if (p === '/api/assets/import' && method === 'POST') return handleAssetImport(req, res)
+  if (p === '/api/assets/delete' && method === 'POST') return handleAssetDelete(req, res)
+  if (p.startsWith('/assets/') && (method === 'GET' || method === 'HEAD')) {
+    const file = assetFilePath(p)
+    if (!file) return send(res, 404, 'Not found')
+    res.writeHead(200, {
+      'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
+      'Cache-Control': 'public, max-age=3600'
+    })
+    if (method === 'HEAD') return res.end()
+    return createReadStream(file).pipe(res)
+  }
   if (p.startsWith('/api/')) return sendJSON(res, 404, { ok: false, error: 'Unknown endpoint' })
 
   if (method !== 'GET' && method !== 'HEAD') return send(res, 405, 'Method not allowed')
@@ -778,4 +922,7 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`[substrate] http://127.0.0.1:${PORT}  (${USE_DIST ? 'dist' : 'source'}, node ${process.version})`)
+  console.log('[mcp] gateway ready — POST /mcp (JSON-RPC) · POST /api/mcp/call · GET /api/mcp/tools · GET /api/mcp/selfcheck')
+  const models = publicModels()
+  console.log('[llm] ' + models.models.length + ' model(s) configured' + (models.models.some((m) => m.hasKey) ? '' : ' — no API key yet (set DEEPSEEK_API_KEY or add a provider in the AI panel)'))
 })

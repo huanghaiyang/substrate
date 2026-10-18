@@ -88,6 +88,8 @@ export async function runUiCheck() {
   const snapshot = { graph: JSON.parse(graphJSON()), name: state.projectName, resolution: state.resolution, proxy: state.proxy, locale: (await import('../i18n/index.js')).locale.value }
   const savedLocale = (() => { try { return localStorage.getItem('substrate.locale') } catch (e) { return null } })()
   const brushSnapshot = { ...state.paintBrush }
+  const customBrushesSnapshot = (() => { try { return localStorage.getItem('substrate.customBrushes') } catch (e) { return null } })()
+  const llmModelSnapshot = (() => { try { return localStorage.getItem('substrate.llmModel') } catch (e) { return null } })()
   const hrefBeforeLocaleTests = location.href
   const { setLocale } = await import('../i18n/index.js')
 
@@ -410,11 +412,11 @@ export async function runUiCheck() {
     if (q('.paint-studio')) {
       // ---- built-in brushes ----
       const brushItems = qa('.brush-item')
-      const { BRUSH_GROUPS } = await import('../engine/brushes.js')
-      const totalBrushes = BRUSH_GROUPS.reduce((n, g) => n + g.items.length, 0)
+      const { getBrushGroups } = await import('../engine/brushes.js')
+      const totalBrushes = getBrushGroups().reduce((n, g) => n + g.items.length, 0)
       r.add('paint: brush library lists all presets', brushItems.length === totalBrushes, `${brushItems.length}/${totalBrushes}`)
       const groupLabels = qa('.brush-group-label').map((e) => e.textContent.trim())
-      r.add('paint: brush picker is grouped', groupLabels.length === 2, groupLabels.join(','))
+      r.add('paint: brush picker is grouped', groupLabels.length >= 2, groupLabels.join(','))
       const natureItems = qa('.brush-group')[1]?.querySelectorAll('.brush-item').length || 0
       r.add('paint: nature brush group present', natureItems >= 6, String(natureItems))
       const thumbUrls = brushItems.map((b) => b.querySelector('img')?.src).filter(Boolean)
@@ -539,9 +541,99 @@ export async function runUiCheck() {
       r.add('right: paint live thumb', !!liveImg && !!liveImg.src)
       click(qa('.paint-head .btn').find((b) => /Graph|节点图/.test(b.textContent)))
       await sleep(300)
-      r.add('right: paint studio closes', !q('.paint-studio'))
+          r.add('right: paint studio closes', !q('.paint-studio'))
+  }
+
+    // ============================ AI assistant / MCP self-check / assets ============================
+    const aiBtn = q('.ai-btn')
+    r.add('ai: topbar entry present', !!aiBtn)
+    if (aiBtn) {
+      click(aiBtn)
+      await sleep(900)
+      const modelOptions = qa('.ai-model option')
+      r.add('ai: panel opens', !!q('.ai-panel'))
+      r.add('ai: models listed', modelOptions.length >= 1, String(modelOptions.length))
+      const models = await (await fetch('/api/llm/models')).json()
+      r.add('ai: model list has no key material', !/sk-[A-Za-z0-9_-]{8,}/.test(JSON.stringify(models)), 'key leaked in models response')
+      r.add('ai: browser never shows key material', !/sk-[A-Za-z0-9_-]{8,}/.test(document.body.innerText), 'key visible in DOM')
+      if (modelOptions.length > 1) {
+        const sel = q('.ai-model')
+        setInput(sel, modelOptions[1].value, 'change')
+        await sleep(200)
+        r.add('ai: switch model', sel.value === modelOptions[1].value, sel.value)
+      }
+      const checkBtn = qa('.ai-head .icon-btn').find((b) => (b.getAttribute('title') || '').includes('自检') || (b.getAttribute('title') || '').toLowerCase().includes('self-check'))
+      if (checkBtn) {
+        click(checkBtn)
+        const ok = await waitFor(() => !!q('.ai-check'), 20000)
+        r.add('ai: MCP self-check runs', ok && !!q('.ai-check'), 'selfcheck did not finish')
+        const bad = q('.ai-check')?.classList.contains('bad')
+        r.add('ai: MCP self-check passes', ok && !bad, q('.ai-check')?.textContent?.slice(0, 120))
+      } else r.add('ai: MCP self-check runs', false, 'selfcheck button missing')
+      const closeAi = qa('.ai-head .icon-btn').find((b) => b.textContent.trim() === '✕')
+      if (closeAi) click(closeAi)
+      await sleep(300)
+      r.add('ai: panel closes', !q('.ai-panel'))
     }
-  } catch (e) {
+
+    // material library: import a tiny texture through the API, use it as a paint-layer pattern
+    const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAFUlEQVR42mP8z8BQz0AEYBxVSF+FABJADveWkH6oAAAAAElFTkSuQmCC'
+    let assetId = null
+    try {
+      const imported = await (await fetch('/api/assets/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'ui-check.png', dataUrl: tinyPng }) })).json()
+      assetId = imported?.asset?.id || null
+      r.add('assets: import endpoint', imported?.ok === true && !!assetId, JSON.stringify(imported?.error))
+      const assetBtn = qa('.topbar .icon-btn').find((b) => (b.getAttribute('title') || '').includes('素材库') || (b.getAttribute('title') || '').toLowerCase().includes('material'))
+      if (assetBtn) {
+        click(assetBtn)
+        await sleep(700)
+        const cards = qa('.asset-card')
+        r.add('assets: modal lists assets', cards.length >= 1, String(cards.length))
+        const fillBtn = cards[0] ? [...cards[0].querySelectorAll('button')].find((b) => /填入|Fill/i.test(b.textContent)) : null
+        if (fillBtn) {
+          const paintNode = state.graph.nodes.find((n) => n.type === 'paint')
+          const before = paintNode ? (nodeById(paintNode.id).data.strokes || []).length : 0
+          click(fillBtn)
+          await sleep(900)
+          const after = paintNode ? (nodeById(paintNode.id).data.strokes || []).length : 0
+          r.add('assets: pattern fill paint layer', after === before + 1, before + ' -> ' + after)
+        } else r.add('assets: pattern fill paint layer', false, 'fill button missing')
+        const closeAsset = q('.asset-modal .modal-head .icon-btn')
+        if (closeAsset) click(closeAsset)
+        await sleep(300)
+        r.add('assets: modal closes', !q('.asset-modal'))
+      }
+    } finally {
+      if (assetId) await fetch('/api/assets/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: assetId }) })
+    }
+
+    // custom brush import through the Paint Studio file input
+    const paintNode2 = state.graph.nodes.find((n) => n.type === 'paint')
+    if (paintNode2) {
+      selectNode(paintNode2.id)
+      await sleep(300)
+      const openBtn = q('.inspector .insp-actions .btn.primary')
+      if (openBtn) click(openBtn)
+      await sleep(700)
+      if (q('.paint-studio')) {
+        const brushInput = q('.brush-import-row input[type=file]')
+        if (brushInput) {
+          const def = { name: 'UI Check Brush', shape: 'round', hardness: 0.85, spacing: 0.06, flow: 0.8, grain: 0.3, scatter: 0.1 }
+          const file = new File([JSON.stringify(def)], 'ui-check-brush.json', { type: 'application/json' })
+          const dt = new DataTransfer()
+          dt.items.add(file)
+          brushInput.files = dt.files
+          brushInput.dispatchEvent(new Event('change', { bubbles: true }))
+          await sleep(700)
+          const customGroup = qa('.brush-group-label').some((e) => /自定义|Custom/i.test(e.textContent))
+          r.add('brushes: custom JSON import', customGroup && (state.paintBrush.brushId || '').startsWith('custom-'), state.paintBrush.brushId)
+        } else r.add('brushes: custom JSON import', false, 'file input missing')
+        const backBtn = qa('.paint-head .btn').find((b) => /Graph|节点图/.test(b.textContent))
+        if (backBtn) click(backBtn)
+        await sleep(300)
+      }
+    }
+} catch (e) {
     r.add('ui-check exception', false, e?.stack || e?.message || String(e))
   } finally {
     try {
@@ -549,6 +641,16 @@ export async function runUiCheck() {
       // restore the user's brush choice (the brush tests select presets and toggle taper)
       Object.assign(state.paintBrush, brushSnapshot)
       savePaintBrush()
+      try {
+        if (customBrushesSnapshot === null) localStorage.removeItem('substrate.customBrushes')
+        else localStorage.setItem('substrate.customBrushes', customBrushesSnapshot)
+        const brushModule = await import('../engine/brushes.js')
+        brushModule.loadCustomBrushes()
+        if (llmModelSnapshot === null) localStorage.removeItem('substrate.llmModel')
+        else localStorage.setItem('substrate.llmModel', llmModelSnapshot)
+      } catch (e) {
+        /* ignore */
+      }
       // restore the user's remembered language (the language-switch test really clicked the switch)
       try {
         if (savedLocale === null) localStorage.removeItem('substrate.locale')

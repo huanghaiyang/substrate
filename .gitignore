@@ -9,3 +9,8 @@ shot-*.png
 *.log
 .DS_Store
 Thumbs.db
+assets/
+llm.config.local.json
+*.local.json
+.env
+secrets/

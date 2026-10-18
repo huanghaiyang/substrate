@@ -2,7 +2,7 @@
 import { reactive, markRaw } from 'vue'
 import { NODE_MAP, defaultParams, resolveParams } from './nodes/index.js'
 import { buildDemo, DEMOS } from './demos.js'
-import { PAINT_SIZE, createPaintCanvas, rasterizeAll } from './paint.js'
+import { PAINT_SIZE, createPaintCanvas, rasterizeAll, drawStroke, preloadPatterns, isPatternReady } from './paint.js'
 import { BRUSHES, DEFAULT_BRUSH_ID } from './brushes.js'
 import { hexToRgb } from './color.js'
 import { t, trNode, trLabel, trText, localizeDef } from '../i18n/index.js'
@@ -422,6 +422,18 @@ export function attachPaintCanvas(nodeId, canvas) {
   paintCanvases.set(nodeId, entry)
   rasterizeAll(canvas, node.data?.strokes || [])
   entry.drawn = (node.data?.strokes || []).length
+  const pendingPatterns = (node.data?.strokes || []).filter((s) => s.pattern && !isPatternReady(s.pattern))
+  if (pendingPatterns.length) {
+    preloadPatterns(node.data.strokes).then(() => {
+      const nodeNow = nodeById(nodeId)
+      if (!nodeNow) return
+      rasterizeAll(canvas, nodeNow.data.strokes || [])
+      entry.drawn = (nodeNow.data.strokes || []).length
+      state.engine?.setPaintCanvas(nodeId, canvas)
+      state.engine?.touchPaint(nodeId)
+      requestEval()
+    })
+  }
   state.engine?.setPaintCanvas(nodeId, canvas)
   requestEval(true)
   return canvas
@@ -447,6 +459,19 @@ export function syncPaintTextures() {
     } else if (!state.engine.paintTextures.has(node.id)) {
       state.engine.setPaintCanvas(node.id, entry.canvas)
     }
+    // pattern fills reference material-library images; decode then re-rasterise/upload
+    if (strokes.some((s) => s.pattern && !isPatternReady(s.pattern))) {
+      preloadPatterns(strokes).then(() => {
+        const nodeNow = nodeById(node.id)
+        if (!nodeNow) return
+        const entryNow = paintEntry(node.id, nodeNow.data?.paintSize)
+        rasterizeAll(entryNow.canvas, nodeNow.data?.strokes || [])
+        entryNow.drawn = (nodeNow.data?.strokes || []).length
+        state.engine?.setPaintCanvas(node.id, entryNow.canvas)
+        state.engine?.touchPaint(node.id)
+        requestEval()
+      })
+    }
   }
   for (const id of [...paintCanvases.keys()]) {
     if (!alive.has(id)) {
@@ -461,7 +486,34 @@ export function commitStroke(nodeId, stroke) {
   pushHistory(t('history.paint'))
   if (!Array.isArray(node.data.strokes)) node.data.strokes = []
   node.data.strokes.push(JSON.parse(JSON.stringify(stroke)))
-  markPaintDrawn(nodeId)
+  // rasterise onto the shared paint canvas (Paint Studio already drew the live stroke, so only the
+  // new stroke is needed; programmatic MCP strokes and pattern fills are drawn here)
+  const entry = paintEntry(nodeId)
+  const strokes = node.data.strokes
+  try {
+    if (entry.drawn === strokes.length - 1) {
+      drawStroke(entry.canvas.getContext('2d'), strokes[strokes.length - 1], entry.canvas.width, entry.canvas.height)
+    } else {
+      rasterizeAll(entry.canvas, strokes)
+    }
+    entry.drawn = strokes.length
+    state.engine?.setPaintCanvas(nodeId, entry.canvas)
+  } catch (e) {
+    console.warn('[paint] commit rasterisation failed', e)
+  }
+  // lazy pattern assets: re-rasterise once the referenced material-library image is decoded
+  if (strokes.some((s) => s.pattern && !isPatternReady(s.pattern))) {
+    preloadPatterns(strokes).then(() => {
+      const nodeNow = nodeById(nodeId)
+      if (!nodeNow) return
+      const entryNow = paintEntry(nodeId)
+      rasterizeAll(entryNow.canvas, nodeNow.data.strokes || [])
+      entryNow.drawn = (nodeNow.data.strokes || []).length
+      state.engine?.setPaintCanvas(nodeId, entryNow.canvas)
+      state.engine?.touchPaint(nodeId)
+      requestEval()
+    })
+  }
   state.engine?.touchPaint(nodeId)
   requestEval()
 }

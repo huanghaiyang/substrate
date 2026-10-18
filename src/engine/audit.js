@@ -1438,6 +1438,12 @@ const SECTIONS = {
   actions: auditActions,
   dom: auditDom,
   i18n: auditI18n,
+  mcp: async (ctx) => {
+    const { runMcpSelfCheck } = await import('./mcp-selfcheck.js')
+    const report = await runMcpSelfCheck()
+    for (const c of report.checks || []) ctx.add(c.name, c.ok, c.info)
+    ctx.add('mcp: overall', report.ok, report.totals ? JSON.stringify(report.totals) : '')
+  },
   ui: async (ctx) => {
     const { runUiCheck } = await import('./ui-check.js')
     const res = await runUiCheck()
