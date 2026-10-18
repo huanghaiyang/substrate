@@ -83,6 +83,27 @@ float fbmTiled(vec2 uv, float baseFreq, int octaves, float persistence, float la
   return clamp(sum / max(norm, 1e-5) * 0.78 + 0.5, 0.0, 1.0);
 }
 
+// Per-octave folded fBm ("billow"/ridged family). Folding |noise| at *every* octave keeps granular
+// detail alive at all scales, instead of producing smooth clouds that only carry one dominant
+// frequency — this is the primitive organic granular surfaces (moss, lichen, bark, rock) are made of.
+// The result is re-shaped so that, like fbmTiled, it is centred on 0.5 and safe to feed into any
+// blend mode (raw |fBm| has a mean near 0.15, which would quietly darken every Overlay it touches).
+// Tileability is inherited from gnoise (periodic hash), so billow output stays seamless.
+float fbmBillowTiled(vec2 uv, float baseFreq, int octaves, float persistence, float lacunarity, float seed) {
+  float freq = max(1.0, floor(baseFreq + 0.5));
+  float sum = 0.0, amp = 1.0, norm = 0.0;
+  for (int o = 0; o < 10; o++) {
+    if (o >= octaves) break;
+    float g = gnoise(uv * freq, vec2(freq), seed + float(o) * 17.0);
+    sum += amp * abs(g);
+    norm += amp;
+    amp *= persistence;
+    freq = max(1.0, floor(freq * lacunarity + 0.5));
+  }
+  float b = clamp(sum / max(norm, 1e-5) * 2.0, 0.0, 1.0);
+  return clamp(pow(b, 0.55), 0.0, 1.0);
+}
+
 // returns (F1, F2) in cell units, tileable
 vec2 worleyTiled(vec2 uv, float cells, float jitter, float seed) {
   float freq = max(1.0, floor(cells + 0.5));

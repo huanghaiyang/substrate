@@ -320,7 +320,7 @@ export const filterDefs = [
     desc: 'Height to tangent-space normal map (OpenGL / DirectX).',
     inputs: [{ name: 'height', label: 'Height', def: 0.5 }],
     params: [
-      { key: 'intensity', label: 'Intensity', type: 'float', min: 0.05, max: 8, step: 0.01, def: 1 },
+      { key: 'intensity', label: 'Intensity', type: 'float', min: 0.01, max: 8, step: 0.01, def: 1 },
       { key: 'radius', label: 'Sample Radius (px)', type: 'float', min: 0.5, max: 8, step: 0.5, def: 1 },
       { key: 'directx', label: 'DirectX (-Y)', type: 'bool', def: false }
     ],

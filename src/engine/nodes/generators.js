@@ -15,11 +15,16 @@ export const generatorDefs = [
       { key: 'persistence', label: 'Persistence', type: 'float', min: 0.15, max: 0.9, step: 0.01, def: 0.5 },
       { key: 'lacunarity', label: 'Lacunarity', type: 'float', min: 1.2, max: 3, step: 0.01, def: 2 },
       { key: 'contrast', label: 'Contrast', type: 'float', min: 0.1, max: 4, step: 0.01, def: 1 },
+      { key: 'billow', label: 'Billow', type: 'bool', def: false },
       { key: 'seed', label: 'Seed', type: 'float', min: 0, max: 100, step: 1, def: 1 }
     ],
     body: /* glsl */ `
       vec4 nodeColor(vec2 uv) {
-        float n = fbmTiled(uv, max(1.0, u_scale), u_octaves, u_persistence, u_lacunarity, u_seed);
+        // Billow folds |noise| at every octave (see fbmBillowTiled) instead of post-folding the
+        // finished fBm, so the granular detail survives at all scales.
+        float n = u_billow
+          ? fbmBillowTiled(uv, max(1.0, u_scale), u_octaves, u_persistence, u_lacunarity, u_seed)
+          : fbmTiled(uv, max(1.0, u_scale), u_octaves, u_persistence, u_lacunarity, u_seed);
         n = sat((n - 0.5) * max(u_contrast, 0.01) + 0.5);
         return vec4(vec3(n), 1.0);
       }`

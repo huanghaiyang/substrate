@@ -196,6 +196,7 @@ export const ZH_LABEL = {
   'Invert G': '反转 G 通道',
   'Invert R': '反转 R 通道',
   Jitter: '抖动',
+  Billow: '团块折叠',
   Lacunarity: '间隙度',
   'Length (px @1K)': '长度（px @1K）',
   Lightness: '明度',
