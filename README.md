@@ -38,8 +38,10 @@ paint on them by hand, preview the result as a lit 3D material, and export an in
 - **AI assistant** — a top-bar **✦** panel connected to DeepSeek (default) or any OpenAI-compatible provider.
   The assistant runs **server-side** and drives the app through the MCP tools (edit graphs, paint, evaluate,
   export). API keys never reach the browser; models/providers can be switched and added from the panel.
-  Chat attachments: images (PNG/JPEG/WebP) are added to the material library and can be applied through
-  `substrate_list_assets`/`substrate_apply_asset`; text files are included in the message.
+  Chat attachments: images (PNG/JPEG/WebP) are added to the material library **and sent to
+  vision-capable models for real image recognition** (DeepSeek's endpoint supports vision; non-vision
+  providers fall back to metadata), and can be applied through `substrate_list_assets`/`substrate_apply_asset`;
+  text files are included in the message.
   Tools carry copy-pasteable examples and return actionable hints (`details.example`/`details.availableNodes`)
   when arguments are wrong.
 - **Persistent AI conversation** — full history and tool traces are saved and restored after reloads, can be

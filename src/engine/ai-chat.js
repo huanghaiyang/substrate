@@ -182,10 +182,15 @@ export async function sendChat(text) {
   showFloating()
   persistChat()
   try {
-    const history = aiChat.messages
-      .filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.pending && (m.content || m.attachments?.length))
-      .slice(-12)
-      .map((m) => ({ role: m.role, content: m.role === 'user' ? messageContentForModel(m) : m.content }))
+    const recent = aiChat.messages.filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.pending && (m.content || m.attachments?.length)).slice(-12)
+    const lastUser = recent.map((m) => m.role).lastIndexOf('user')
+    const history = recent.map((m, i) => ({
+        role: m.role,
+        content: m.content,
+        // the server reads image files from the material library and builds multimodal content
+        // only the latest user turn carries images: older images are represented by the assistant reply
+        attachments: i === lastUser && Array.isArray(m.attachments) && m.attachments.length ? m.attachments : undefined
+      }))
     const result = await chatWithAssistant({ modelKey: aiChat.modelKey, messages: history, maxSteps: 20, showThinking: aiChat.showThinking })
     const idx = aiChat.messages.indexOf(pending)
     const final = {

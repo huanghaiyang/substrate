@@ -101,10 +101,14 @@ DEEPSEEK_API_KEY=sk-... npm start
 
 The AI composer supports **images and text attachments** (📎 button, drag & drop, or paste):
 
-- **Images** (PNG/JPEG/WebP, ≤ 32 MB) are uploaded to the local **material library** and referenced
-  in the user message with their asset id/URL. The assistant can call `substrate_list_assets` and
-  `substrate_apply_asset` to use them as a Texture Input or as a paint-layer pattern (the model does
-  not receive raw pixels, so it works from the asset metadata).
+- **Images** (PNG/JPEG/WebP, ≤ 32 MB) are uploaded to the local **material library** and also sent
+  to the model as multimodal `image_url` content (up to 4 images per message, ≤ 10 MB each for
+  vision). A vision-capable model — DeepSeek's default endpoint is vision-capable — actually inspects
+  the pixels and describes material, colour, pattern and scale before proposing values. If the
+  selected provider rejects image input, the server retries once with image content stripped and the
+  assistant falls back to the image metadata (name, dimensions, asset id). The assistant can call
+  `substrate_list_assets` / `substrate_apply_asset` to use an uploaded image as a Texture Input or
+  paint-layer pattern.
 - **Text files** (.txt/.md/.markdown/.json/.csv/.log/.yaml, ≤ 256 KB) are read client-side and the
   text is included in the message so the model can reason about it.
 - Up to 6 attachments; the uploaded asset appears in the material library immediately. Attachment

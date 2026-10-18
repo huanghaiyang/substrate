@@ -9,6 +9,7 @@ import { existsSync, readFileSync, writeFileSync, chmodSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { TOOLS, API_VERSION } from '../src/engine/mcp-catalog.js'
+import { listAssets, assetFilePath } from './assets.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 export const LLM_CONFIG_PATH = path.join(ROOT, 'llm.config.local.json')
@@ -54,7 +55,8 @@ Calling conventions:
 - get_thumbnail: nodeId is optional — omit it for the output node; find valid node ids with substrate_get_graph. If NOT_FOUND, refetch the graph and use a current node id.
 - get_preview: view is "2d" or "3d"; channel is one of basecolor/height/normal/roughness/metallic/ao/emissive/opacity.
 - connect: {fromNode, fromPort:"out", toNode, toPort}; toPort is the target input name (basecolor, height, a, b, ...).
-- If a tool returns INVALID_ARGUMENT or NOT_FOUND, read the error details/example, re-check ids with substrate_get_graph, fix the arguments and retry once; never repeat the same failing arguments.`
+- If a tool returns INVALID_ARGUMENT or NOT_FOUND, read the error details/example, re-check ids with substrate_get_graph, fix the arguments and retry once; never repeat the same failing arguments.
+- When the user message includes image attachments, inspect them directly: describe what you actually see (subject, material, colours, patterns, scale, condition) before proposing values. Never claim to see an image that is missing or unreadable.`
 
 function sanitizeText(text) {
   let out = String(text == null ? '' : text)
@@ -261,17 +263,84 @@ async function callChatCompletion(provider, modelId, messages, tools, timeoutMs 
   }
 }
 
-function normalizeMessages(input) {
+const MAX_VISION_IMAGE_BYTES = 10 * 1024 * 1024
+
+function imageAttachmentPart(att, assets) {
+  if (!att || att.kind !== 'image') return null
+  const asset =
+    assets.find((a) => att.assetId && a.id === att.assetId) ||
+    assets.find((a) => att.url && a.url === att.url) ||
+    assets.find((a) => att.name && a.name === att.name)
+  if (!asset) return { part: null, note: 'Image "' + (att.name || 'attachment') + '" is no longer in the material library.' }
+  const file = assetFilePath(asset.url)
+  if (!file) return { part: null, note: 'Image "' + asset.name + '" file is unavailable.' }
+  try {
+    const bytes = readFileSync(file)
+    if (bytes.length > MAX_VISION_IMAGE_BYTES) {
+      return { part: null, note: 'Image "' + asset.name + '" is too large for vision (' + Math.round(bytes.length / 1024 / 1024) + ' MB, max 10 MB).' }
+    }
+    return {
+      part: { type: 'image_url', image_url: { url: 'data:' + asset.mime + ';base64,' + bytes.toString('base64') } },
+      note: null,
+      meta: asset.name + ' (' + (asset.width || '?') + '×' + (asset.height || '?') + ', ' + Math.round((asset.bytes || bytes.length) / 1024) + ' KB)'
+    }
+  } catch (e) {
+    return { part: null, note: 'Image "' + asset.name + '" could not be read.' }
+  }
+}
+
+async function normalizeMessages(input) {
   if (!Array.isArray(input)) return []
+  const assets = listAssets()
   const out = []
   for (const m of input.slice(-24)) {
     if (!m || typeof m !== 'object') continue
     const role = m.role === 'assistant' ? 'assistant' : m.role === 'user' ? 'user' : null
     if (!role) continue
-    const content = String(m.content || '').slice(0, 16000)
-    if (content) out.push({ role, content })
+    const rawContent = String(m.content || '').slice(0, 16000)
+    const attachments = role === 'user' && Array.isArray(m.attachments) ? m.attachments.slice(0, 6) : []
+    if (!rawContent && !attachments.length) continue
+    const notes = []
+    const imageParts = []
+    const textParts = []
+    if (attachments.length) {
+      notes.push('[User attachments — inspect images directly when you have vision; do not guess if an image is unreadable.]')
+      for (const att of attachments) {
+        if (!att || typeof att !== 'object') continue
+        if (att.kind === 'image') {
+          const r = imageAttachmentPart(att, assets)
+          if (r.part) {
+            imageParts.push(r.part)
+            notes.push('- Image: ' + (r.meta || att.name) + ' (material-library asset ' + (att.assetId || '') + ').')
+          } else {
+            notes.push('- Image: ' + (att.name || 'attachment') + ' — ' + (r.note || 'not readable'))
+          }
+        } else if (att.kind === 'text') {
+          const text = String(att.text || '').slice(0, 6000)
+          textParts.push('[Text attachment "' + (att.name || 'file') + '"]\n' + text)
+          notes.push('- Text file: ' + (att.name || 'file'))
+        }
+      }
+    }
+    const joined = [rawContent, ...notes, ...textParts].filter(Boolean).join('\n\n').slice(0, 20000)
+    const content = imageParts.length
+      ? [{ type: 'text', text: joined }, ...imageParts.slice(0, 4)]
+      : joined
+    out.push({ role, content })
   }
   return out
+}
+
+function hasImageContent(messages) {
+  return Array.isArray(messages) && messages.some((m) => Array.isArray(m.content) && m.content.some((part) => part && part.type === 'image_url'))
+}
+
+function stripImageContent(messages, note = '[Image vision is not supported by this model; rely on the image metadata and say you cannot see the pixels.]') {
+  return (messages || []).map((m) => {
+    if (!Array.isArray(m.content)) return m
+    const texts = m.content.filter((part) => part && part.type === 'text').map((part) => part.text).filter(Boolean)
+    return { ...m, content: [...texts, note].join('\n\n') }
+  })
 }
 
 export function getAiRules() {
@@ -329,7 +398,7 @@ export function sanitizeToolSequence(messages) {
 export async function runAssistant(dispatch, body = {}) {
   const started = Date.now()
   const { provider, model } = resolveModel(body.modelKey || body.model)
-  const userMessages = normalizeMessages(body.messages)
+  const userMessages = await normalizeMessages(body.messages)
   if (!userMessages.length) {
     return { ok: false, error: { code: 'INVALID_ARGUMENT', message: 'messages must contain at least one user message' } }
   }
@@ -366,20 +435,30 @@ export async function runAssistant(dispatch, body = {}) {
       try {
         response = await callChatCompletion(provider, model.id, sanitizeToolSequence(messages), toolsEnabled ? tools : null)
       } catch (e) {
-        // some models (e.g. reasoners) reject tool calling; retry once as a plain chat so model
-        // switching still works, and tell the UI that app control is unavailable for this model
-        if (toolsEnabled && (e.code === 'LLM_HTTP_ERROR' || e.code === 'LLM_BAD_RESPONSE')) {
+        // Retry strategy, in order:
+        // 1) if image content caused the rejection, strip images and keep tools enabled
+        // 2) if tool calling is unsupported, retry once as plain chat from a clean transcript
+        let lastError = e
+        let recovered = false
+        if ((e.code === 'LLM_HTTP_ERROR' || e.code === 'LLM_BAD_RESPONSE') && hasImageContent(messages)) {
+          messages = stripImageContent(messages)
+          try {
+            response = await callChatCompletion(provider, model.id, sanitizeToolSequence(messages), toolsEnabled ? tools : null)
+            recovered = true
+          } catch (e2) {
+            lastError = e2
+          }
+        }
+        if (!recovered && toolsEnabled && (lastError.code === 'LLM_HTTP_ERROR' || lastError.code === 'LLM_BAD_RESPONSE')) {
           toolsEnabled = false
           toolsDisabled = true
-          // Never resend a half-finished tool transcript: those messages must pair assistant
-          // tool_calls with tool replies, and a rejected step leaves the pair incomplete.
-          messages = [
+          messages = stripImageContent([
             ...baseMessages,
             { role: 'system', content: 'Tool calling is unavailable for this model; answer without using tools.' }
-          ]
+          ])
           response = await callChatCompletion(provider, model.id, messages, null)
-        } else {
-          throw e
+        } else if (!recovered) {
+          throw lastError
         }
       }
       usage = response.usage || usage

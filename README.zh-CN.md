@@ -20,8 +20,8 @@
 - **行业标准导出**——五种预设（glTF/three.js、Unreal、Unity HDRP、V-Ray/Arnold/通用、Substance Painter），正确处理 sRGB/线性空间、ORM / Mask Map 打包、OpenGL↔DirectX 法线翻转、16-bit 高度、自适应滤波 PNG 编码，并由 Node 服务端生成 `manifest.json` + `README.md` + zip 包。
 - **MCP / Agent 集成**——标准化外部 MCP 网关**随应用启动**（stdio + HTTP JSON-RPC，31 个工具），内置 **MCP 自检**；同时提供页面内 WebMCP 工具。
 - **AI 助手**——顶栏 **✦** 面板，默认接入 DeepSeek，也可切换任意 OpenAI 兼容提供商。助手运行在**服务端**，通过 MCP 工具操作应用（编辑节点图、绘制、求值、导出）。API Key 永不进入浏览器；模型/提供商可在面板中添加和切换。
-  聊天支持附件：图片（PNG/JPEG/WebP）会加入素材库，可通过 `substrate_list_assets`/`substrate_apply_asset` 使用；
-  文本文件随消息发送。工具自带可直接复制的示例，参数错误会返回 `details.example`/`details.availableNodes` 提示。
+  聊天支持附件：图片（PNG/JPEG/WebP）会加入素材库，**并发送给支持视觉的模型做真实图像识别**（DeepSeek 端点支持视觉；不支持视觉的提供商会退化为元信息），
+  也可通过 `substrate_list_assets`/`substrate_apply_asset` 使用；文本文件随消息发送。工具自带可直接复制的示例，参数错误会返回 `details.example`/`details.availableNodes` 提示。
 - **持久化 AI 对话**——完整历史与工具轨迹自动保存、刷新后恢复，可导出 Markdown；关闭对话框**不会中断回复**，对话进行中会在右下角显示半透明浮动窗口（自动滚动、可展开）。强制 AI 规则禁止触碰源码、API Key/环境变量、文件或系统信息。
 - **素材库**——导入 PNG/JPEG/WebP 贴图、**联网搜索**开放授权素材、预览/删除，并可作为节点贴图或绘制层图案填充（在线结果保留作者/许可证署名）。
 - **自定义笔刷**——从 JSON 导入笔刷定义（完整预设参数），本地保存并显示在“自定义”分组；详见 [docs/zh/brushes.md](docs/zh/brushes.md)。

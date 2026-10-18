@@ -68,9 +68,11 @@ DEEPSEEK_API_KEY=sk-... npm start
 
 AI 输入框支持**图片与文本附件**（📎 按钮、拖放或粘贴）：
 
-- **图片**（PNG/JPEG/WebP，≤32MB）会上传到本地**素材库**，并在用户消息中带上 asset id/URL。助手可调用
-  `substrate_list_assets` / `substrate_apply_asset` 将其用作纹理输入或绘制层图案（模型看不到原始像素，
-  会根据素材元数据操作）。
+- **图片**（PNG/JPEG/WebP，≤32MB）会上传到本地**素材库**，同时以 multimodal `image_url` 内容发送给模型
+  （每条消息最多 4 张，视觉输入单张 ≤10MB）。支持视觉的模型（DeepSeek 默认端点支持视觉）会真正查看像素，
+  先描述材质、颜色、图案、尺度，再给出参数建议；如果选用的提供商拒绝图片输入，服务端会自动去掉图片内容重试一次，
+  助手退化为使用图片元信息（文件名、尺寸、asset id）。助手也可调用 `substrate_list_assets` /
+  `substrate_apply_asset` 把上传图片用作纹理输入或绘制层图案。
 - **文本文件**（.txt/.md/.markdown/.json/.csv/.log/.yaml，≤256KB）在浏览器端读取，文本内容随消息发送，
   模型可以直接分析。
 - 最多 6 个附件；图片会立即出现在素材库。对话中显示附件标签，随对话持久化，并写入 Markdown 导出。
