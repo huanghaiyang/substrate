@@ -270,6 +270,7 @@ export const ZH_INPUT = {
 
 // Select-menu options (context-aware; "Normal" here is the blend mode, not the normal map).
 export const ZH_OPTION = {
+  'Data (RGB)': '数据（RGB）',
   Copy: '复制',
   'Add (Linear Dodge)': '相加（线性减淡）',
   Subtract: '相减',

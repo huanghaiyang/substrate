@@ -594,6 +594,18 @@ node scripts/inspect-sbsar.mjs path/to/asset.sbsar        # 人类可读摘要
 node scripts/inspect-sbsar.mjs path/to/asset.sbsar --json  # 完整检查报告
 ```
 
+**要从 .sbsar 真正拿到 PBR 贴图，必须借助 Adobe 引擎**——归档里只有描述符（`.xml`）与编译后的字节码
+（`.sbsasm`），没有像素可解析。可脚本化的正规路径是 Adobe 的 Substance Automation Toolkit，本仓库已封装：
+
+```bash
+npm run bake:sbsar -- path/to/asset.sbsar --res 2048
+# 通过 --sbsrender / SBSRENDER / SUBSTANCE_SAT_HOME / PATH 找 sbsrender
+```
+
+烘焙完成后用素材库的「**导入 PBR 套图**」：多选贴图，按文件名识别通道（basecolor/normal/roughness/
+metallic/height/ao/emissive/opacity），自动生成贴图输入并接入 PBR 输出；数据类贴图会切到新增的
+**数据（RGB）** 模式，避免法线/粗糙度被 sRGB 解码。
+
 读取器的单元测试（夹具在内存里生成，仓库不放二进制）：
 
 ```bash

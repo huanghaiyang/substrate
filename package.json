@@ -19,7 +19,8 @@
     "test:docs": "node scripts/check-docs.mjs",
     "audit:mcp": "node scripts/cdp.mjs audit mcp",
     "test:sbsar": "node scripts/test-sbsar.mjs",
-    "fixtures:sbsar": "node scripts/make-sbsar-fixture.mjs"
+    "fixtures:sbsar": "node scripts/make-sbsar-fixture.mjs",
+    "bake:sbsar": "node scripts/bake-sbsar.mjs"
   },
   "dependencies": {
     "three": "^0.169.0",

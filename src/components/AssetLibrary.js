@@ -1,5 +1,5 @@
 import { defineComponent, ref, onMounted } from 'vue'
-import { state, nodeById, addNode, setNodeImage, commitStroke } from '../engine/store.js'
+import { state, nodeById, addNode, setNodeImage, commitStroke, addConnection, disconnectInput, setParam, outputNode, requestEval } from '../engine/store.js'
 import { loadPattern } from '../engine/paint.js'
 import { t } from '../i18n/index.js'
 import JsonViewer from './JsonViewer.js'
@@ -21,8 +21,86 @@ export default defineComponent({
     const searchWarning = ref('')
     const sbsarInput = ref(null)
     const expanded = ref('')
+    const pbrInput = ref(null)     // hidden file input for a PBR map set
     const jsonTarget = ref(null)   // sbsar asset whose inspection report is open in the JSON viewer
     const lightbox = ref(null)     // { url, name, width, height, bytes } previewed image
+    const PBR_CHANNELS = [
+      // order matters: first match wins
+      { port: 'basecolor', mode: 0, re: /(base ?colou?r|albedo|diffuse|_diff|_bc\b|^colou?r)/i },
+      { port: 'normal', mode: 3, re: /(normal|_nor\b|_nrm\b|_n\b|norm)/i },
+      { port: 'roughness', mode: 3, re: /(rough|_r\b|rgh)/i },
+      { port: 'metallic', mode: 3, re: /(metal|_m\b|mtl)/i },
+      { port: 'height', mode: 3, re: /(height|displac|_disp|_h\b|elev)/i },
+      { port: 'ao', mode: 3, re: /(occlusion|ambient|_ao\b|\bao_|_ao)/i },
+      { port: 'emissive', mode: 0, re: /(emiss|glow)/i },
+      { port: 'opacity', mode: 3, re: /(opacity|alpha|_mask\b)/i }
+    ]
+    /** which PBR channel a file name refers to (null = unknown) */
+    const detectChannel = (name) => {
+      const base = String(name || '').replace(/\.[a-z0-9]+$/i, '')
+      for (const c of PBR_CHANNELS) if (c.re.test(base)) return c
+      return null
+    }
+    const openPbrPicker = () => pbrInput.value?.click()
+
+    /**
+     * Import a baked PBR map set (basecolor/normal/roughness/…), register every file as an asset and
+     * wire one Texture Input per channel into the PBR Output. This is the practical end of the
+     * ".sbsar → real PBR" pipeline: the maps have to be baked by Adobe's engine first.
+     */
+    async function onPbrSet(event) {
+      const files = [...(event.target?.files || [])]
+      event.target.value = ''
+      if (!files.length) return
+      busy.value = true
+      const statusParts = []
+      try {
+        const out = outputNode()
+        if (!out) throw new Error(t('assets.pbrNoOutput'))
+        const found = new Map()
+        for (const file of files) {
+          const ch = detectChannel(file.name)
+          if (!ch) { statusParts.push(t('assets.pbrUnknown', { name: file.name })); continue }
+          if (found.has(ch.port)) { statusParts.push(t('assets.pbrDuplicate', { name: file.name })); continue }
+          const dataUrl = await new Promise((resolve, reject) => {
+            const reader = new FileReader()
+            reader.onload = () => resolve(reader.result)
+            reader.onerror = () => reject(new Error('read failed'))
+            reader.readAsDataURL(file)
+          })
+          const res = await fetch('/api/assets/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: file.name, dataUrl })
+          })
+          const data = await res.json()
+          if (!data.ok) throw new Error(data.error?.message || 'import failed')
+          found.set(ch.port, { ch, file, dataUrl })
+        }
+        // graph: one texture input per channel, laid out in a column left of the output
+        let row = 0
+        for (const [port, entry] of found) {
+          const node = addNode('image_input', { x: out.x - 640, y: out.y - 320 + row * 190 })
+          row++
+          if (!node) continue
+          setParam(node.id, 'channelMode', entry.ch.mode)
+          setNodeImage(node.id, entry.dataUrl, entry.file.name)
+          disconnectInput(out.id, port)
+          addConnection(node.id, 'out', out.id, port)
+        }
+        requestEval(true)
+        const got = [...found.keys()]
+        const missing = PBR_CHANNELS.map((c) => c.port).filter((p) => !found.has(p) && !['emissive', 'opacity'].includes(p))
+        statusParts.unshift(t('assets.pbrImported', { n: got.length, channels: got.join(', ') }))
+        if (missing.length) statusParts.push(t('assets.pbrMissing', { channels: missing.join(', ') }))
+        status.value = statusParts.join(' · ')
+        await load()
+      } catch (e) {
+        status.value = '✕ ' + (e.message || String(e))
+      } finally {
+        busy.value = false
+      }
+    }
     const openJson = (asset) => (jsonTarget.value = asset)
     const openLightbox = (img) => (lightbox.value = img)
     const closeLightbox = () => (lightbox.value = null)
@@ -235,7 +313,11 @@ export default defineComponent({
         if (!node) throw new Error('无法创建贴图输入节点')
         const dataUrl = await assetDataUrl(asset)
         setNodeImage(node.id, dataUrl, asset.name)
-        status.value = '✓ 已应用到贴图输入节点「' + asset.name + '」'
+        if (asset.role === 'substance-preview') {
+          status.value = t('assets.sbsarPreviewWarning')
+        } else {
+          status.value = t('assets.usedAsTexture', { name: asset.name })
+        }
       } catch (e) {
         status.value = '✕ ' + (e.message || String(e))
       } finally {
@@ -321,6 +403,9 @@ export default defineComponent({
       expanded,
       jsonTarget,
       lightbox,
+      pbrInput,
+      openPbrPicker,
+      onPbrSet,
       openJson,
       openLightbox,
       closeLightbox,
@@ -346,6 +431,8 @@ export default defineComponent({
           <div class="spacer"></div>
           <button class="btn" @click="openPicker" :disabled="busy">{{ $t('assets.import') }}</button>
           <button class="btn" @click="openSbsarPicker" :disabled="busy" :title="$t('assets.sbsarTitle')">{{ $t('assets.importSbsar') }}</button>
+          <button class="btn" @click="openPbrPicker" :disabled="busy" :title="$t('assets.pbrTitle')">{{ $t('assets.importPbr') }}</button>
+          <input ref="pbrInput" type="file" accept="image/png,image/jpeg,image/webp" multiple style="display: none" @change="onPbrSet" />
           <input ref="fileInput" type="file" accept="image/png,image/jpeg,image/webp,.sbsar" multiple style="display: none" @change="onFile" />
           <input ref="sbsarInput" type="file" accept=".sbsar" multiple style="display: none" @change="onSbsarFile" />
           <button class="icon-btn" @click="close">✕</button>
@@ -353,6 +440,7 @@ export default defineComponent({
         <div class="modal-body">
           <div class="hint">{{ $t('assets.hint') }}</div>
           <div class="hint small sbsar-hint">{{ $t('assets.sbsarHint') }}</div>
+          <div class="hint small sbsar-hint">{{ $t('assets.pbrHint') }}</div>
           <div class="asset-search">
             <input v-model="searchQuery" :placeholder="$t('assets.searchPlaceholder')" @keydown.enter="searchOnline" />
             <button class="btn" :disabled="searching" @click="searchOnline">{{ searching ? $t('assets.searching') : $t('assets.searchOnline') }}</button>
@@ -462,6 +550,9 @@ export default defineComponent({
                     <div class="sbsar-thumbs">
                       <div v-for="c in childAssets(a)" :key="c.id" class="sbsar-thumb">
                         <img :src="c.url" :alt="c.name" loading="lazy" class="sbsar-zoomable" @click="openLightbox({ url: c.url, name: c.name, width: c.width, height: c.height, bytes: c.bytes })" />
+                        <div class="sbsar-role" :class="{ warn: c.role === 'substance-preview' }">
+                          {{ c.role === 'substance-preview' ? $t('assets.sbsarPreviewRole') : $t('assets.sbsarResourceRole') }}
+                        </div>
                         <div class="dim small">{{ c.width }}×{{ c.height }} · {{ fmtBytes(c.bytes) }}</div>
                         <div class="asset-actions">
                           <button class="btn tiny" @click="useAsTexture(c)">{{ $t('assets.useTexture') }}</button>

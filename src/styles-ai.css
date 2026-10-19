@@ -984,3 +984,13 @@
 .json-host .json-formatter-dark .json-formatter-number { color: var(--accent); }
 .json-host .json-formatter-dark .json-formatter-boolean { color: #c9a5ff; }
 .json-host .json-formatter-dark .json-formatter-null { color: var(--text-faint); }
+
+.sbsar-role {
+  font-size: 9.5px;
+  letter-spacing: 0.2px;
+  color: var(--text-faint);
+}
+.sbsar-role.warn {
+  color: var(--accent);
+}
+

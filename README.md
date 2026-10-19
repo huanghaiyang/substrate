@@ -763,6 +763,20 @@ node scripts/inspect-sbsar.mjs path/to/asset.sbsar        # human summary
 node scripts/inspect-sbsar.mjs path/to/asset.sbsar --json  # full inspection report
 ```
 
+**Getting real PBR maps out of a .sbsar requires Adobe's engine** — the archive only carries a descriptor
+(`.xml`) and compiled bytecode (`.sbsasm`), so there are no pixels to parse. The supported batch path is
+Adobe's Substance Automation Toolkit; this repo wraps it:
+
+```bash
+npm run bake:sbsar -- path/to/asset.sbsar --res 2048
+# finds sbsrender via --sbsrender / SBSRENDER / SUBSTANCE_SAT_HOME / PATH
+```
+
+Then use the Material Library's **Import PBR set** button: select the baked maps, and each one is recognised
+by file name (basecolor/normal/roughness/metallic/height/ao/emissive/opacity), turned into a Texture Input and
+wired into the PBR Output. Data maps are switched to the raw **Data (RGB)** channel mode so normals and
+roughness keep their numeric values instead of being sRGB-decoded.
+
 Unit tests for the reader (fixtures generated in memory, no binary assets in the repo):
 
 ```bash

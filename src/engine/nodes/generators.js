@@ -356,7 +356,7 @@ export const generatorDefs = [
     desc: 'Load a bitmap (color or mask) into the graph.',
     inputs: [],
     params: [
-      { key: 'channelMode', label: 'Channel', type: 'select', options: ['Color', 'Grayscale', 'Alpha'], def: 0 },
+      { key: 'channelMode', label: 'Channel', type: 'select', options: ['Color', 'Grayscale', 'Alpha', 'Data (RGB)'], def: 0 },
       { key: 'scale', label: 'Tiling', type: 'vec2', min: 0.1, max: 8, step: 0.01, def: [1, 1] },
       { key: 'offset', label: 'Offset', type: 'vec2', min: -1, max: 1, step: 0.005, def: [0, 0] },
       { key: 'invert', label: 'Invert', type: 'bool', def: false }
@@ -367,13 +367,16 @@ export const generatorDefs = [
         vec2 p = uv * u_scale + u_offset;
         vec4 c = texture(uImage, p);
         if (u_channelMode == 0) {
-          // Color: authored in sRGB, processed in linear light. Grayscale / Alpha stay raw data.
+          // Color: authored in sRGB, processed in linear light.
           c.rgb = srgbToLinear(c.rgb);
         } else if (u_channelMode == 1) {
+          // Grayscale: raw data from the red channel.
           c = vec4(vec3(c.r), c.a);
-        } else {
+        } else if (u_channelMode == 2) {
+          // Alpha: raw data from the alpha channel.
           c = vec4(vec3(c.a), c.a);
         }
+        // mode 3 (Data (RGB)): keep raw RGB — normals / packed data maps must not be sRGB-decoded.
         if (u_invert) c.rgb = 1.0 - c.rgb;
         return c;
       }`
