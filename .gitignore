@@ -16,3 +16,4 @@ llm.config.local.json
 secrets/
 docs/reports/polyhaven/
 docs/reports/sbsar-import/
+.dsh-plugins/
