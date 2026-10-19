@@ -743,10 +743,25 @@ Adobe Substance Engine bytecode — so regenerating the material at another reso
 parameter values needs Adobe's engine, not a browser. The card says so explicitly
 (*preview only · no bake*) instead of pretending.
 
-Container handling is layered: a zip-shaped archive is read from its entry table (authoritative); the
-native Allegorithmic container is undocumented, so its contents are recovered by scanning for descriptor
-XML, zlib-compressed XML and PNG/JPEG blobs, and everything found that way is marked *heuristic* in the UI.
-Files without any archive landmark are rejected with a clear error rather than imported as empty.
+A real `.sbsar` is a **7-Zip (LZMA) archive** — Adobe's own publishing docs say to open it "with the LZMA
+decoder of your choice" and parse `assemblies/content/0000/metadata.json` with a JSON parser. Node ships no
+LZMA decoder, so this repository contains a zero-dependency one: `server/lzma.mjs` (LZMA1/LZMA2/Copy) and
+`server/sevenzip.mjs` (7z container). The importer reads the archive's entry table — authoritative — then
+picks up `assemblies/content/<n>/<Graph>.xml`, `metadata.json`, `resources/**` bitmaps and the `.sbsasm`
+assembly. Zip-shaped archives and opaque containers still work through fallbacks (the latter marked
+*heuristic* in the UI). Files without any archive landmark are rejected with a clear error instead of being
+imported as empty.
+
+The parser understands the two descriptor dialects found in the wild: Adobe's published `<sbsar>`-style
+descriptor and the real `<sbsdescription formatversion="2.1">` schema (graph address in `pkgurl`,
+parameter ranges on `<guislider min max step>` attributes, labels/groups on `<inputgui>`, outputs named by
+`<output identifier>`, control kinds derived from `widget`). To see exactly what the importer reads from a
+file — container, entries, descriptor, graphs, outputs, parameter kinds, bitmaps, warnings — run:
+
+```bash
+node scripts/inspect-sbsar.mjs path/to/asset.sbsar        # human summary
+node scripts/inspect-sbsar.mjs path/to/asset.sbsar --json  # full inspection report
+```
 
 Unit tests for the reader (fixtures generated in memory, no binary assets in the repo):
 

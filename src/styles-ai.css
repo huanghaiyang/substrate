@@ -827,3 +827,15 @@
   color: var(--text-faint);
 }
 
+
+.sbsar-group {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 9.5px;
+  letter-spacing: 0.3px;
+  color: var(--text-faint);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 5px;
+}
+

@@ -577,9 +577,22 @@ MIT——可自由使用、修改和发布。
 换分辨率或改参数重新出图需要 Adobe 的引擎，浏览器里没有替代实现。卡片会直接写明
 （*仅预览 · 不可烘焙*），而不是假装成功。
 
-容器处理是分层的：zip 形态按入口表权威读取；Allegorithmic 原生容器未公开，因此靠扫描描述符 XML、
-zlib 压缩的 XML 与 PNG/JPEG 数据块来恢复，凡是这样恢复的内容在 UI 里都标为**启发式**。
-没有任何归档标志物的文件会被明确拒绝，而不是导入一个空条目。
+真实的 `.sbsar` 是 **7-Zip（LZMA）归档**——Adobe 官方文档明确说"用你选的 LZMA 解码器打开它"，并用 JSON
+解析器读 `assemblies/content/0000/metadata.json`。Node 不自带 LZMA 解码，所以本仓库自带零依赖实现：
+`server/lzma.mjs`（LZMA1/LZMA2/Copy）与 `server/sevenzip.mjs`（7z 容器）。导入器按归档入口表（权威路径）读取，
+再收集 `assemblies/content/<n>/<Graph>.xml`、`metadata.json`、`resources/**` 位图与 `.sbsasm` 程序集。
+zip 形态与不透明容器仍走兜底路径（后者在 UI 里标为**启发式**）。没有任何归档标志物的文件会被明确拒绝，
+而不是导入一个空条目。
+
+解析器同时支持实际遇到的两种描述符方言：Adobe 公布的 `<sbsar>` 风格，以及真实的
+`<sbsdescription formatversion="2.1">` 架构（图地址在 `pkgurl`，参数范围在 `<guislider min max step>` 的属性上，
+label/group 在 `<inputgui>` 上，输出用 `<output identifier>` 命名，控件类型由 `widget` 推导）。
+想看清某个文件到底被读出了什么（容器/条目/描述符/图/输出/参数类型/位图/警告）：
+
+```bash
+node scripts/inspect-sbsar.mjs path/to/asset.sbsar        # 人类可读摘要
+node scripts/inspect-sbsar.mjs path/to/asset.sbsar --json  # 完整检查报告
+```
 
 读取器的单元测试（夹具在内存里生成，仓库不放二进制）：
 

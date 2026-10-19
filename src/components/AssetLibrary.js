@@ -132,9 +132,12 @@ export default defineComponent({
     const childAssets = (asset) => assets.value.filter((a) => a.parentId === asset.id)
     const fmtParam = (p) => {
       const bits = []
-      if (p.type) bits.push(p.type)
+      // real sbsar: label/group/kind come from <inputgui> + widget; older/synthetic: raw type code
+      if (p.kind && p.kind !== 'other') bits.push(p.kind)
+      else if (p.type) bits.push('type ' + p.type)
       if (p.default !== null && p.default !== undefined && p.default !== '') bits.push('= ' + p.default)
-      if (p.min !== null && p.max !== null) bits.push(`[${p.min} … ${p.max}${p.step ? ' / ' + p.step : ''}]`)
+      if (p.min !== null && p.min !== null && p.max !== null) bits.push(`[${p.min} … ${p.max}${p.step ? ' / ' + p.step : ''}]`)
+      if (p.enumItems && p.enumItems.length) bits.push('{' + p.enumItems.slice(0, 4).join(' | ') + (p.enumItems.length > 4 ? ' | …' : '') + '}')
       return bits.join(' · ')
     }
     async function onFile(event) {
@@ -358,9 +361,18 @@ export default defineComponent({
                     <div class="sbsar-chips"><span v-for="o in a.inspection.outputs" :key="o.usage" class="sbsar-chip">{{ o.usage }}</span></div>
                   </div>
                   <div v-if="(a.inspection?.parameters || []).length" class="sbsar-block">
-                    <div class="sbsar-label">{{ $t('assets.sbsarParamsTitle') }} <span class="hint small">{{ $t('assets.sbsarReadOnly') }}</span></div>
+                    <div class="sbsar-label">
+                      {{ $t('assets.sbsarParamsTitle') }}
+                      <span class="hint small">{{ $t('assets.sbsarReadOnly') }}</span>
+                      <span v-if="a.inspection.parameterCount > a.inspection.parameters.length" class="hint small">
+                        {{ $t('assets.sbsarParamsShown', { n: a.inspection.parameters.length, total: a.inspection.parameterCount }) }}
+                      </span>
+                    </div>
                     <div v-for="p in a.inspection.parameters" :key="p.id" class="sbsar-row">
-                      <span>{{ p.label !== p.id ? p.label + '  (' + p.id + ')' : p.id }}</span><b>{{ fmtParam(p) }}</b>
+                      <span>
+                        {{ p.label !== p.id ? p.label + '  (' + p.id + ')' : p.id }}
+                        <span v-if="p.group" class="sbsar-group">{{ p.group }}</span>
+                      </span><b>{{ fmtParam(p) }}</b>
                     </div>
                   </div>
                   <div v-if="(a.inspection?.warnings || []).length" class="sbsar-block">

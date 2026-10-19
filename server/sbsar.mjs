@@ -1,23 +1,26 @@
 // SBSAR (.sbsar / Substance Archive) inspector — zero dependencies.
 //
-// What a .sbsar is: Adobe Substance Designer's *compiled* package. It carries the graph description
-// (XML), one or more per-platform engine assemblies (.sbsasm, magic "SBAM"), embedded bitmaps
-// (icons/thumbnails/resources) and preset metadata. It does NOT carry the engine, and the .sbsasm is
-// proprietary bytecode.
+// A real .sbsar is a **7-Zip archive**. Adobe's publishing docs give the layout and say a reader
+// should "open the archive with the LZMA decoder of your choice":
+//   assemblies/content/<n>/<Graph>.xml      graph descriptor — this is the XML tools parse
+//   assemblies/content/<n>/<Graph>.sbsasm   engine bytecode (magic "SBAM"), platform builds
+//   assemblies/content/<n>/metadata.json    package metadata (JSON, not XML)
+//   assemblies/content/<n>/resources/<id>/  generic resources (images, text, …)
 //
-// Therefore this importer can do two things and nothing more:
-//   1. read the archive (metadata: package info, graphs, input parameters with ranges/defaults,
-//      output usages, embedded bitmaps) and expose the bitmaps as normal texture assets;
-//   2. tell the user precisely why the graph cannot be *evaluated* here.
-// Baking a Substance at arbitrary resolution would require Adobe's Substance Engine (native, licensed).
+// What this importer can and cannot do:
+//   1. read the archive (metadata, graphs, input parameters with ranges/defaults, output usages,
+//      embedded bitmaps) and expose the bitmaps as ordinary texture assets;
+//   2. explain precisely why the graph cannot be *evaluated* here: the .sbsasm is Adobe Substance
+//      Engine bytecode, so baking at another resolution needs Adobe's engine, not a browser.
 //
-// Container handling is layered, because archives in the wild come in two shapes:
-//   * zip    — an entry table (PK\x03\x04). Authoritative: every entry is listed and decompressed.
-//   * native — Allegorithmic's own container. Undocumented, so we scan it for XML documents and image
-//              blobs, including zlib-compressed ones. Anything recovered that way is marked `heuristic`
-//              so the caller never presents it as certain.
+// Container handling is layered:
+//   * 7z     — the real format (./sevenzip.mjs + ./lzma.mjs decode LZMA/LZMA2/Copy). Authoritative.
+//   * zip    — some tools repackage archives as plain zip; the entry table is authoritative too.
+//   * scan   — an opaque/obfuscated container: recover descriptor XML (also zlib-compressed) and image
+//              blobs, and mark everything found that way as heuristic.
 import { createHash } from 'node:crypto'
 import zlib from 'node:zlib'
+import { is7z, read7z } from './sevenzip.mjs'
 
 const MAX_XML_CHARS = 4 * 1024 * 1024
 const MAX_IMAGE_BYTES = 24 * 1024 * 1024
@@ -195,18 +198,56 @@ function firstAttr(attrs, keys) {
   return undefined
 }
 
-/** pull numeric hints out of child <gui> elements and from the attribute map */
+/** pull numeric hints out of child <gui*-like> elements: attributes first (real SBSAR), then text */
 function guiHints(node) {
   const out = {}
-  const read = (n) => {
-    const ln = localName(n.name)
-    if (['min', 'minimum', 'max', 'maximum', 'step', 'increment', 'default', 'value'].includes(ln)) {
-      const v = firstAttr(n.attrs, ['value', 'v']) ?? n.text.trim()
-      if (v !== '' && v != null && !Number.isNaN(Number(v))) out[ln === 'minimum' ? 'min' : ln === 'maximum' ? 'max' : ln === 'increment' ? 'step' : ln] = Number(v)
-    }
+  const num = (v) => (v == null || v === '' || Number.isNaN(Number(v)) ? undefined : Number(v))
+  const put = (key, v) => {
+    const n = num(v)
+    if (n !== undefined && out[key] === undefined) out[key] = n
   }
-  walk(node, read)
+  const readNode = (n) => {
+    const ln = localName(n.name)
+    // real sbsar: <guislider min="1" max="64" step="1"/>
+    for (const [k, v] of Object.entries(n.attrs || {})) {
+      const ak = localName(k)
+      if (ak === 'min' || ak === 'minimum') put('min', v)
+      else if (ak === 'max' || ak === 'maximum') put('max', v)
+      else if (ak === 'step' || ak === 'increment') put('step', v)
+      else if (ak === 'default' || ak === 'value') put('default', v)
+    }
+    // older/other schemas: <min>0</min> text content
+    if (['min', 'minimum', 'max', 'maximum', 'step', 'increment', 'default', 'value'].includes(ln)) {
+      const key = ln === 'minimum' ? 'min' : ln === 'maximum' ? 'max' : ln === 'increment' ? 'step' : ln
+      put(key, firstAttr(n.attrs || {}, ['value', 'v']) ?? n.text.trim())
+    }
+    // <guibutton label0="False" label1="True"/> → boolean kind
+    if (ln === 'guibutton' && firstAttr(n.attrs || {}, ['label0'])) out.boolLabels = [firstAttr(n.attrs || {}, ['label0']), firstAttr(n.attrs || {}, ['label1'])]
+    if (ln === 'guicomboboxitem') {
+      const text = firstAttr(n.attrs || {}, ['text', 'label', 'value']) ?? n.text.trim()
+      if (text) (out.enumItems = out.enumItems || []).push(text)
+    }
+    if (ln === 'guicombobox' && (out.enumItems || []).length) out.hasCombo = true
+  }
+  walk(node, readNode)
   return out
+}
+
+/** map a real-SBSAR widget/type pair to a friendly parameter kind */
+function paramKind(widget, showAs, typeRaw, hints) {
+  const w = String(widget || '').toLowerCase()
+  const s2 = String(showAs || '').toLowerCase()
+  if (w === 'togglebutton' || s2 === 'bool' || s2 === 'boolean') return 'bool'
+  if (w === 'combobox' || (hints && hints.hasCombo)) return 'enum'
+  if (w === 'angle' || s2 === 'angle') return 'angle'
+  if (w === 'slider' || w === 'spinbox') return 'float'
+  if (w === 'color' || s2 === 'color') return 'color'
+  if (w === 'image' || s2 === 'image') return 'image'
+  const t = String(typeRaw == null ? '' : typeRaw)
+  if (t === '4') return 'float'
+  if (t === '8') return 'vector2'
+  if (t === '5') return 'output'
+  return 'other'
 }
 
 function collectFromXml(buf) {
@@ -225,8 +266,18 @@ function collectFromXml(buf) {
     const a = node.attrs || {}
 
     if (ln === 'graph') {
-      const id = firstAttr(a, ['identifier', 'id', 'name'])
-      if (id) graphs.push({ identifier: id, label: firstAttr(a, ['label', 'displayname']) || id })
+      const pkgurl = firstAttr(a, ['pkgurl', 'identifier', 'id', 'name'])
+      const id = (pkgurl || '').replace(/^pkg:\/\//, '')
+      const label = firstAttr(a, ['label', 'displayname']) || id
+      if (id || label) {
+        graphs.push({
+          identifier: id || label,
+          label: label || id,
+          graphType: firstAttr(a, ['graphtype', 'type']) || null,
+          physicalSize: firstAttr(a, ['physicalsize']) || null,
+          icon: firstAttr(a, ['icon']) || null
+        })
+      }
       return
     }
     // package / graph metadata packs: <metadata name="author" value="..."/>
@@ -242,10 +293,22 @@ function collectFromXml(buf) {
       if (!id) return
       const hints = guiHints(node)
       const num = (v) => (v == null || v === '' || Number.isNaN(Number(v)) ? undefined : Number(v))
+      // real sbsar keeps label/group/description/widget on the nested <inputgui> element
+      let gui = null
+      walk(node, (n) => {
+        if (!gui && localName(n.name) === 'inputgui') gui = n.attrs || {}
+      })
+      const typeRaw = firstAttr(a, ATTR_ALIASES.type) || null
+      const widget = gui ? firstAttr(gui, ['widget']) : undefined
       parameters.push({
         id,
-        label: firstAttr(a, ATTR_ALIASES.label) || id,
-        type: firstAttr(a, ATTR_ALIASES.type) || null,
+        label: (gui && firstAttr(gui, ['label'])) || firstAttr(a, ATTR_ALIASES.label) || id,
+        kind: paramKind(widget, gui ? firstAttr(gui, ['showas']) : undefined, typeRaw, hints),
+        widget: widget || null,
+        group: (gui && firstAttr(gui, ['group'])) || null,
+        description: (gui && firstAttr(gui, ['description'])) || null,
+        enumItems: hints.enumItems && hints.enumItems.length ? hints.enumItems : undefined,
+        type: typeRaw,
         default: firstAttr(a, ATTR_ALIASES.def) ?? hints.default ?? null,
         min: num(firstAttr(a, ATTR_ALIASES.min)) ?? hints.min ?? null,
         max: num(firstAttr(a, ATTR_ALIASES.max)) ?? hints.max ?? null,
@@ -254,8 +317,14 @@ function collectFromXml(buf) {
       return
     }
     if (['output', 'usage', 'outputusage'].includes(ln)) {
-      const usage = firstAttr(a, ['usage', 'identifier', 'name', 'type'])
-      if (usage) outputs.push({ usage })
+      const usage = firstAttr(a, ['usage', 'identifier', 'name'])
+      if (!usage) return
+      outputs.push({
+        usage,
+        format: firstAttr(a, ['format']) || null,
+        width: firstAttr(a, ['width']) || null,
+        height: firstAttr(a, ['height']) || null
+      })
     }
   })
 
@@ -268,6 +337,11 @@ function collectFromXml(buf) {
  * @returns {{container:'zip'|'native'|'unknown', ...}} inspection report (no bytes of images inline
  *          unless `includeImageBytes` — the server stores them separately).
  */
+/** image role from its path inside a substance package */
+function imgRole(name) {
+  return /thumb|icon|preview|.png$/i.test(name) && /thumb|icon|preview/i.test(name) ? 'preview' : 'resource'
+}
+
 export function inspectSbsar(buf, { includeImageBytes = false, maxImages = MAX_IMAGES } = {}) {
   if (!Buffer.isBuffer(buf) || buf.length < 16) throw new Error('File is too small to be a Substance archive')
   const warnings = []
@@ -277,8 +351,37 @@ export function inspectSbsar(buf, { includeImageBytes = false, maxImages = MAX_I
   let xmlCandidates = []
   let images = []
   let assemblies = []
+  const metadataFromJson = {}
 
-  const zip = readZip(buf)
+  if (is7z(buf)) {
+    container = '7z'
+    try {
+      const archive = read7z(buf)
+      entries = archive.entries.filter((e) => !e.isDir)
+    } catch (e) {
+      warnings.push('7z container detected but could not be read: ' + e.message)
+    }
+    for (const e of entries) {
+      if (/\.(png|jpe?g)$/i.test(e.name)) {
+        const info = pngInfo(e.data) || jpegInfo(e.data)
+        if (info) images.push({ ...info, name: e.name, role: imgRole(e.name), bytes: info.bytes })
+      } else if (/\.xml$/i.test(e.name)) {
+        xmlCandidates.push({ name: e.name, data: e.data })
+      } else if (/metadata\.json$/i.test(e.name)) {
+        try {
+          const meta = JSON.parse(e.data.toString('utf8'))
+          if (meta && typeof meta === 'object') for (const [k, v] of Object.entries(meta)) if (!metadataFromJson[k]) metadataFromJson[k] = String(v)
+        } catch (err) {
+          warnings.push(e.name + ': metadata.json is not valid JSON')
+        }
+      } else if (/\.sbsasm$/i.test(e.name)) {
+        assemblies.push({ name: e.name, bytes: e.data.length })
+      }
+    }
+    notes.push('7z archive read from its entry table (authoritative).')
+  }
+
+  const zip = container === 'unknown' ? readZip(buf) : null
   if (zip && zip.entries.length) {
     container = 'zip'
     if (zip.zip64) warnings.push('ZIP64 archives are not fully supported; entry sizes may be wrong')
@@ -294,8 +397,8 @@ export function inspectSbsar(buf, { includeImageBytes = false, maxImages = MAX_I
         assemblies.push({ name: e.name, bytes: e.data.length })
       }
     }
-  } else {
-    // native container: scan for what we can recognise
+  } else if (container === 'unknown') {
+    // opaque container: scan for what we can recognise
     container = 'native'
     notes.push('Native Substance container: the archive table is undocumented, so contents were recovered by scanning (tolerant, may be partial).')
     const xml = scanXml(buf)
@@ -325,13 +428,19 @@ export function inspectSbsar(buf, { includeImageBytes = false, maxImages = MAX_I
     throw new Error(
       container === 'zip'
         ? 'Not a Substance archive: the zip has no graph XML, bitmaps or .sbsasm assembly'
-        : 'Not a Substance archive: no descriptor XML, bitmap or SBAM assembly was found'
+        : container === '7z'
+          ? 'Not a Substance archive: the 7z payload has no descriptor XML, bitmap or SBAM assembly'
+          : 'Not a Substance archive: no descriptor XML, bitmap or SBAM assembly was found'
     )
   }
 
+  if (parsed) {
+    for (const [k, v] of Object.entries(metadataFromJson)) if (!(k in parsed.metadata)) parsed.metadata[k] = v
+  }
   if (!parsed) {
     parsed = { rootName: '', graphs: [], parameters: [], outputs: [], metadata: {} }
-    if (container === 'zip') warnings.push('Archive has no readable graph XML; only bitmaps were imported.')
+    for (const [k, v] of Object.entries(metadataFromJson)) parsed.metadata[k] = v
+    if (container === 'zip' || container === '7z') warnings.push('Archive has no readable graph XML; only bitmaps were imported.')
   }
   if (!parsed.graphs.length) {
     const name = String(parsed.metadata.graph || parsed.metadata.name || '').trim()
@@ -356,7 +465,7 @@ export function inspectSbsar(buf, { includeImageBytes = false, maxImages = MAX_I
       height: img.height,
       bytes: img.bytes.length,
       role: isPreview ? 'preview' : 'resource',
-      confidence: container === 'zip' ? 'certain' : 'heuristic',
+      confidence: container === 'zip' || container === '7z' ? 'certain' : 'heuristic',
       sha256: key,
       ...(includeImageBytes ? { data: img.bytes.toString('base64') } : {})
     })
@@ -364,7 +473,7 @@ export function inspectSbsar(buf, { includeImageBytes = false, maxImages = MAX_I
 
   const shape = {
     container,
-    containerConfidence: container === 'zip' ? 'certain' : 'heuristic',
+    containerConfidence: container === 'zip' || container === '7z' ? 'certain' : 'heuristic',
     fileBytes: buf.length,
     sha256: sha256(buf),
     graphXml: parsedFrom,
