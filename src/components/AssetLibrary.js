@@ -24,6 +24,8 @@ export default defineComponent({
     const expanded = ref('')
     const pbrInput = ref(null)     // hidden file input for a PBR map set
     const reconstructing = ref(false)
+    const baking = ref(false)
+    const bake = ref({ loading: true, available: false, reason: '', installUrl: '' })
     const jsonTarget = ref(null)   // sbsar asset whose inspection report is open in the JSON viewer
     const lightbox = ref(null)     // { url, name, width, height, bytes } previewed image
     const PBR_CHANNELS = [
@@ -45,6 +47,88 @@ export default defineComponent({
     }
     const openPbrPicker = () => pbrInput.value?.click()
 
+    /** wire already-imported maps into the PBR Output: entries = [{ name, dataUrl, channel? }] */
+    async function applyMapEntries(entries) {
+      const out = outputNode()
+      if (!out) throw new Error(t('assets.pbrNoOutput'))
+      const found = new Map()
+      const skipped = []
+      for (const entry of entries) {
+        const ch = entry.channel ? PBR_CHANNELS.find((c) => c.port === entry.channel) : detectChannel(entry.name)
+        if (!ch) {
+          skipped.push(entry.name)
+          continue
+        }
+        if (found.has(ch.port)) {
+          skipped.push(entry.name)
+          continue
+        }
+        found.set(ch.port, { ch, entry })
+      }
+      let row = 0
+      for (const [port, { ch, entry }] of found) {
+        const node = addNode('image_input', { x: out.x - 640, y: out.y - 320 + row * 190 })
+        row++
+        if (!node) continue
+        setParam(node.id, 'channelMode', ch.mode)
+        setNodeImage(node.id, entry.dataUrl, entry.name)
+        disconnectInput(out.id, port)
+        addConnection(node.id, 'out', out.id, port)
+      }
+      requestEval(true)
+      await load()
+      return { channels: [...found.keys()], skipped }
+    }
+
+    const blobToDataUrl = (blob) =>
+      new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result)
+        reader.onerror = () => reject(new Error('read failed'))
+        reader.readAsDataURL(blob)
+      })
+
+    async function refreshBakeStatus() {
+      try {
+        const r = await fetch('/api/sbsar/bake/status')
+        const j = await r.json()
+        bake.value = { loading: false, available: !!j.available, reason: j.reason || '', installUrl: j.installUrl || '', sbsrender: j.sbsrender || null }
+      } catch (e) {
+        bake.value = { loading: false, available: false, reason: String(e.message || e), installUrl: '' }
+      }
+    }
+
+    /**
+     * Bake through the *local* Adobe engine (SAT sbsrender) and wire the results. The engine is native
+     * and per-user licensed, so it cannot ship as WebAssembly: the browser asks the local studio server
+     * to run it. Without SAT the button explains what to install instead of pretending.
+     */
+    async function bakeInApp(asset) {
+      if (baking.value) return
+      baking.value = true
+      try {
+        status.value = t('assets.baking')
+        const r = await fetch('/api/sbsar/bake', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ assetId: asset.id, res: Math.min(2048, state.resolution || 1024) })
+        })
+        const j = await r.json()
+        if (!j.ok) throw new Error(j.error?.message || 'bake failed')
+        const entries = []
+        for (const a of j.assets || []) {
+          const blob = await (await fetch(a.url)).blob()
+          entries.push({ name: a.name, dataUrl: await blobToDataUrl(blob), channel: a.channel || undefined })
+        }
+        const wired = await applyMapEntries(entries)
+        status.value = t('assets.bakeDone', { n: wired.channels.length, channels: wired.channels.join(', ') })
+      } catch (e) {
+        status.value = '✕ ' + (e.message || String(e))
+      } finally {
+        baking.value = false
+      }
+    }
+
     /**
      * Import a baked PBR map set (basecolor/normal/roughness/…), register every file as an asset and
      * wire one Texture Input per channel into the PBR Output. This is the practical end of the
@@ -55,15 +139,9 @@ export default defineComponent({
       event.target.value = ''
       if (!files.length) return
       busy.value = true
-      const statusParts = []
       try {
-        const out = outputNode()
-        if (!out) throw new Error(t('assets.pbrNoOutput'))
-        const found = new Map()
+        const entries = []
         for (const file of files) {
-          const ch = detectChannel(file.name)
-          if (!ch) { statusParts.push(t('assets.pbrUnknown', { name: file.name })); continue }
-          if (found.has(ch.port)) { statusParts.push(t('assets.pbrDuplicate', { name: file.name })); continue }
           const dataUrl = await new Promise((resolve, reject) => {
             const reader = new FileReader()
             reader.onload = () => resolve(reader.result)
@@ -77,32 +155,21 @@ export default defineComponent({
           })
           const data = await res.json()
           if (!data.ok) throw new Error(data.error?.message || 'import failed')
-          found.set(ch.port, { ch, file, dataUrl })
+          entries.push({ name: file.name, dataUrl })
         }
-        // graph: one texture input per channel, laid out in a column left of the output
-        let row = 0
-        for (const [port, entry] of found) {
-          const node = addNode('image_input', { x: out.x - 640, y: out.y - 320 + row * 190 })
-          row++
-          if (!node) continue
-          setParam(node.id, 'channelMode', entry.ch.mode)
-          setNodeImage(node.id, entry.dataUrl, entry.file.name)
-          disconnectInput(out.id, port)
-          addConnection(node.id, 'out', out.id, port)
-        }
-        requestEval(true)
-        const got = [...found.keys()]
-        const missing = PBR_CHANNELS.map((c) => c.port).filter((p) => !found.has(p) && !['emissive', 'opacity'].includes(p))
-        statusParts.unshift(t('assets.pbrImported', { n: got.length, channels: got.join(', ') }))
-        if (missing.length) statusParts.push(t('assets.pbrMissing', { channels: missing.join(', ') }))
-        status.value = statusParts.join(' · ')
-        await load()
+        const wired = await applyMapEntries(entries)
+        const missing = PBR_CHANNELS.map((c) => c.port).filter((p) => !wired.channels.includes(p) && !['emissive', 'opacity'].includes(p))
+        status.value =
+          t('assets.pbrImported', { n: wired.channels.length, channels: wired.channels.join(', ') }) +
+          (missing.length ? ' · ' + t('assets.pbrMissing', { channels: missing.join(', ') }) : '') +
+          (wired.skipped.length ? ' · ' + t('assets.pbrUnknownCount', { n: wired.skipped.length }) : '')
       } catch (e) {
         status.value = '✕ ' + (e.message || String(e))
       } finally {
         busy.value = false
       }
     }
+
     const openJson = (asset) => (jsonTarget.value = asset)
 
     /**
@@ -446,7 +513,10 @@ export default defineComponent({
       if (navigator.clipboard?.writeText) navigator.clipboard.writeText(url).then(() => (status.value = '✓ 已复制 ' + url), () => {})
     }
 
-    onMounted(load)
+    onMounted(() => {
+      load()
+      refreshBakeStatus()
+    })
 
     return {
       assets,
@@ -472,6 +542,9 @@ export default defineComponent({
       pbrInput,
       reconstructing,
       reconstruct,
+      baking,
+      bake,
+      bakeInApp,
       openPbrPicker,
       onPbrSet,
       openJson,
@@ -609,6 +682,15 @@ export default defineComponent({
                       </span><b>{{ fmtParam(p) }}</b>
                     </div>
                   </div>
+                  <div class="sbsar-block">
+                    <div class="sbsar-label">{{ $t('assets.bakeSection') }}</div>
+                    <div v-if="bake.loading" class="hint small">{{ $t('common.loading') }}</div>
+                    <div v-else-if="bake.available" class="sbsar-note soft">{{ $t('assets.bakeReady', { path: bake.sbsrender }) }}</div>
+                    <div v-else class="sbsar-warn">
+                      {{ $t('assets.bakeUnavailable') }}
+                      <a :href="bake.installUrl" target="_blank" rel="noopener">{{ $t('assets.bakeInstall') }}</a>
+                    </div>
+                  </div>
                   <div v-if="(a.inspection?.warnings || []).length" class="sbsar-block">
                     <div class="sbsar-label">{{ $t('assets.sbsarWarnings') }}</div>
                     <div v-for="(w, i) in a.inspection.warnings" :key="i" class="sbsar-warn">{{ w }}</div>
@@ -632,6 +714,9 @@ export default defineComponent({
                   </div>
                   <div class="asset-actions">
                     <button class="btn tiny accent" :disabled="reconstructing" @click="reconstruct(a)" :title="$t('assets.reconstructTitle')">{{ reconstructing ? $t('assets.reconstructing') : $t('assets.reconstruct') }}</button>
+                    <button class="btn tiny" :disabled="baking || bake.loading || !bake.available" @click="bakeInApp(a)" :title="bake.available ? $t('assets.bakeTitle', { path: bake.sbsrender }) : bake.reason">
+                      {{ baking ? $t('assets.baking') : $t('assets.bake') }}
+                    </button>
                     <button class="btn tiny" @click="openJson(a)">{{ $t('assets.sbsarJson') }}</button>
                     <a class="btn tiny" :href="a.inspectionUrl" target="_blank" rel="noopener">{{ $t('assets.sbsarJsonRaw') }}</a>
                     <button class="btn tiny danger" @click="removeAsset(a)">✕</button>

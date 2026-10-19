@@ -610,6 +610,12 @@ metallic/height/ao/emissive/opacity），自动生成贴图输入并接入 PBR �
 裁掉烘焙阴影后取调色板、对比度、亮度、饱和度），生成一套 14 节点、可平铺、六个 PBR 通道全部接好的程序化材质；
 重建前自动把当前工程另存为 `autosave-before-reconstruct`，结果载入为 `reconstructed-<图标签>`，所有参数都可继续调。
 
+Adobe 的 Substance 引擎是**闭源原生二进制**（Blender 插件的 `Substance3DIntegrationTools` 就是按平台分发的
+DLL/dylib/so），按用户授权——既不能编译成 WebAssembly，也不能随网页下发。所以本应用改为驱动**本机已安装**的引擎：
+`GET /api/sbsar/bake/status` 报告是否找到 `sbsrender`（Substance Automation Toolkit），
+`POST /api/sbsar/bake` 渲染全部输出并导入素材库，素材库的「**应用内烘焙**」按钮会自动接线到 PBR 输出；
+没装引擎时按钮禁用并在卡片里说明要装什么——绝不假装烘焙。
+
 读取器的单元测试（夹具在内存里生成，仓库不放二进制）：
 
 ```bash

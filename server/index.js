@@ -15,7 +15,8 @@ import {
   validateArguments,
   toolTimeout
 } from '../src/engine/mcp-catalog.js'
-import { initAssets, listAssets, importAsset, importSbsarAsset, readSbsarInspection, deleteAsset, assetFilePath, assetsCount, searchAssets, importAssetFromUrl } from './assets.mjs'
+import { initAssets, listAssets, importAsset, importSbsarAsset, readSbsarInspection, deleteAsset, assetFilePath, assetsCount, searchAssets, importAssetFromUrl, ASSETS_DIR } from './assets.mjs'
+import { bakeStatus, bakeSbsar, readBakedFile, cleanupBake } from './sbsar-bake.mjs'
 import {
   loadConfig as loadLlmConfig,
   saveConfig as saveLlmConfig,
@@ -803,6 +804,49 @@ function handleAssetSbsarInspect(req, res, url) {
   }
 }
 
+function handleSbsarBakeStatus(req, res) {
+  return sendJSON(res, 200, { ok: true, ...bakeStatus() })
+}
+
+/**
+ * Bake a stored .sbsar through the locally installed Adobe engine (SAT) and import the resulting maps
+ * into the asset library. Nothing is emulated: if the engine is absent this returns SAT_MISSING with
+ * install guidance instead of pretending to bake.
+ */
+function handleSbsarBake(req, res) {
+  return readBody(req, 1024 * 1024)
+    .then(async (buf) => {
+      const payload = JSON.parse(buf.toString('utf8') || '{}')
+      const id = String(payload.assetId || '')
+      if (!id) throw Object.assign(new Error('Missing assetId'), { code: 'INVALID_ARGUMENT' })
+      const entry = listAssets().find((a) => a.id === id)
+      if (!entry || entry.kind !== 'sbsar') throw Object.assign(new Error('Archive asset not found: ' + id), { code: 'NOT_FOUND' })
+      const file = entry.file ? path.join(ASSETS_DIR, String(entry.file)) : null
+      if (!file || !existsSync(file)) throw Object.assign(new Error('Archive file is missing on disk'), { code: 'NOT_FOUND' })
+      const resolution = Math.min(4096, Math.max(256, Number(payload.res) || 2048))
+      const baked = await bakeSbsar({ file, res: resolution, graph: payload.graph || null })
+      try {
+        const assets = []
+        for (const f of baked.files) {
+          const buffer = readBakedFile(f.path)
+          const asset = importAsset({ name: f.name, dataUrl: 'data:image/png;base64,' + buffer.toString('base64') })
+          assets.push({ ...asset, channel: f.channel })
+        }
+        return sendJSON(res, 200, { ok: true, resolution, assets, log: baked.log })
+      } finally {
+        cleanupBake(baked.dir)
+      }
+    })
+    .catch((e) => {
+      const status = e.code === 'SAT_MISSING' ? 503 : e.code === 'NOT_FOUND' ? 404 : 500
+      return sendJSON(res, status, {
+        ok: false,
+        error: { code: e.code || 'BAKE_FAILED', message: String(e.message || e) },
+        ...(e.code === 'SAT_MISSING' ? { install: { url: bakeStatus().installUrl } } : {})
+      })
+    })
+}
+
 function handleAssetSearch(req, res, url) {
   return searchAssets(url.searchParams.get('q') || '', Math.min(24, Math.max(1, Number(url.searchParams.get('limit')) || 12)))
     .then((result) => sendJSON(res, 200, result))
@@ -978,6 +1022,8 @@ const server = http.createServer((req, res) => {
   if (p === '/api/assets/import-url' && method === 'POST') return handleAssetImportUrl(req, res)
   if (p === '/api/assets/import' && method === 'POST') return handleAssetImport(req, res)
   if (p === '/api/assets/import-sbsar' && method === 'POST') return handleAssetImportSbsar(req, res)
+  if (p === '/api/sbsar/bake/status' && method === 'GET') return handleSbsarBakeStatus(req, res)
+  if (p === '/api/sbsar/bake' && method === 'POST') return handleSbsarBake(req, res)
   if (p === '/api/assets/sbsar' && method === 'GET') return handleAssetSbsarInspect(req, res, url)
   if (p === '/api/assets/delete' && method === 'POST') return handleAssetDelete(req, res)
   if (p.startsWith('/assets/') && (method === 'GET' || method === 'HEAD')) {

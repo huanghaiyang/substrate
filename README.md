@@ -783,6 +783,14 @@ brightness, colourfulness), generates a tileable 14-node procedural material wir
 saves the previous project as `autosave-before-reconstruct` and loads the result as
 `reconstructed-<graph label>`. Everything in it stays editable.
 
+The Adobe Substance engine is a **closed-source native binary** (the Blender add-on's
+`Substance3DIntegrationTools` ships per-platform DLL/dylib/so), licensed per user — so it cannot be
+compiled or shipped as WebAssembly. The studio therefore drives the *locally installed* engine instead:
+`GET /api/sbsar/bake/status` reports whether `sbsrender` (Substance Automation Toolkit) is present, and
+`POST /api/sbsar/bake` renders every output and imports the maps, which the Material Library's
+**Bake in app** button wires into the PBR Output automatically. Without the engine the button is disabled
+and the card explains what to install — it never fakes a bake.
+
 Unit tests for the reader (fixtures generated in memory, no binary assets in the repo):
 
 ```bash
