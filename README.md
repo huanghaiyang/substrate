@@ -812,9 +812,24 @@ compiled or shipped as WebAssembly. The studio therefore drives the *locally ins
 **Bake in app** button wires into the PBR Output automatically. Without the engine the button is disabled
 and the card explains what to install — it never fakes a bake.
 
+### Editing a .sbsar's inputs
+
+The archive *interface* (input ids, types, ranges, enums, defaults) is readable without Adobe's engine, so
+the card's **Edit inputs** button opens a parameter workbench: every exposed input can be changed with a
+slider / toggle / combo / vector field, filtered, reset, and exported to or imported from JSON. Changed
+values are validated (numeric clamping, enum label → index, booleans → `0/1`, vectors as `a,b,c`) and sent
+to the local engine as `--set-value` overrides whenever you bake, so editing is real rather than cosmetic.
+The panel never shows a fake live preview: a `.sbsar`'s graph is compiled into `.sbsasm`, and only Adobe's
+native engine can evaluate it. Player installs are detected too (`Bake status → player`) but the free
+Substance 3D Player exposes no batch entry point, so bakes still require `sbsrender`.
+
+The reverse-engineering notes behind that split — engine ABI, `.sbsasm` `SBAM` layout, the cook→link→engine
+pipeline, and why a WebAssembly rewrite is not viable — are in
+[`docs/reports/sbsar-engine-re/REPORT.md`](docs/reports/sbsar-engine-re/REPORT.md).
+
 Unit tests for the reader (fixtures generated in memory, no binary assets in the repo):
 
 ```bash
 npm run fixtures:sbsar   # regenerate demo archives in docs/reports/sbsar-import/fixtures
-npm run test:sbsar       # 25 assertions: containers, XML, parameters, bitmaps, rejection paths
+npm run test:sbsar       # 59 assertions: containers, XML, parameters, bitmaps, rejection paths, --set-value mapping
 ```

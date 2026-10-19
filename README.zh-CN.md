@@ -633,10 +633,21 @@ DLL/dylib/so），按用户授权——既不能编译成 WebAssembly，也不�
 `POST /api/sbsar/bake` 渲染全部输出并导入素材库，素材库的「**应用内烘焙**」按钮会自动接线到 PBR 输出；
 没装引擎时按钮禁用并在卡片里说明要装什么——绝不假装烘焙。
 
+### 编辑 .sbsar 的输入参数
+
+归档的**接口**（输入 id、类型、范围、枚举、默认值）不需要 Adobe 引擎就能读，所以卡片的「**调整输入参数**」按钮
+打开参数工坊：每个暴露的输入都能用滑杆 / 开关 / 下拉 / 向量框修改，可筛选、可重置、可导出/导入 JSON 预设。
+改动会做校验（数值夹紧到 min/max、枚举按标签转索引、布尔转 `0/1`、向量拼 `a,b,c`），烘焙时作为
+`--set-value` 覆盖传给本地引擎——所以编辑是"真"的，而不是只改界面。面板**不提供假的实时预览**：`.sbsar`
+的图被编译进 `.sbsasm`，只有 Adobe 原生引擎能求值。本机未装 SAT 时按钮明确禁用并给出原因。
+
+逆向过程与结论（引擎 ABI、`.sbsasm` 的 `SBAM` 结构、cook→link→engine 三步管线、以及为什么"重写成 WASM"
+不可行）见 [`docs/reports/sbsar-engine-re/REPORT.md`](docs/reports/sbsar-engine-re/REPORT.md)。
+
 读取器的单元测试（夹具在内存里生成，仓库不放二进制）：
 
 ```bash
 npm run fixtures:sbsar   # 重新生成 docs/reports/sbsar-import/fixtures 里的演示归档
-npm run test:sbsar       # 46 条断言：容器/7z/LZMA、真实布局、XML、参数、位图、拒绝路径
+npm run test:sbsar       # 59 条断言：容器/7z/LZMA、真实布局、XML、参数、位图、拒绝路径、--set-value 映射
 npm run test:reconstruct # 14 条断言：重建图的节点/端口/通道/幂等性
 ```

@@ -922,7 +922,20 @@ function handleSbsarBake(req, res) {
       const file = entry.file ? path.join(ASSETS_DIR, String(entry.file)) : null
       if (!file || !existsSync(file)) throw Object.assign(new Error('Archive file is missing on disk'), { code: 'NOT_FOUND' })
       const resolution = Math.min(4096, Math.max(256, Number(payload.res) || 2048))
-      const baked = await bakeSbsar({ file, res: resolution, graph: payload.graph || null })
+      // parameter overrides are validated against the interface we parsed from the archive
+      let inspection = {}
+      try {
+        inspection = readSbsarInspection(id) || {}
+      } catch (e) {
+        inspection = {}
+      }
+      const baked = await bakeSbsar({
+        file,
+        res: resolution,
+        graph: payload.graph || null,
+        params: payload.params || null,
+        parameters: inspection.parameters || []
+      })
       try {
         const assets = []
         for (const f of baked.files) {
@@ -930,7 +943,7 @@ function handleSbsarBake(req, res) {
           const asset = importAsset({ name: f.name, dataUrl: 'data:image/png;base64,' + buffer.toString('base64') })
           assets.push({ ...asset, channel: f.channel })
         }
-        return sendJSON(res, 200, { ok: true, resolution, assets, log: baked.log })
+        return sendJSON(res, 200, { ok: true, resolution, assets, log: baked.log, applied: baked.applied || [], skipped: baked.skipped || [] })
       } finally {
         cleanupBake(baked.dir)
       }

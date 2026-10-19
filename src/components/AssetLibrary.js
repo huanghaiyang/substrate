@@ -4,10 +4,31 @@ import { analyzePreview, buildReconstructionProject } from '../engine/reconstruc
 import { loadPattern } from '../engine/paint.js'
 import { t } from '../i18n/index.js'
 import JsonViewer from './JsonViewer.js'
+import SbsarParams from './SbsarParams.js'
+
+// .sbsar parameter overrides live in localStorage keyed by archive asset id: the archive interface is
+// stable, so a hash isn't needed here, and the values are small.
+const PARAM_STORAGE_KEY = 'substrate.sbsar.params'
+function loadParamValues() {
+  try {
+    const raw = localStorage.getItem(PARAM_STORAGE_KEY)
+    const parsed = raw ? JSON.parse(raw) : {}
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch (e) {
+    return {}
+  }
+}
+function saveParamValues(values) {
+  try {
+    localStorage.setItem(PARAM_STORAGE_KEY, JSON.stringify(values || {}))
+  } catch (e) {
+    /* quota / private mode: overrides simply don't persist */
+  }
+}
 
 export default defineComponent({
   name: 'AssetLibrary',
-  components: { JsonViewer },
+  components: { JsonViewer, SbsarParams },
   emits: ['close'],
   setup(_props, { emit }) {
     const assets = ref([])
@@ -102,16 +123,24 @@ export default defineComponent({
      * Bake through the *local* Adobe engine (SAT sbsrender) and wire the results. The engine is native
      * and per-user licensed, so it cannot ship as WebAssembly: the browser asks the local studio server
      * to run it. Without SAT the button explains what to install instead of pretending.
+     *
+     * `paramOverrides` is the parameter workbench's draft: every changed input is forwarded as a
+     * `--set-value` override, which is what makes "edit" real rather than cosmetic.
      */
-    async function bakeInApp(asset) {
+    async function bakeInApp(asset, paramOverrides = null) {
       if (baking.value) return
       baking.value = true
       try {
         status.value = t('assets.baking')
+        const params = paramOverrides || paramValues.value[asset.id] || {}
         const r = await fetch('/api/sbsar/bake', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ assetId: asset.id, res: Math.min(2048, state.resolution || 1024) })
+          body: JSON.stringify({
+            assetId: asset.id,
+            res: Math.min(2048, state.resolution || 1024),
+            params
+          })
         })
         const j = await r.json()
         if (!j.ok) throw new Error(j.error?.message || 'bake failed')
@@ -121,12 +150,47 @@ export default defineComponent({
           entries.push({ name: a.name, dataUrl: await blobToDataUrl(blob), channel: a.channel || undefined })
         }
         const wired = await applyMapEntries(entries)
-        status.value = t('assets.bakeDone', { n: wired.channels.length, channels: wired.channels.join(', ') })
+        const applied = Array.isArray(j.applied) ? j.applied.length : 0
+        status.value =
+          t('assets.bakeDone', { n: wired.channels.length, channels: wired.channels.join(', ') }) +
+          (applied ? ' · ' + t('assets.bakeParamsApplied', { n: applied }) : '')
       } catch (e) {
         status.value = '✕ ' + (e.message || String(e))
       } finally {
         baking.value = false
       }
+    }
+
+    // ---- .sbsar parameter workbench -------------------------------------------------------------
+    // The archive interface is fully readable without Adobe's engine, so parameter edits are stored
+    // per asset and forwarded to the native baker. There is deliberately no fake browser preview:
+    // real pixels require the engine (see docs/reports/sbsar-engine-re/REPORT.md).
+    const paramTarget = ref(null)
+    const paramValues = ref(loadParamValues())
+    /** count of overridden (non-default) inputs per archive id */
+    function changedParamCount(asset) {
+      const overrides = paramValues.value[asset.id] || {}
+      const params = asset.inspection?.parameters || []
+      return params.filter((p) => overrides[p.id] !== undefined && String(overrides[p.id]) !== String(p.default)).length
+    }
+    function openParams(asset) {
+      paramTarget.value = asset
+    }
+    function applyParamDraft(draft) {
+      if (!paramTarget.value) return
+      const id = paramTarget.value.id
+      const next = { ...(paramValues.value || {}) }
+      // the panel always holds the complete draft (it starts from the stored overrides), so replacing
+      // is correct: resetting an input removes its override instead of leaving a stale one behind
+      next[id] = { ...(draft || {}) }
+      paramValues.value = next
+      saveParamValues(next)
+    }
+    function onParamsBake(draft) {
+      applyParamDraft(draft)
+      const asset = paramTarget.value
+      paramTarget.value = null
+      if (asset) bakeInApp(asset, { ...(paramValues.value[asset.id] || {}) })
     }
 
     /**
@@ -591,6 +655,12 @@ export default defineComponent({
       baking,
       bake,
       bakeInApp,
+      paramTarget,
+      paramValues,
+      changedParamCount,
+      openParams,
+      applyParamDraft,
+      onParamsBake,
       openPbrPicker,
       onPbrSet,
       openJson,
@@ -661,6 +731,7 @@ export default defineComponent({
                       <span class="sbsar-badge">{{ (a.inspection?.graphs || []).length }} {{ $t('assets.sbsarGraphs') }}</span>
                       <span class="sbsar-badge">{{ a.inspection?.parameterCount || 0 }} {{ $t('assets.sbsarParams') }}</span>
                       <span class="sbsar-badge">{{ a.inspection?.imageCount || 0 }} {{ $t('assets.sbsarImages') }}</span>
+                      <span v-if="changedParamCount(a)" class="sbsar-badge accent">{{ $t('assets.sbsarParamsEdited', { n: changedParamCount(a) }) }}</span>
                       <span class="sbsar-badge warn">{{ $t('assets.sbsarNoBake') }}</span>
                     </div>
                   </div>
@@ -761,6 +832,7 @@ export default defineComponent({
                   <div v-if="assetUsage(a).length" class="asset-usage">🔒 {{ $t('assets.usedBy', { list: usageLabel(assetUsage(a)) }) }}</div>
                   <div class="asset-actions">
                     <button class="btn tiny accent" :disabled="reconstructing" @click="reconstruct(a)" :title="$t('assets.reconstructTitle')">{{ reconstructing ? $t('assets.reconstructing') : $t('assets.reconstruct') }}</button>
+                    <button class="btn tiny" @click="openParams(a)" :title="$t('assets.sbsarParamsEditTitle')">{{ $t('assets.sbsarParamsEdit') }}</button>
                     <button class="btn tiny" :disabled="baking || bake.loading || !bake.available" @click="bakeInApp(a)" :title="bake.available ? $t('assets.bakeTitle', { path: bake.sbsrender }) : bake.reason">
                       {{ baking ? $t('assets.baking') : $t('assets.bake') }}
                     </button>
@@ -800,6 +872,16 @@ export default defineComponent({
       </div>
 
       <JsonViewer v-if="jsonTarget" :url="jsonTarget.inspectionUrl" :title="jsonTarget.name" @close="jsonTarget = null" />
+
+      <SbsarParams
+        v-if="paramTarget"
+        :asset="paramTarget"
+        :values="paramValues[paramTarget.id] || {}"
+        :bake="bake"
+        @close="paramTarget = null"
+        @apply="applyParamDraft"
+        @bake="onParamsBake"
+      />
 
       <div v-if="lightbox" class="modal-backdrop lightbox-backdrop" @click.self="closeLightbox">
         <div class="lightbox">

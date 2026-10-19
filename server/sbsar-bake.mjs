@@ -29,6 +29,33 @@ const SAT_HINTS = [
   '/opt/Substance Automation Toolkit/sbsrender'
 ]
 
+// Substance 3D Player (free viewer). It embeds the same cooked-graph engine as sbsrender but exposes
+// no batch/C LI entry point: it drives the engine through an internal "Cooking → Linker" pipeline that
+// is statically linked into the Qt executable, so the engine assembly it feeds the engine DLL cannot be
+// produced from the outside. Detection is therefore informational (the user can open/preview/export
+// manually), *not* a bake provider. See docs/reports/sbsar-engine-re/REPORT.md for the evidence.
+const PLAYER_HINTS = [
+  'D:/Substance Player/Substance Player.exe',
+  'C:/Program Files/Adobe/Substance 3D Player/Substance Player.exe',
+  'C:/Program Files/Adobe/Substance Player/Substance Player.exe',
+  'C:/Program Files/Allegorithmic/Substance Player/Substance Player.exe',
+  '/Applications/Substance 3D Player.app/Contents/MacOS/Substance 3D Player'
+]
+
+/** locate a locally installed Substance 3D Player (information only, not a bake backend) */
+export function findPlayer() {
+  for (const key of ['SBSAR_PLAYER', 'SUBSTANCE_PLAYER', 'SUBSTANCE_PLAYER_DIR']) {
+    const value = process.env[key]
+    if (!value) continue
+    const candidates = /\.exe$|Player$/i.test(value)
+      ? [value]
+      : [path.join(value, 'Substance Player.exe'), path.join(value, 'Substance Player')]
+    for (const candidate of candidates) if (existsSync(candidate)) return { path: candidate, source: 'env:' + key }
+  }
+  for (const c of PLAYER_HINTS) if (existsSync(c)) return { path: c, source: 'known-path' }
+  return null
+}
+
 /** locate sbsrender: explicit env/config → known install dirs → PATH */
 export function findSbsrender() {
   const explicit = process.env.SBSRENDER
@@ -57,15 +84,23 @@ export function findSbsrender() {
 /** what the UI needs to know before offering a bake button */
 export function bakeStatus() {
   const found = findSbsrender()
+  const player = findPlayer()
   return {
     available: !!found,
     sbsrender: found ? found.path : null,
     source: found ? found.source : null,
+    // exact rendering needs Adobe's native, per-user-licensed engine; the browser cannot do it
+    paramBake: !!found,
+    player: player ? { path: player.path, source: player.source, batch: false } : null,
     platform: process.platform,
     installUrl: SAT_DOWNLOAD,
     reason: found
-      ? null
-      : 'Adobe Substance Automation Toolkit (sbsrender) was not found. The Substance engine is native, closed-source and licensed per user, so it cannot be shipped as WebAssembly; install SAT (or the Blender integration tools) and the studio will drive it locally.'
+      ? player
+        ? null
+        : 'The Substance 3D Player was found. It can render with the same native engine, but it has no batch/C LI entry point (its cook→link step is statically linked into the Qt executable), so it cannot be driven from here — bakes use sbsrender.'
+      : player
+        ? 'Only the Substance 3D Player was found. It uses Adobe\'s native engine but exposes no batch entry point (its cook→link step is internal), so parameter-aware bakes need the Substance Automation Toolkit (sbsrender).'
+        : 'Adobe Substance Automation Toolkit (sbsrender) was not found. The Substance engine is native, closed-source and licensed per user, so it cannot be shipped as WebAssembly; install SAT (or the Blender integration tools) and the studio will drive it locally.'
   }
 }
 
@@ -85,15 +120,102 @@ export const detectChannel = (name) => {
   return hit ? hit[0] : null
 }
 
+const VECTOR_KINDS = new Set(['vector2', 'vector3', 'vector4', 'color'])
+
+/** round a number for the command line without scientific notation */
+function fmtNumber(n) {
+  if (!Number.isFinite(n)) return null
+  const r = Math.round(n * 1e6) / 1e6
+  return String(r)
+}
+
+/**
+ * Turn one UI value into the string sbsrender expects in `--set-value <id>@<value>`.
+ * Enum parameters take their index, booleans take 0/1, vectors a comma separated list.
+ * Returns null when the value cannot be represented (caller skips it instead of writing garbage).
+ */
+export function normalizeParamValue(param, raw) {
+  if (raw === null || raw === undefined || raw === '') return null
+  const kind = String(param.kind || param.type || '').toLowerCase()
+  if (kind === 'bool' || kind === 'boolean') {
+    if (typeof raw === 'boolean') return raw ? '1' : '0'
+    const s = String(raw).trim().toLowerCase()
+    if (s === 'true' || s === '1' || s === 'on') return '1'
+    if (s === 'false' || s === '0' || s === 'off') return '0'
+    return null
+  }
+  if (kind === 'enum') {
+    const items = param.enumItems || []
+    if (typeof raw === 'number' || /^\d+$/.test(String(raw).trim())) {
+      const idx = Number(raw)
+      return Number.isInteger(idx) && idx >= 0 ? String(idx) : null
+    }
+    const label = String(raw).trim().toLowerCase()
+    const idx = items.findIndex((i) => String(i).toLowerCase() === label)
+    return idx >= 0 ? String(idx) : null
+  }
+  if (VECTOR_KINDS.has(kind) || Array.isArray(raw) || String(raw).includes(',')) {
+    const parts = (Array.isArray(raw) ? raw : String(raw).split(','))
+      .map((v) => Number(v))
+      .map((v) => (param.min != null ? Math.max(Number(param.min), v) : v))
+      .map((v) => (param.max != null ? Math.min(Number(param.max), v) : v))
+    if (!parts.length || parts.some((v) => !Number.isFinite(v))) return null
+    return parts.map(fmtNumber).join(',')
+  }
+  let n = Number(raw)
+  if (!Number.isFinite(n)) return null
+  if (param.min != null) n = Math.max(Number(param.min), n)
+  if (param.max != null) n = Math.min(Number(param.max), n)
+  return fmtNumber(n)
+}
+
+/**
+ * Build the `--set-value` argument list for a baked graph from UI parameter values.
+ * `$outputsize` is deliberately excluded: it is driven by the requested resolution.
+ *
+ * @param {Record<string,any>|Array<{id:string,value:any}>} values
+ * @param {Array<object>} parameters  the inspection's `parameters` array (id/kind/min/max/enumItems)
+ * @returns {{args:string[], applied:{id:string,value:string}[], skipped:string[]}}
+ */
+export function buildSetValueArgs(values, parameters = []) {
+  const byId = new Map((parameters || []).map((p) => [String(p.id), p]))
+  const entries = Array.isArray(values)
+    ? values.map((v) => [String(v && v.id), v ? v.value : undefined])
+    : Object.entries(values || {})
+  const args = []
+  const applied = []
+  const skipped = []
+  for (const [id, raw] of entries) {
+    if (!id || id === '$outputsize') continue
+    const param = byId.get(id)
+    if (!param) {
+      skipped.push(id)
+      continue
+    }
+    const value = normalizeParamValue(param, raw)
+    if (value === null) {
+      skipped.push(id)
+      continue
+    }
+    const def = normalizeParamValue(param, param.default)
+    if (def !== null && def === value) continue // already the cooked default: nothing to override
+    args.push('--set-value', `${id}@${value}`)
+    applied.push({ id, value })
+  }
+  return { args, applied, skipped }
+}
+
 /**
  * Bake every output of a .sbsar into PNG files inside a scratch directory.
  * @param {object} opts
  * @param {string} opts.file      absolute path of the .sbsar on disk
  * @param {number} [opts.res]     resolution for $outputsize (default 2048)
  * @param {string} [opts.graph]   optional graph url to render only one graph
- * @returns {Promise<{files:{name:string,path:string,bytes:number,channel:string|null}[], log:string, dir:string}>}
+ * @param {Record<string,any>} [opts.params]  parameter overrides (id → value) applied with --set-value
+ * @param {Array<object>} [opts.parameters]   the inspection parameter list used to validate overrides
+ * @returns {Promise<{files:{name:string,path:string,bytes:number,channel:string|null}[], log:string, dir:string, applied:{id:string,value:string}[], skipped:string[]}>}
  */
-export function bakeSbsar({ file, res = 2048, graph = null }) {
+export function bakeSbsar({ file, res = 2048, graph = null, params = null, parameters = [] }) {
   const found = findSbsrender()
   if (!found) {
     const err = new Error(bakeStatus().reason)
@@ -122,6 +244,10 @@ export function bakeSbsar({ file, res = 2048, graph = null }) {
   ]
   if (graph) args.push('--input-graph', graph)
   args.push('--set-value', `$outputsize@${res},${res}`)
+
+  // parameter overrides (the "edit" half of the workbench): validated against the archive interface
+  const overrides = buildSetValueArgs(params || {}, parameters)
+  args.push(...overrides.args)
 
   return new Promise((resolve, reject) => {
     execFile(found.path, args, { timeout: TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
@@ -159,7 +285,7 @@ export function bakeSbsar({ file, res = 2048, graph = null }) {
         err.log = log
         return reject(err)
       }
-      resolve({ files, log, dir })
+      resolve({ files, log, dir, applied: overrides.applied, skipped: overrides.skipped })
     })
   })
 }

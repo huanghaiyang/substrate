@@ -3,6 +3,7 @@
 import zlib from 'node:zlib'
 import { existsSync, readFileSync } from 'node:fs'
 import { inspectSbsar } from '../server/sbsar.mjs'
+import { buildSetValueArgs, normalizeParamValue, bakeStatus, findPlayer } from '../server/sbsar-bake.mjs'
 
 let pass = 0
 let fail = 0
@@ -246,6 +247,37 @@ section('6. real 7z layout (assemblies/content/<n>/... + metadata.json)')
   }
 }
 
+
+// ------------------------------------------------------------------ parameter overrides (--set-value)
+// The workbench edits a .sbsar's inputs and forwards them to the local native baker. These tests pin
+// down the translation so a bad value can never reach the engine as a malformed argument.
+section('Parameter overrides → sbsrender --set-value')
+{
+  const parameters = [
+    { id: 'roughness', kind: 'float', default: '0.5', min: 0, max: 1, step: 0.01 },
+    { id: 'metal', kind: 'float', default: '0', min: 0, max: 1, step: 0.01 },
+    { id: 'enable', kind: 'bool', default: '0' },
+    { id: 'normal_format', kind: 'enum', default: '0', enumItems: ['DirectX', 'OpenGL'] },
+    { id: 'tint', kind: 'color', default: '0.5,0.5,0.5' },
+    { id: '$outputsize', kind: 'vector2', default: '8,8' }
+  ]
+  const r1 = buildSetValueArgs({ roughness: 0.25 }, parameters)
+  ok('float override becomes one --set-value pair', JSON.stringify(r1.args) === JSON.stringify(['--set-value', 'roughness@0.25']), JSON.stringify(r1.args))
+  ok('value equal to the archive default is not forwarded', buildSetValueArgs({ roughness: 0.5 }, parameters).args.length === 0)
+  ok('values are clamped to the declared range', JSON.stringify(buildSetValueArgs({ roughness: 1.8 }, parameters).args) === JSON.stringify(['--set-value', 'roughness@1']))
+  ok('boolean true becomes 1', JSON.stringify(buildSetValueArgs({ enable: true }, parameters).args) === JSON.stringify(['--set-value', 'enable@1']))
+  ok('enum accepts the label and sends its index', JSON.stringify(buildSetValueArgs({ normal_format: 'OpenGL' }, parameters).args) === JSON.stringify(['--set-value', 'normal_format@1']))
+  ok('colour/vector joins components with commas', JSON.stringify(buildSetValueArgs({ tint: [0.1, 0.2, 0.3] }, parameters).args) === JSON.stringify(['--set-value', 'tint@0.1,0.2,0.3']))
+  ok('$outputsize is driven by --resolution, not forwarded', buildSetValueArgs({ $outputsize: [1024, 1024] }, parameters).args.length === 0)
+  ok('unknown ids are skipped instead of reaching the engine', JSON.stringify(buildSetValueArgs({ nope: 1 }, parameters).skipped) === JSON.stringify(['nope']))
+  ok('array form {id,value} is accepted', JSON.stringify(buildSetValueArgs([{ id: 'roughness', value: 0.75 }], parameters).args) === JSON.stringify(['--set-value', 'roughness@0.75']))
+  ok('garbage values are rejected', normalizeParamValue(parameters[0], 'not-a-number') === null)
+  const status = bakeStatus()
+  ok('bake status reports the parameter capability flag', typeof status.paramBake === 'boolean', JSON.stringify(status.paramBake))
+  ok('bake status never claims a backend without sbsrender', status.available === false || !!status.sbsrender, JSON.stringify({ available: status.available, sbsrender: status.sbsrender }))
+  const player = findPlayer()
+  ok('player detection returns null or an existing executable path', player === null || existsSync(player.path), JSON.stringify(player))
+}
 
 console.log(`\n${fail ? '✕ FAILED' : '✓ PASSED'} — ${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

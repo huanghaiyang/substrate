@@ -16,5 +16,7 @@ llm.config.local.json
 secrets/
 docs/reports/polyhaven/
 docs/reports/sbsar-import/
+docs/reports/sbsar-engine-re/
 .dsh-plugins/
 /trash/
+.tmp/
