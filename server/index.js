@@ -668,7 +668,9 @@ function pruneExports(max = 40) {
 const VENDOR_FILES = {
   'vue.esm-browser.prod.js': 'node_modules/vue/dist/vue.esm-browser.prod.js',
   'vue.esm-browser.js': 'node_modules/vue/dist/vue.esm-browser.js',
-  'three.module.js': 'node_modules/three/build/three.module.js'
+  'three.module.js': 'node_modules/three/build/three.module.js',
+  // third-party JSON pretty-printer vendored as UMD (MIT, json-formatter-js 2.3.4)
+  'json-formatter.umd.js': 'vendor/json-formatter.umd.js'
 }
 
 function serveFile(res, file, download = false) {

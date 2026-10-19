@@ -257,6 +257,7 @@ function collectFromXml(buf) {
   const graphs = []
   const parameters = []
   const outputs = []
+  const channels = []
   const metadata = {}
   let rootName = ''
 
@@ -316,6 +317,11 @@ function collectFromXml(buf) {
       })
       return
     }
+    if (ln === 'channel' || ln === 'channels') {
+      const name = firstAttr(a, ['names', 'name', 'identifier'])
+      if (name) channels.push({ name, colorspace: firstAttr(a, ['colorspace', 'space']) || null })
+      return
+    }
     if (['output', 'usage', 'outputusage'].includes(ln)) {
       const usage = firstAttr(a, ['usage', 'identifier', 'name'])
       if (!usage) return
@@ -328,7 +334,7 @@ function collectFromXml(buf) {
     }
   })
 
-  return { rootName, graphs, parameters, outputs, metadata }
+  return { rootName, graphs, parameters, outputs, channels, metadata }
 }
 
 // ---------------------------------------------------------------------------- public entry
@@ -438,7 +444,7 @@ export function inspectSbsar(buf, { includeImageBytes = false, maxImages = MAX_I
     for (const [k, v] of Object.entries(metadataFromJson)) if (!(k in parsed.metadata)) parsed.metadata[k] = v
   }
   if (!parsed) {
-    parsed = { rootName: '', graphs: [], parameters: [], outputs: [], metadata: {} }
+    parsed = { rootName: '', graphs: [], parameters: [], outputs: [], channels: [], metadata: {} }
     for (const [k, v] of Object.entries(metadataFromJson)) parsed.metadata[k] = v
     if (container === 'zip' || container === '7z') warnings.push('Archive has no readable graph XML; only bitmaps were imported.')
   }
@@ -482,6 +488,7 @@ export function inspectSbsar(buf, { includeImageBytes = false, maxImages = MAX_I
     graphs: parsed.graphs,
     parameters: parsed.parameters,
     outputs,
+    channels: parsed.channels || [],
     images: imagesOut,
     assemblies,
     entryCount: entries.length,

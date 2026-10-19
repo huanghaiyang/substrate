@@ -199,8 +199,19 @@ export function importSbsarAsset({ name, data }) {
     containerConfidence: inspection.containerConfidence,
     graphs: inspection.graphs,
     parameterCount: inspection.parameters.length,
+    // group histogram over ALL parameters (the list below is truncated for the index)
+    parameterGroups: (() => {
+      const m = new Map()
+      for (const p of inspection.parameters) {
+        const g = p.group || '·'
+        m.set(g, (m.get(g) || 0) + 1)
+      }
+      return [...m.entries()].map(([name, count]) => ({ name, count }))
+    })(),
     parameters: inspection.parameters.slice(0, 40),
     outputs: inspection.outputs,
+    channels: inspection.channels || [],
+    entries: (inspection.entries || []).slice(0, 60),
     metadata: inspection.metadata,
     imageCount: inspection.images.length,
     images: inspection.images.map(({ data, ...rest }) => rest),

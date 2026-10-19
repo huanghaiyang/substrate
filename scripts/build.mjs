@@ -30,5 +30,6 @@ copy('node_modules/vue/dist/vue.esm-browser.prod.js', 'vendor/vue.esm-browser.pr
 copy('node_modules/three/build/three.module.js', 'vendor/three.module.js')
 copy('node_modules/three/examples/jsm/controls/OrbitControls.js', 'vendor/addons/controls/OrbitControls.js')
 copy('node_modules/three/examples/jsm/environments/RoomEnvironment.js', 'vendor/addons/environments/RoomEnvironment.js')
+copy('vendor/json-formatter.umd.js', 'vendor/json-formatter.umd.js')
 
 console.log('[build] wrote dist/ — run: node server/index.js --dist')

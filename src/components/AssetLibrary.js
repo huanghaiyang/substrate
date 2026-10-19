@@ -2,9 +2,11 @@ import { defineComponent, ref, onMounted } from 'vue'
 import { state, nodeById, addNode, setNodeImage, commitStroke } from '../engine/store.js'
 import { loadPattern } from '../engine/paint.js'
 import { t } from '../i18n/index.js'
+import JsonViewer from './JsonViewer.js'
 
 export default defineComponent({
   name: 'AssetLibrary',
+  components: { JsonViewer },
   emits: ['close'],
   setup(_props, { emit }) {
     const assets = ref([])
@@ -19,6 +21,39 @@ export default defineComponent({
     const searchWarning = ref('')
     const sbsarInput = ref(null)
     const expanded = ref('')
+    const jsonTarget = ref(null)   // sbsar asset whose inspection report is open in the JSON viewer
+    const lightbox = ref(null)     // { url, name, width, height, bytes } previewed image
+    const openJson = (asset) => (jsonTarget.value = asset)
+    const openLightbox = (img) => (lightbox.value = img)
+    const closeLightbox = () => (lightbox.value = null)
+    /** 资源类型标签：按扩展名给出可读种类（图片/描述符/程序集/其他） */
+    const entryKind = (name) => {
+      const n = String(name || '').toLowerCase()
+      if (/\.(png|jpe?g|webp)$/.test(n)) return 'image'
+      if (n.endsWith('.xml')) return 'descriptor'
+      if (n.endsWith('.sbsasm')) return 'assembly'
+      if (n.endsWith('.json')) return 'json'
+      return 'other'
+    }
+    const fmtBytes = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB')
+    /** 接口图布局：参数分组 → 图 → 输出通道（节点拓扑在 .sbsasm 里，不可还原） */
+    const interfaceLayout = (a) => {
+      const ins = a.inspection || {}
+      let groupList
+      if (ins.parameterGroups && ins.parameterGroups.length) {
+        // server-side histogram over all parameters (the inline list is truncated)
+        groupList = ins.parameterGroups.slice(0, 14).map((g) => ({ name: g.name, count: g.count }))
+      } else {
+        const groups = new Map()
+        for (const p of ins.parameters || []) {
+          const g = p.group || '·'
+          groups.set(g, (groups.get(g) || 0) + 1)
+        }
+        groupList = [...groups.entries()].slice(0, 14).map(([name, count]) => ({ name, count }))
+      }
+      const outs = (ins.outputs || []).map((o) => o.usage)
+      return { groupList, outs }
+    }
 
     async function searchOnline() {
       const q = String(searchQuery.value || '').trim()
@@ -80,6 +115,9 @@ export default defineComponent({
         status.value = String(e.message || e)
       } finally {
         loading.value = false
+        // auto-open a single archive so its interface map / contents are visible right away
+        const archives = assets.value.filter((a) => a.kind === 'sbsar')
+        if (!expanded.value && archives.length === 1) expanded.value = archives[0].id
       }
     }
     function openPicker() {
@@ -281,6 +319,14 @@ export default defineComponent({
       onFile,
       onSbsarFile,
       expanded,
+      jsonTarget,
+      lightbox,
+      openJson,
+      openLightbox,
+      closeLightbox,
+      entryKind,
+      fmtBytes,
+      interfaceLayout,
       toggleExpand,
       childAssets,
       fmtParam,
@@ -360,6 +406,38 @@ export default defineComponent({
                     <div class="sbsar-label">{{ $t('assets.sbsarOutputs') }}</div>
                     <div class="sbsar-chips"><span v-for="o in a.inspection.outputs" :key="o.usage" class="sbsar-chip">{{ o.usage }}</span></div>
                   </div>
+                  <div class="sbsar-block">
+                    <div class="sbsar-label">
+                      {{ $t('assets.sbsarInterface') }}
+                      <span class="hint small">{{ $t('assets.sbsarInterfaceNote') }}</span>
+                    </div>
+                    <svg class="sbsar-igraph" :viewBox="'0 0 460 ' + (interfaceLayout(a).groupList.length * 26 + 40)" preserveAspectRatio="xMidYMin meet">
+                      <g v-for="(g, i) in interfaceLayout(a).groupList" :key="g.name">
+                        <rect x="4" :y="8 + i * 26" width="150" height="20" rx="5" class="ig-node" />
+                        <text x="12" :y="22 + i * 26" class="ig-text">{{ g.name.length > 20 ? g.name.slice(0, 20) + '…' : g.name }}</text>
+                        <text x="146" :y="22 + i * 26" class="ig-count" text-anchor="end">{{ g.count }}</text>
+                        <line x1="154" :y1="18 + i * 26" x2="300" :y2="(interfaceLayout(a).groupList.length * 26 + 18) / 2" class="ig-edge" />
+                      </g>
+                      <rect x="300" :y="(interfaceLayout(a).groupList.length * 26 + 40) / 2 - 20" width="150" height="40" rx="7" class="ig-graph" />
+                      <text x="375" :y="(interfaceLayout(a).groupList.length * 26 + 40) / 2 + 4" class="ig-graph-text" text-anchor="middle">
+                        {{ (a.inspection?.graphs?.[0]?.label || 'graph').slice(0, 22) }}
+                      </text>
+                      <g v-for="(o, i) in interfaceLayout(a).outs" :key="o">
+                        <line x1="450" :y1="(interfaceLayout(a).groupList.length * 26 + 40) / 2" x2="452" :y2="(interfaceLayout(a).groupList.length * 26 + 40) / 2" class="ig-edge" />
+                      </g>
+                    </svg>
+                    <div class="sbsar-chips sbsar-igraph-outs">
+                      <span v-for="o in interfaceLayout(a).outs" :key="o" class="sbsar-chip">→ {{ o }}</span>
+                    </div>
+                  </div>
+                  <div v-if="(a.inspection?.entries || []).length" class="sbsar-block">
+                    <div class="sbsar-label">{{ $t('assets.sbsarContents') }}</div>
+                    <div v-for="e in a.inspection.entries" :key="e.name" class="sbsar-row sbsar-entry">
+                      <span class="sbsar-entry-kind" :class="'k-' + entryKind(e.name)">{{ $t('assets.sbsarKind.' + entryKind(e.name)) }}</span>
+                      <span class="sbsar-entry-name" :title="e.name">{{ e.name.split('/').pop() }}</span>
+                      <b>{{ e.size != null ? fmtBytes(e.size) : '—' }}</b>
+                    </div>
+                  </div>
                   <div v-if="(a.inspection?.parameters || []).length" class="sbsar-block">
                     <div class="sbsar-label">
                       {{ $t('assets.sbsarParamsTitle') }}
@@ -383,14 +461,19 @@ export default defineComponent({
                     <div class="sbsar-label">{{ $t('assets.sbsarExtracted') }}</div>
                     <div class="sbsar-thumbs">
                       <div v-for="c in childAssets(a)" :key="c.id" class="sbsar-thumb">
-                        <img :src="c.url" :alt="c.name" loading="lazy" />
-                        <div class="dim small">{{ c.width }}×{{ c.height }} · {{ Math.round(c.bytes / 1024) }} KB</div>
-                        <button class="btn tiny" @click="useAsTexture(c)">{{ $t('assets.useTexture') }}</button>
+                        <img :src="c.url" :alt="c.name" loading="lazy" class="sbsar-zoomable" @click="openLightbox({ url: c.url, name: c.name, width: c.width, height: c.height, bytes: c.bytes })" />
+                        <div class="dim small">{{ c.width }}×{{ c.height }} · {{ fmtBytes(c.bytes) }}</div>
+                        <div class="asset-actions">
+                          <button class="btn tiny" @click="useAsTexture(c)">{{ $t('assets.useTexture') }}</button>
+                          <button class="btn tiny" @click="useInPaint(c)">{{ $t('assets.usePaint') }}</button>
+                          <button class="btn tiny" @click="openLightbox({ url: c.url, name: c.name, width: c.width, height: c.height, bytes: c.bytes })">⤢</button>
+                        </div>
                       </div>
                     </div>
                   </div>
                   <div class="asset-actions">
-                    <a class="btn tiny" :href="a.inspectionUrl" target="_blank" rel="noopener">{{ $t('assets.sbsarJson') }}</a>
+                    <button class="btn tiny" @click="openJson(a)">{{ $t('assets.sbsarJson') }}</button>
+                    <a class="btn tiny" :href="a.inspectionUrl" target="_blank" rel="noopener">{{ $t('assets.sbsarJsonRaw') }}</a>
                     <button class="btn tiny danger" @click="removeAsset(a)">✕</button>
                   </div>
                 </div>
@@ -417,6 +500,27 @@ export default defineComponent({
         <div class="modal-foot">
           <span class="hint">{{ $t('assets.foot') }}</span>
           <button class="btn" @click="close">{{ $t('common.close') }}</button>
+        </div>
+      </div>
+
+      <JsonViewer v-if="jsonTarget" :url="jsonTarget.inspectionUrl" :title="jsonTarget.name" @close="jsonTarget = null" />
+
+      <div v-if="lightbox" class="modal-backdrop lightbox-backdrop" @click.self="closeLightbox">
+        <div class="lightbox">
+          <div class="lightbox-head">
+            <div class="modal-title">{{ lightbox.name }}</div>
+            <div class="spacer"></div>
+            <span class="hint small">{{ lightbox.width }}×{{ lightbox.height }} · {{ fmtBytes(lightbox.bytes || 0) }}</span>
+            <button class="icon-btn" @click="closeLightbox">✕</button>
+          </div>
+          <img :src="lightbox.url" :alt="lightbox.name" class="lightbox-img" />
+          <div class="modal-foot">
+            <span class="hint">{{ $t('assets.sbsarLightboxFoot') }}</span>
+            <div style="display: flex; gap: 8px">
+              <a class="btn" :href="lightbox.url" target="_blank" rel="noopener">{{ $t('assets.sbsarOpenOriginal') }}</a>
+              <button class="btn" @click="closeLightbox">{{ $t('common.close') }}</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
