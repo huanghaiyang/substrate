@@ -22,7 +22,8 @@
     "fixtures:sbsar": "node scripts/make-sbsar-fixture.mjs",
     "bake:sbsar": "node scripts/bake-sbsar.mjs",
     "test:reconstruct": "node scripts/test-reconstruct.mjs",
-    "test:bake": "node scripts/test-bake.mjs"
+    "test:bake": "node scripts/test-bake.mjs",
+    "test:trash": "node scripts/test-trash.mjs"
   },
   "dependencies": {
     "three": "^0.169.0",

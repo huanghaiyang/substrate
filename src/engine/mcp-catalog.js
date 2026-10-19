@@ -489,8 +489,8 @@ export const TOOLS = [
   },
   {
     name: 'substrate_delete_project',
-    title: 'Delete Project',
-    description: 'Delete a saved project by name.',
+    title: 'Move Project to Recycle Bin',
+    description: 'Move a saved project to the recycle bin (restorable from the Trash dialog or POST /api/trash/restore).',
     inputSchema: {
       type: 'object',
       properties: { name: { type: 'string' } },

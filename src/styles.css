@@ -1868,3 +1868,174 @@ code {
   font-size: 12px;
 }
 
+
+/* ---- recycle bin ---- */
+.trash-modal {
+  width: 760px;
+  max-width: 92vw;
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+}
+.trash-modal .modal-body {
+  flex: 1 1 auto;
+  overflow: auto;
+}
+.trash-note {
+  margin-bottom: 12px;
+  line-height: 1.6;
+}
+.trash-section {
+  margin-bottom: 18px;
+}
+.trash-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 6px;
+  margin-bottom: 8px;
+}
+.trash-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+}
+.trash-row:hover {
+  background: rgba(255, 255, 255, 0.025);
+  border-color: var(--line);
+}
+.trash-thumb {
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  background: #0f1216;
+}
+.trash-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.trash-badge {
+  font-size: 8.5px;
+  letter-spacing: 0.4px;
+  color: var(--accent);
+}
+.trash-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text);
+}
+.trash-meta {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  color: var(--text-faint);
+  font-family: var(--mono);
+}
+.trash-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+}
+/* project list rows: open area + delete button */
+.project-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--bg2);
+  overflow: hidden;
+}
+.project-row + .project-row {
+  margin-top: 6px;
+}
+.pr-open {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  background: none;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+.pr-open:hover {
+  background: rgba(242, 165, 65, 0.07);
+}
+.pr-delete {
+  flex: 0 0 42px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  background: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 13px;
+}
+.pr-delete:hover {
+  background: rgba(224, 92, 92, 0.14);
+  color: var(--red);
+}
+
+/* delete-selection button + usage badges + active material badge */
+.icon-btn.danger-icon:not(:disabled):hover {
+  color: var(--red);
+  border-color: rgba(224, 92, 92, 0.45);
+}
+.icon-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.asset-usage {
+  font-size: 10px;
+  color: var(--accent);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pr-active {
+  flex: 0 0 auto;
+  align-self: center;
+  margin: 0 8px;
+  font-size: 9px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--accent);
+  border: 1px solid rgba(242, 165, 65, 0.4);
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+.pr-delete:disabled {
+  color: var(--text-faint);
+  cursor: not-allowed;
+  background: none;
+}
+
+
+.trash-bound {
+  color: var(--accent);
+}
+

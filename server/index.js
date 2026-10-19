@@ -15,7 +15,9 @@ import {
   validateArguments,
   toolTimeout
 } from '../src/engine/mcp-catalog.js'
-import { initAssets, listAssets, importAsset, importSbsarAsset, readSbsarInspection, deleteAsset, assetFilePath, assetsCount, searchAssets, importAssetFromUrl, ASSETS_DIR } from './assets.mjs'
+import { initAssets, listAssets, importAsset, importSbsarAsset, readSbsarInspection, deleteAsset, trashAsset, restoreAsset, listTrashedAssets, assetIndexEntries, assetFilePath, assetsCount, searchAssets, importAssetFromUrl, ASSETS_DIR } from './assets.mjs'
+import { trashProject, listTrashedProjects, restoreProject, purgeProject, emptyProjectsTrash, trashProjectBytes, TRASH_DIR } from './trash.mjs'
+import { scanAssetUsage, usageForAsset, assetsInGraph } from './usage.mjs'
 import { bakeStatus, bakeSbsar, readBakedFile, cleanupBake } from './sbsar-bake.mjs'
 import {
   loadConfig as loadLlmConfig,
@@ -521,6 +523,14 @@ function zipStore(entries) {
 }
 
 // ------------------------------------------------------------------- projects
+// the material currently open in the editor: it cannot be deleted until another one is opened
+let activeProject = ''
+
+function setActiveProject(name) {
+  activeProject = String(name || '')
+  return activeProject
+}
+
 function projectList() {
   const out = []
   for (const file of readdirSync(PROJECTS_DIR)) {
@@ -529,13 +539,15 @@ function projectList() {
       const full = path.join(PROJECTS_DIR, file)
       const data = JSON.parse(readFileSync(full, 'utf8'))
       const st = statSync(full)
+      const displayName = data.name || file.replace(/\.json$/, '')
       out.push({
-        name: data.name || file.replace(/\.json$/, ''),
+        name: displayName,
         file,
         savedAt: data.savedAt || st.mtimeMs,
         resolution: data.resolution || 1024,
         nodes: data.graph?.nodes?.length || 0,
-        bytes: st.size
+        bytes: st.size,
+        active: !!activeProject && displayName === activeProject
       })
     } catch (e) {
       /* ignore broken project */
@@ -574,7 +586,14 @@ function handleProjectLoad(res, name) {
     }
   }
   if (!full || !existsSync(full)) return sendJSON(res, 404, { ok: false, error: 'Project not found' })
-  send(res, 200, readFileSync(full), { 'Content-Type': 'application/json; charset=utf-8' })
+  const body = readFileSync(full)
+  try {
+    // opening a material makes it the active one → it is now protected from deletion
+    setActiveProject(JSON.parse(body.toString('utf8')).name || file.replace(/\.json$/, ''))
+  } catch (e) {
+    /* ignore parse problems; the client will still mark it active */
+  }
+  send(res, 200, body, { 'Content-Type': 'application/json; charset=utf-8' })
 }
 
 // -------------------------------------------------------------------- exports
@@ -769,7 +788,20 @@ function handleLlmTest(req, res) {
 }
 
 function handleAssetsList(req, res) {
-  return sendJSON(res, 200, { ok: true, assets: listAssets(), dir: 'assets/' })
+  // annotate every asset with the saved projects that reference it (the UI locks those against deletion)
+  let usage = new Map()
+  try {
+    usage = scanAssetUsage(PROJECTS_DIR).usage
+  } catch (e) {
+    usage = new Map()
+  }
+  const index = assetIndexEntries()
+  const assets = listAssets().map((a) => {
+    const entry = index.find((e) => e.id === a.id)
+    const usedBy = usageForAsset(usage, entry, index)
+    return { ...a, usage: usedBy }
+  })
+  return sendJSON(res, 200, { ok: true, assets, dir: 'assets/' })
 }
 
 function handleAssetImport(req, res) {
@@ -801,6 +833,72 @@ function handleAssetSbsarInspect(req, res, url) {
     return sendJSON(res, 200, { ok: true, inspection: readSbsarInspection(String(id)) })
   } catch (e) {
     return sendJSON(res, 400, { ok: false, error: { code: 'SBSAR_INSPECT_FAILED', message: String(e.message || e) } })
+  }
+}
+
+function handleTrashList(req, res) {
+  const projects = listTrashedProjects().map((item) => {
+    // bindings survive the bin: report how many assets this material still holds
+    let boundAssets = 0
+    try {
+      const stored = path.join(TRASH_DIR, item.stored || '')
+      if (item.stored && existsSync(stored)) {
+        boundAssets = assetsInGraph(JSON.parse(readFileSync(stored, 'utf8')).graph).size
+      }
+    } catch (e) {
+      boundAssets = 0
+    }
+    return { ...item, boundAssets }
+  })
+  return sendJSON(res, 200, {
+    ok: true,
+    projects,
+    assets: listTrashedAssets(),
+    projectBytes: trashProjectBytes()
+  })
+}
+
+/** restore one binned item; kind picks the store (project file vs asset library entry) */
+function handleTrashRestore(req, res) {
+  return readBody(req, 1024 * 1024)
+    .then((buf) => {
+      const payload = JSON.parse(buf.toString('utf8') || '{}')
+      const id = String(payload.id || '')
+      if (!id) throw Object.assign(new Error('Missing id'), { code: 'INVALID_ARGUMENT' })
+      const restored = payload.kind === 'asset' ? restoreAsset(id) : restoreProject(id, PROJECTS_DIR)
+      sendJSON(res, 200, { ok: true, restored })
+    })
+    .catch((e) => sendJSON(res, e.code === 'NOT_FOUND' ? 404 : 400, { ok: false, error: { code: e.code || 'RESTORE_FAILED', message: String(e.message || e) } }))
+}
+
+function handleTrashPurge(req, res) {
+  return readBody(req, 1024 * 1024)
+    .then((buf) => {
+      const payload = JSON.parse(buf.toString('utf8') || '{}')
+      const id = String(payload.id || '')
+      if (!id) throw Object.assign(new Error('Missing id'), { code: 'INVALID_ARGUMENT' })
+      const purged = payload.kind === 'asset' ? deleteAsset(id) : purgeProject(id)
+      sendJSON(res, 200, { ok: true, purged })
+    })
+    .catch((e) => sendJSON(res, e.code === 'NOT_FOUND' ? 404 : 400, { ok: false, error: { code: e.code || 'PURGE_FAILED', message: String(e.message || e) } }))
+}
+
+/** empty the whole bin: every binned project file and every soft-deleted asset */
+function handleTrashEmpty(req, res) {
+  try {
+    const projects = emptyProjectsTrash()
+    const assets = []
+    for (const a of listTrashedAssets()) {
+      try {
+        deleteAsset(a.id)
+        assets.push(a.id)
+      } catch (e) {
+        /* keep going; report what we could remove */
+      }
+    }
+    return sendJSON(res, 200, { ok: true, purged: { projects: projects.purged, assets: assets.length } })
+  } catch (e) {
+    return sendJSON(res, 500, { ok: false, error: { code: 'EMPTY_FAILED', message: String(e.message || e) } })
   }
 }
 
@@ -867,7 +965,28 @@ function handleAssetDelete(req, res) {
     .then((buf) => {
       const payload = JSON.parse(buf.toString('utf8') || '{}')
       if (!payload.id) throw new Error('Missing asset id')
-      return sendJSON(res, 200, { ok: true, ...deleteAsset(String(payload.id)) })
+      const id = String(payload.id)
+      const entry = assetIndexEntries().find((a) => a.id === id)
+      if (!entry) throw new Error('Asset not found')
+      const usedBy = usageForAsset(scanAssetUsage(PROJECTS_DIR).usage, entry, assetIndexEntries())
+      if (usedBy.length && !payload.force) {
+        const label = (u) => (u.trashed ? u.project + ' (in recycle bin)' : u.project)
+        return sendJSON(res, 409, {
+          ok: false,
+          error: {
+            code: 'ASSET_IN_USE',
+            message:
+              'This asset is bound to ' +
+              usedBy.length +
+              ' material(s) and cannot be deleted: ' +
+              usedBy.map(label).join(', ') +
+              '. Bindings are released only when a binned material is permanently deleted.',
+            usage: usedBy
+          }
+        })
+      }
+      // deletion is reversible: the entry is flagged and stays on disk until purged from the bin
+      return sendJSON(res, 200, { ok: true, ...trashAsset(id), usedBy })
     })
     .catch((e) => sendJSON(res, 400, { ok: false, error: { code: 'ASSET_DELETE_FAILED', message: String(e.message || e) } }))
 }
@@ -943,7 +1062,15 @@ const server = http.createServer((req, res) => {
       }
     })
   }
-  if (p === '/api/projects' && method === 'GET') return sendJSON(res, 200, { ok: true, projects: projectList() })
+  if (p === '/api/projects' && method === 'GET') return sendJSON(res, 200, { ok: true, projects: projectList(), active: activeProject })
+  if (p === '/api/projects/active' && method === 'POST') {
+    return readBody(req, 256 * 1024)
+      .then((buf) => {
+        const payload = JSON.parse(buf.toString('utf8') || '{}')
+        return sendJSON(res, 200, { ok: true, active: setActiveProject(payload.name) })
+      })
+      .catch((e) => sendJSON(res, 400, { ok: false, error: { code: 'INVALID_ARGUMENT', message: String(e.message || e) } }))
+  }
   if (p === '/api/projects/save' && method === 'POST') return handleProjectSave(req, res)
   if (p === '/api/projects/load' && method === 'GET') return handleProjectLoad(res, url.searchParams.get('name') || '')
   if (p === '/api/projects/delete' && method === 'POST') {
@@ -952,8 +1079,20 @@ const server = http.createServer((req, res) => {
         const data = JSON.parse(buf.toString('utf8'))
         const file = `${nameSlug(data.name || '', 'untitled')}.json`
         const full = safeJoin(PROJECTS_DIR, file)
-        if (full && existsSync(full)) rmSync(full, { force: true })
-        sendJSON(res, 200, { ok: true })
+        if (!full || !existsSync(full)) {
+          return sendJSON(res, 404, { ok: false, error: { code: 'NOT_FOUND', message: 'Project not found: ' + file } })
+        }
+        const name = data.name || file.replace(/\.json$/, '')
+        // the material that is open in the editor is locked: deleting its file would desync the editor
+        if (!data.force && activeProject && name === activeProject) {
+          return sendJSON(res, 409, {
+            ok: false,
+            error: { code: 'PROJECT_ACTIVE', message: 'This material is currently open and cannot be deleted: ' + name }
+          })
+        }
+        // deletion is now reversible: the file moves into trash/
+        const trashed = trashProject({ file: full, name })
+        sendJSON(res, 200, { ok: true, trashed })
       })
       .catch((e) => sendJSON(res, 400, { ok: false, error: e.message }))
   }
@@ -1026,6 +1165,10 @@ const server = http.createServer((req, res) => {
   if (p === '/api/sbsar/bake' && method === 'POST') return handleSbsarBake(req, res)
   if (p === '/api/assets/sbsar' && method === 'GET') return handleAssetSbsarInspect(req, res, url)
   if (p === '/api/assets/delete' && method === 'POST') return handleAssetDelete(req, res)
+  if (p === '/api/trash' && method === 'GET') return handleTrashList(req, res)
+  if (p === '/api/trash/restore' && method === 'POST') return handleTrashRestore(req, res)
+  if (p === '/api/trash/purge' && method === 'POST') return handleTrashPurge(req, res)
+  if (p === '/api/trash/empty' && method === 'POST') return handleTrashEmpty(req, res)
   if (p.startsWith('/assets/') && (method === 'GET' || method === 'HEAD')) {
     const file = assetFilePath(p)
     if (!file) return send(res, 404, 'Not found')

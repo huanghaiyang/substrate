@@ -1,4 +1,4 @@
-import { defineComponent, ref, onMounted } from 'vue'
+import { defineComponent, ref, onMounted, computed } from 'vue'
 import { state, nodeById, addNode, setNodeImage, commitStroke, addConnection, disconnectInput, setParam, outputNode, requestEval, graphJSON, loadGraph } from '../engine/store.js'
 import { analyzePreview, buildReconstructionProject } from '../engine/reconstruct.js'
 import { loadPattern } from '../engine/paint.js'
@@ -445,7 +445,7 @@ export default defineComponent({
         if (!node) node = addNode('image_input', { x: 60, y: 60 })
         if (!node) throw new Error('无法创建贴图输入节点')
         const dataUrl = await assetDataUrl(asset)
-        setNodeImage(node.id, dataUrl, asset.name)
+        setNodeImage(node.id, dataUrl, asset.name, asset.id)
         if (asset.role === 'substance-preview') {
           status.value = t('assets.sbsarPreviewWarning')
         } else {
@@ -468,6 +468,7 @@ export default defineComponent({
       try {
         await loadPattern(asset.url)
         commitStroke(paintNode.id, { pattern: asset.url, patternScale: 1, opacity: 1 })
+        paintNode.data.patternAssetId = asset.id
         status.value = '✓ 已把「' + asset.name + '」填入绘制层'
       } catch (e) {
         status.value = '✕ ' + (e.message || String(e))
@@ -477,6 +478,10 @@ export default defineComponent({
     }
 
     async function removeAsset(asset) {
+      if (isAssetLocked(asset)) {
+        status.value = t('assets.deleteBlocked', { list: usageLabel(assetUsage(asset)) })
+        return
+      }
       busy.value = true
       try {
         const res = await fetch('/api/assets/delete', {
@@ -485,8 +490,14 @@ export default defineComponent({
           body: JSON.stringify({ id: asset.id })
         })
         const data = await res.json()
-        if (!data.ok) throw new Error(data.error?.message || 'delete failed')
-        status.value = '✓ 已删除「' + asset.name + '」'
+        if (!data.ok) {
+          if (data.error?.code === 'ASSET_IN_USE') {
+            const list = (data.error.usage || []).map((u) => u.project).join('、')
+            throw new Error(t('assets.deleteBlocked', { list: usageLabel(data.error.usage || []) }))
+          }
+          throw new Error(data.error?.message || 'delete failed')
+        }
+        status.value = t('assets.trashed', { name: asset.name }) + (data.children ? ' ' + t('assets.trashedChildren', { n: data.children }) : '')
         await load()
       } catch (e) {
         status.value = '✕ ' + (e.message || String(e))
@@ -508,6 +519,37 @@ export default defineComponent({
         }
       }
     }
+    /** assets referenced by the graph that is open right now (not saved yet, so the server cannot know) */
+    const currentGraphAssetIds = computed(() => {
+      const ids = new Set()
+      for (const node of state.graph.nodes) {
+        const d = node.data || {}
+        if (typeof d.imageAssetId === 'string') ids.add(d.imageAssetId)
+        if (typeof d.patternAssetId === 'string') ids.add(d.patternAssetId)
+        for (const stroke of Array.isArray(d.strokes) ? d.strokes : []) {
+          const m = /\/assets\/([0-9a-f]{8,16})\./.exec(String(stroke.pattern || ''))
+          if (m) ids.add(m[1])
+        }
+      }
+      return ids
+    })
+    const usedInCurrentGraph = (asset) => currentGraphAssetIds.value.has(asset.id)
+    /** every material that references the asset: saved projects (from the API) + the open graph */
+    const assetUsage = (asset) => {
+      const list = (asset.usage || []).slice()
+      if (usedInCurrentGraph(asset) && !list.some((u) => u.project === state.projectName)) {
+        list.push({ project: state.projectName || 'current', nodeId: null, current: true })
+      }
+      return list
+    }
+    /** "name" for saved materials, "name（回收站）" for binned ones — bindings survive the bin */
+    const usageLabel = (list) => list.map((u) => (u.trashed ? u.project + ' ' + t('assets.binSuffix') : u.project)).join('、')
+    const isAssetLocked = (asset) => assetUsage(asset).length > 0
+    const usageTitle = (asset) => {
+      const list = assetUsage(asset)
+      return list.length ? t('assets.inUse', { list: usageLabel(list) }) : t('assets.trashTitle')
+    }
+
     function quoteUrl(asset) {
       const url = location.origin + asset.url
       if (navigator.clipboard?.writeText) navigator.clipboard.writeText(url).then(() => (status.value = '✓ 已复制 ' + url), () => {})
@@ -520,6 +562,10 @@ export default defineComponent({
 
     return {
       assets,
+      assetUsage,
+      usageLabel,
+      isAssetLocked,
+      usageTitle,
       status,
       loading,
       busy,
@@ -712,6 +758,7 @@ export default defineComponent({
                       </div>
                     </div>
                   </div>
+                  <div v-if="assetUsage(a).length" class="asset-usage">🔒 {{ $t('assets.usedBy', { list: usageLabel(assetUsage(a)) }) }}</div>
                   <div class="asset-actions">
                     <button class="btn tiny accent" :disabled="reconstructing" @click="reconstruct(a)" :title="$t('assets.reconstructTitle')">{{ reconstructing ? $t('assets.reconstructing') : $t('assets.reconstruct') }}</button>
                     <button class="btn tiny" :disabled="baking || bake.loading || !bake.available" @click="bakeInApp(a)" :title="bake.available ? $t('assets.bakeTitle', { path: bake.sbsrender }) : bake.reason">
@@ -719,7 +766,7 @@ export default defineComponent({
                     </button>
                     <button class="btn tiny" @click="openJson(a)">{{ $t('assets.sbsarJson') }}</button>
                     <a class="btn tiny" :href="a.inspectionUrl" target="_blank" rel="noopener">{{ $t('assets.sbsarJsonRaw') }}</a>
-                    <button class="btn tiny danger" @click="removeAsset(a)">✕</button>
+                    <button class="btn tiny danger" :disabled="isAssetLocked(a)" :title="usageTitle(a)" @click="removeAsset(a)">{{ isAssetLocked(a) ? '🔒' : '🗑' }}</button>
                   </div>
                 </div>
               </template>
@@ -730,11 +777,12 @@ export default defineComponent({
                   <div class="dim small">{{ Math.round(a.bytes / 1024) }} KB<span v-if="a.width"> · {{ a.width }}×{{ a.height }}</span></div>
                   <div v-if="a.role && a.role.indexOf('substance') === 0" class="dim small">{{ $t('assets.sbsarChild') }}</div>
                   <div v-if="a.attribution" class="asset-attribution">{{ a.attribution.provider }} · {{ a.attribution.creator }} · {{ a.attribution.license }}</div>
+                  <div v-if="assetUsage(a).length" class="asset-usage">🔒 {{ $t('assets.usedBy', { list: usageLabel(assetUsage(a)) }) }}</div>
                   <div class="asset-actions">
                     <button class="btn tiny" @click="useAsTexture(a)">{{ $t('assets.useTexture') }}</button>
                     <button class="btn tiny" @click="useInPaint(a)">{{ $t('assets.usePaint') }}</button>
                     <button class="btn tiny" @click="quoteUrl(a)">{{ $t('assets.copyUrl') }}</button>
-                    <button class="btn tiny danger" @click="removeAsset(a)">✕</button>
+                    <button class="btn tiny danger" :disabled="isAssetLocked(a)" :title="usageTitle(a)" @click="removeAsset(a)">{{ isAssetLocked(a) ? '🔒' : '🗑' }}</button>
                   </div>
                 </div>
               </template>
@@ -744,7 +792,10 @@ export default defineComponent({
         </div>
         <div class="modal-foot">
           <span class="hint">{{ $t('assets.foot') }}</span>
-          <button class="btn" @click="close">{{ $t('common.close') }}</button>
+          <div style="display: flex; gap: 8px">
+            <button class="btn tiny" @click="$emit('open-trash')">🗑 {{ $t('trash.open') }}</button>
+            <button class="btn" @click="close">{{ $t('common.close') }}</button>
+          </div>
         </div>
       </div>
 

@@ -58,9 +58,64 @@ function publicAsset(entry) {
 
 export function listAssets() {
   return readIndex()
+    .filter((a) => !a.deletedAt) // the recycle bin hides soft-deleted entries
     .slice()
     .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
     .map(publicAsset)
+}
+
+/** assets currently in the recycle bin (roots only; archive children travel with their parent) */
+/** raw index entries (needed for usage lookups: parent/child relations) */
+export function assetIndexEntries() {
+  initAssets()
+  return readIndex()
+}
+
+export function listTrashedAssets() {
+  const index = readIndex()
+  const trashed = index.filter((a) => a.deletedAt)
+  const trashedIds = new Set(trashed.map((a) => a.id))
+  const roots = trashed.filter((a) => !a.parentId || !trashedIds.has(a.parentId))
+  return roots
+    .slice()
+    .sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0))
+    .map((a) => ({
+      ...publicAsset(a),
+      deletedAt: a.deletedAt,
+      childCount: index.filter((c) => c.parentId === a.id).length
+    }))
+}
+
+/**
+ * Move an asset (and, for an archive, the bitmaps it extracted) into the recycle bin.
+ * Files stay on disk so a restore is instant and lossless.
+ */
+export function trashAsset(id) {
+  initAssets()
+  const index = readIndex()
+  const entry = index.find((a) => a.id === id)
+  if (!entry) throw new Error('Asset not found')
+  if (entry.deletedAt) return { ok: true, id, children: 0, alreadyTrashed: true }
+  const owned = entry.kind === 'sbsar' ? index.filter((a) => a.parentId === id) : []
+  const now = Date.now()
+  entry.deletedAt = now
+  for (const child of owned) child.deletedAt = now
+  writeIndex(index)
+  return { ok: true, id, children: owned.length, deletedAt: now }
+}
+
+/** restore an asset and everything it owns */
+export function restoreAsset(id) {
+  initAssets()
+  const index = readIndex()
+  const entry = index.find((a) => a.id === id)
+  if (!entry) throw new Error('Asset not found')
+  if (!entry.deletedAt) return { ok: true, id, alreadyRestored: true }
+  const owned = entry.kind === 'sbsar' ? index.filter((a) => a.parentId === id) : []
+  entry.deletedAt = 0
+  for (const child of owned) child.deletedAt = 0
+  writeIndex(index)
+  return { ok: true, id, children: owned.length }
 }
 
 /** Parse a data: URL into bytes + mime, rejecting anything that is not a PNG/JPEG/WebP image. */
@@ -263,6 +318,7 @@ export function readSbsarInspection(id) {
   }
 }
 
+/** Permanently remove an asset and its archive children (the only unlinking path). */
 export function deleteAsset(id) {
   initAssets()
   const index = readIndex()
@@ -304,7 +360,7 @@ export function assetFilePath(pathname) {
 
 export function assetsCount() {
   try {
-    return readdirSync(ASSETS_DIR).filter((f) => f !== 'index.json').length
+    return readIndex().filter((a) => !a.deletedAt).length
   } catch (e) {
     return 0
   }

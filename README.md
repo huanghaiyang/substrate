@@ -783,6 +783,27 @@ brightness, colourfulness), generates a tileable 14-node procedural material wir
 saves the previous project as `autosave-before-reconstruct` and loads the result as
 `reconstructed-<graph label>`. Everything in it stays editable.
 
+Deleting is reversible: the top bar's 🗑 button opens a **recycle bin**. Materials (projects) are moved into
+`trash/` with their metadata; library assets are soft-deleted (`deletedAt` in `assets/index.json`) so files
+stay on disk and an archive can be restored together with the bitmaps it extracted. Restore puts an item back
+where it was (a name collision becomes `<slug>-restored-<id>`); only "delete permanently" / "empty bin" unlink
+files. Endpoints: `GET /api/trash`, `POST /api/trash/{restore,purge,empty}`; `POST /api/projects/delete` and
+`POST /api/assets/delete` now mean "move to the bin". Tests: `npm run test:trash` (25 assertions, runs against a
+live server).
+
+Deletion also has **guards**: the material currently open in the editor is marked "Open" in the material list
+and cannot be deleted (the server enforces it — `POST /api/projects/active` tracks it, delete answers
+`409 PROJECT_ACTIVE`, `force:true` overrides); a library asset can only be deleted when **no saved material
+references it** (`server/usage.mjs` scans `projects/*.json` for `imageAssetId`/`patternAssetId` and
+`/assets/<id>` URLs, archives count together with the bitmaps they extracted — `409 ASSET_IN_USE` with the
+offending projects). The editor toolbar also gained a **delete-selection** button (`✕`) and, in graph mode only, a **delete-material**
+button (`⌫`) that moves the open material to the bin and starts a blank one.
+
+Asset **bindings survive the recycle bin**: the binned project keeps its graph, so `scanAssetUsage()` scans
+`trash/` too and the assets stay locked (409 `ASSET_IN_USE`, usage entries carry `trashed:true`) until the
+material is permanently deleted or the bin is emptied — that is the only action that releases them. The bin
+dialog shows how many assets each binned material still binds.
+
 The Adobe Substance engine is a **closed-source native binary** (the Blender add-on's
 `Substance3DIntegrationTools` ships per-platform DLL/dylib/so), licensed per user — so it cannot be
 compiled or shipped as WebAssembly. The studio therefore drives the *locally installed* engine instead:

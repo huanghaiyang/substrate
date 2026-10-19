@@ -682,12 +682,18 @@ export function clearPaint(nodeId) {
 }
 
 // -------------------------------------------------------------------- images
-export function setNodeImage(nodeId, dataURL, fileName) {
+export function setNodeImage(nodeId, dataURL, fileName, sourceAssetId) {
   const node = nodeById(nodeId)
   if (!node) return
   pushHistory(t('history.texture'))
   node.data.imageSrc = dataURL
   node.data.imageName = fileName || 'texture.png'
+  // remember which library asset this texture came from, so deletions can be guarded by usage
+  if (sourceAssetId) {
+    node.data.imageAssetId = sourceAssetId
+  } else {
+    delete node.data.imageAssetId
+  }
   const img = new Image()
   img.onload = () => {
     const max = 2048

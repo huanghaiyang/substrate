@@ -8,6 +8,7 @@ import PaintStudio from './components/PaintStudio.js'
 import ExportDialog from './components/ExportDialog.js'
 import AiPanel from './components/AiPanel.js'
 import AssetLibrary from './components/AssetLibrary.js'
+import TrashDialog from './components/TrashDialog.js'
 import AiFloating from './components/AiFloating.js'
 import { aiChat, hideFloating } from './engine/ai-chat.js'
 import { runMcpSelfCheck } from './engine/mcp-selfcheck.js'
@@ -36,11 +37,12 @@ import { MANUAL_SECTIONS, MANUAL_TAGS, GLOSSARY } from './manual.js'
 
 export default defineComponent({
   name: 'App',
-  components: { NodePalette, GraphEditor, Inspector, Preview3D, MapPanel, PaintStudio, ExportDialog, AiPanel, AssetLibrary, AiFloating },
+  components: { NodePalette, GraphEditor, Inspector, Preview3D, MapPanel, PaintStudio, ExportDialog, TrashDialog, AiPanel, AssetLibrary, AiFloating },
   setup() {
     const graphRef = ref(null)
     const showExport = ref(false)
     const showProjects = ref(false)
+    const showTrash = ref(false)
     const showDemos = ref(false)
     const showHelp = ref(false)
     const showAi = ref(false)
@@ -153,6 +155,95 @@ export default defineComponent({
         projects.value = []
       }
       loadingProjects.value = false
+    }
+
+    async function deleteProject(name) {
+      try {
+        const r = await fetch('/api/projects/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name })
+        })
+        const j = await r.json()
+        if (!j.ok) {
+          if (j.error?.code === 'PROJECT_ACTIVE') throw new Error(t('projects.activeLocked'))
+          throw new Error(j.error?.message || 'delete failed')
+        }
+        projects.value = await listProjects()
+        notify(t('toast.projectTrashed', { name }))
+      } catch (e) {
+        notify(t('toast.deleteFail', { msg: e.message }), 'error')
+      }
+    }
+
+    /** tell the server which material is open, so it can refuse to delete it */
+    let activeTimer = 0
+    function markActiveProject(name) {
+      clearTimeout(activeTimer)
+      activeTimer = setTimeout(() => {
+        fetch('/api/projects/active', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: name || '' })
+        }).catch(() => {})
+      }, 250)
+    }
+    watch(
+      () => state.projectName,
+      (name) => markActiveProject(name),
+      { immediate: true }
+    )
+
+    const deletingMaterial = ref(false)
+
+    /**
+     * Move the material that is open in the editor to the recycle bin.
+     *
+     * Its assets stay bound: the binned project keeps its graph (with the imageAssetId references), so
+     * the library still refuses to delete those assets until the material is purged from the bin.
+     * The editor then starts a blank material so it is never editing a file that no longer exists.
+     */
+    async function deleteCurrentMaterial() {
+      if (deletingMaterial.value) return
+      deletingMaterial.value = true
+      try {
+        const name = state.projectName
+        const res = await fetch('/api/projects/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, force: true })
+        })
+        const j = await res.json().catch(() => ({}))
+        if (!res.ok && j?.error?.code !== 'NOT_FOUND') throw new Error(j?.error?.message || 'delete failed')
+        if (j?.trashed) notify(t('toast.materialTrashed', { name }), 'ok')
+        else notify(t('toast.materialUnsaved'), 'ok')
+        newProject()
+      } catch (e) {
+        notify(t('toast.deleteFail', { msg: e.message }), 'error')
+      } finally {
+        deletingMaterial.value = false
+      }
+    }
+
+    function deleteSelection() {
+      if (!state.selectedIds.length) {
+        notify(t('top.deleteSelectionEmpty'), 'error')
+        return
+      }
+      const n = state.selectedIds.length
+      deleteSelected()
+      notify(t('toast.nodesDeleted', { n }))
+    }
+
+    function openTrash() {
+      showTrash.value = true
+      showProjects.value = false
+      showAssets.value = false
+    }
+
+    async function onTrashChanged() {
+      // the bin changed: refresh the open material list and library if they are visible
+      if (showProjects.value) projects.value = await listProjects()
     }
 
     async function openProject(name) {
@@ -312,6 +403,13 @@ export default defineComponent({
       graphRef,
       showExport,
       showProjects,
+      showTrash,
+      openTrash,
+      deleteSelection,
+      deleteCurrentMaterial,
+      deletingMaterial,
+      deleteProject,
+      onTrashChanged,
       showDemos,
       showHelp,
       helpTab,
@@ -389,6 +487,8 @@ export default defineComponent({
         <button class="icon-btn" :title="$t('top.undo')" @click="undo">↺</button>
         <button class="icon-btn" :title="$t('top.redo')" @click="redo">↻</button>
         <button class="icon-btn" :title="$t('top.autoLayout')" @click="doAutoLayout">⌗</button>
+        <button class="icon-btn danger-icon" :title="state.selectedIds.length ? $t('top.deleteSelectionTitle', { n: state.selectedIds.length }) : $t('top.deleteSelectionEmpty')" :disabled="!state.selectedIds.length" @click="deleteSelection">✕</button>
+        <button v-if="state.mode === 'graph'" class="icon-btn danger-icon" :title="$t('top.deleteMaterialTitle')" :disabled="deletingMaterial" @click="deleteCurrentMaterial">⌫</button>
         <div class="divider"></div>
         <select class="top-select" :value="state.resolution" @change="onResolution" :title="$t('top.resolution')">
           <option v-for="r in RESOLUTIONS" :key="r" :value="r">{{ r }}²</option>
@@ -402,6 +502,7 @@ export default defineComponent({
         </div>
         <button class="icon-btn ai-btn" :title="$t('ai.title')" @click="toggleAi">✦</button>
         <button class="icon-btn" :title="$t('assets.title')" @click="showAssets = true">▦</button>
+        <button class="icon-btn" :title="$t('trash.open')" @click="openTrash">🗑</button>
         <button class="icon-btn" :title="$t('top.help')" @click="showHelp = true">?</button>
         <button class="btn primary" @click="showExport = true">{{ $t('top.export') }}</button>
       </header>
@@ -447,7 +548,9 @@ export default defineComponent({
       <ExportDialog v-if="showExport" @close="showExport = false" />
     <AiPanel v-if="showAi" @close="showAi = false" />
     <AiFloating v-if="!showAi && aiChat.floatingVisible" @expand="expandAi" />
-    <AssetLibrary v-if="showAssets" @close="showAssets = false" />
+    <AssetLibrary v-if="showAssets" @close="showAssets = false" @open-trash="openTrash" />
+
+      <TrashDialog v-if="showTrash" @close="showTrash = false" @changed="onTrashChanged" />
 
       <div v-if="showProjects" class="modal-backdrop" @click.self="showProjects = false">
         <div class="modal">
@@ -460,11 +563,16 @@ export default defineComponent({
             <div class="project-list">
               <div v-if="loadingProjects" class="hint">{{ $t('projects.loading') }}</div>
               <div v-else-if="!projects.length" class="hint">{{ $t('projects.empty') }}</div>
-              <button v-for="p in projects" :key="p.file" class="project-row" @click="openProject(p.name)">
-                <span class="pr-name">{{ p.name }}</span>
-                <span class="pr-meta">{{ $t('projects.meta', { res: p.resolution, nodes: p.nodes }) }}</span>
-                <span class="pr-meta">{{ new Date(p.savedAt).toLocaleString() }}</span>
-              </button>
+              <div v-for="p in projects" :key="p.file" class="project-row">
+                <button class="pr-open" @click="openProject(p.name)">
+                  <span class="pr-name">{{ p.name }}</span>
+                  <span class="pr-meta">{{ $t('projects.meta', { res: p.resolution, nodes: p.nodes }) }}</span>
+                  <span class="pr-meta">{{ new Date(p.savedAt).toLocaleString() }}</span>
+                </button>
+                <span v-if="p.name === state.projectName || p.active" class="pr-active">{{ $t('projects.activeBadge') }}</span>
+                <button v-if="p.name !== state.projectName && !p.active" class="pr-delete" :title="$t('projects.trashTitle')" @click="deleteProject(p.name)">🗑</button>
+                <button v-else class="pr-delete" disabled :title="$t('projects.activeLocked')">🔒</button>
+              </div>
             </div>
           </div>
           <div class="modal-foot">

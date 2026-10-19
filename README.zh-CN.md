@@ -610,6 +610,23 @@ metallic/height/ao/emissive/opacity），自动生成贴图输入并接入 PBR �
 裁掉烘焙阴影后取调色板、对比度、亮度、饱和度），生成一套 14 节点、可平铺、六个 PBR 通道全部接好的程序化材质；
 重建前自动把当前工程另存为 `autosave-before-reconstruct`，结果载入为 `reconstructed-<图标签>`，所有参数都可继续调。
 
+删除是可恢复的：顶栏 🗑 按钮打开**回收站**。材质（工程）连同元数据被移入 `trash/`；素材库文件采用软删除
+（`assets/index.json` 里打 `deletedAt`），文件仍在磁盘上，归档可与它提取的位图一起恢复。恢复会放回原处
+（重名自动改名为 `<slug>-restored-<id>`），只有"彻底删除 / 清空回收站"才会真正删文件。接口：
+`GET /api/trash`、`POST /api/trash/{restore,purge,empty}`；`POST /api/projects/delete` 与
+`POST /api/assets/delete` 现在语义是"移到回收站"。测试：`npm run test:trash`（25 条断言，需服务在运行）。
+
+删除还带**保护**：正在编辑器里打开的材质在列表中标记为 **正在打开** 且不可删除（服务端强制：
+`POST /api/projects/active` 记录当前材质，删除返回 `409 PROJECT_ACTIVE`，`force:true` 可覆盖）；
+素材库里的文件只有在**没有任何已保存材质引用**时才能删除（`server/usage.mjs` 扫描 `projects/*.json` 的
+`imageAssetId`/`patternAssetId` 与 `/assets/<id>` 链接，归档与它提取的位图算一个整体，
+违规时返回 `409 ASSET_IN_USE` 并列出引用它的材质）。编辑器顶栏还新增了 **✕ 删除所选节点** 与（仅节点图模式）**⌫ 删除当前材质** 按钮——后者把打开的材质移入回收站，
+并自动切换到空白材质。
+
+素材**绑定在回收站里继续有效**：回收站中的工程 JSON 保留完整引用，`scanAssetUsage()` 会连 `trash/` 一起扫，
+所以素材仍被锁定（409 `ASSET_IN_USE`，usage 带 `trashed:true`），直到该材质被**彻底删除**或清空回收站才解除。
+回收站列表会显示每个材质"绑定 N 个素材"。
+
 Adobe 的 Substance 引擎是**闭源原生二进制**（Blender 插件的 `Substance3DIntegrationTools` 就是按平台分发的
 DLL/dylib/so），按用户授权——既不能编译成 WebAssembly，也不能随网页下发。所以本应用改为驱动**本机已安装**的引擎：
 `GET /api/sbsar/bake/status` 报告是否找到 `sbsrender`（Substance Automation Toolkit），
