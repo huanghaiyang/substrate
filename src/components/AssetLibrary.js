@@ -1,5 +1,6 @@
 import { defineComponent, ref, onMounted } from 'vue'
-import { state, nodeById, addNode, setNodeImage, commitStroke, addConnection, disconnectInput, setParam, outputNode, requestEval } from '../engine/store.js'
+import { state, nodeById, addNode, setNodeImage, commitStroke, addConnection, disconnectInput, setParam, outputNode, requestEval, graphJSON, loadGraph } from '../engine/store.js'
+import { analyzePreview, buildReconstructionProject } from '../engine/reconstruct.js'
 import { loadPattern } from '../engine/paint.js'
 import { t } from '../i18n/index.js'
 import JsonViewer from './JsonViewer.js'
@@ -22,6 +23,7 @@ export default defineComponent({
     const sbsarInput = ref(null)
     const expanded = ref('')
     const pbrInput = ref(null)     // hidden file input for a PBR map set
+    const reconstructing = ref(false)
     const jsonTarget = ref(null)   // sbsar asset whose inspection report is open in the JSON viewer
     const lightbox = ref(null)     // { url, name, width, height, bytes } previewed image
     const PBR_CHANNELS = [
@@ -102,6 +104,70 @@ export default defineComponent({
       }
     }
     const openJson = (asset) => (jsonTarget.value = asset)
+
+    /**
+     * Approximate reconstruction: a .sbsar has no node graph to port (it is compiled into .sbsasm),
+     * so we measure its embedded preview render and build a tileable procedural material that
+     * reproduces that look. The result is a new project, loaded immediately.
+     */
+    async function reconstruct(asset) {
+      if (reconstructing.value) return
+      reconstructing.value = true
+      try {
+        const children = childAssets(asset)
+        const preview = children.find((c) => c.role === 'substance-preview') || children.find((c) => c.width && c.height) || children[0]
+        if (!preview) throw new Error(t('assets.reconstructNoPreview'))
+        const stats = await analyzePreview(preview.url)
+        const ins = asset.inspection || {}
+        const graph = (ins.graphs || [])[0] || {}
+        const seed = parseInt(String(ins.sha256 || '1').slice(0, 8), 16) || 1
+        const project = buildReconstructionProject({
+          stats,
+          seed,
+          info: {
+            label: graph.label || asset.name.replace(/\.sbsar$/i, ''),
+            graphType: graph.graphType || null,
+            parameterCount: ins.parameterCount || 0,
+            groups: (ins.parameterGroups || []).map((g) => g.name),
+            outputs: (ins.outputs || []).map((o) => o.usage),
+            resolution: state.resolution || 1024
+          }
+        })
+        // keep whatever the user was working on
+        try {
+          await fetch('/api/projects/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: 'autosave-before-reconstruct',
+              version: 1,
+              app: 'substrate-texture-designer',
+              resolution: state.resolution,
+              graph: JSON.parse(graphJSON())
+            })
+          })
+        } catch (e) {
+          /* best effort */
+        }
+        const saved = await fetch('/api/projects/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(project)
+        })
+        const payload = await saved.json()
+        if (!payload.ok) throw new Error(payload.error?.message || 'save failed')
+        loadGraph(project.graph, { name: project.name, resolution: project.resolution })
+        status.value = t('assets.reconstructDone', {
+          name: project.name,
+          palette: [stats.dark, stats.mid || stats.meanColor, stats.light].join(' / '),
+          coverage: Math.round(stats.coverage * 100)
+        })
+      } catch (e) {
+        status.value = '✕ ' + (e.message || String(e))
+      } finally {
+        reconstructing.value = false
+      }
+    }
     const openLightbox = (img) => (lightbox.value = img)
     const closeLightbox = () => (lightbox.value = null)
     /** 资源类型标签：按扩展名给出可读种类（图片/描述符/程序集/其他） */
@@ -404,6 +470,8 @@ export default defineComponent({
       jsonTarget,
       lightbox,
       pbrInput,
+      reconstructing,
+      reconstruct,
       openPbrPicker,
       onPbrSet,
       openJson,
@@ -563,6 +631,7 @@ export default defineComponent({
                     </div>
                   </div>
                   <div class="asset-actions">
+                    <button class="btn tiny accent" :disabled="reconstructing" @click="reconstruct(a)" :title="$t('assets.reconstructTitle')">{{ reconstructing ? $t('assets.reconstructing') : $t('assets.reconstruct') }}</button>
                     <button class="btn tiny" @click="openJson(a)">{{ $t('assets.sbsarJson') }}</button>
                     <a class="btn tiny" :href="a.inspectionUrl" target="_blank" rel="noopener">{{ $t('assets.sbsarJsonRaw') }}</a>
                     <button class="btn tiny danger" @click="removeAsset(a)">✕</button>

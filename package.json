@@ -20,7 +20,8 @@
     "audit:mcp": "node scripts/cdp.mjs audit mcp",
     "test:sbsar": "node scripts/test-sbsar.mjs",
     "fixtures:sbsar": "node scripts/make-sbsar-fixture.mjs",
-    "bake:sbsar": "node scripts/bake-sbsar.mjs"
+    "bake:sbsar": "node scripts/bake-sbsar.mjs",
+    "test:reconstruct": "node scripts/test-reconstruct.mjs"
   },
   "dependencies": {
     "three": "^0.169.0",

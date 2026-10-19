@@ -606,9 +606,14 @@ npm run bake:sbsar -- path/to/asset.sbsar --res 2048
 metallic/height/ao/emissive/opacity），自动生成贴图输入并接入 PBR 输出；数据类贴图会切到新增的
 **数据（RGB）** 模式，避免法线/粗糙度被 sRGB 解码。
 
+`.sbsar` 无法逐节点移植（图被编译进 `.sbsasm`），但归档卡片提供**近似重建**：测量内嵌预览图（按亮度百分位
+裁掉烘焙阴影后取调色板、对比度、亮度、饱和度），生成一套 14 节点、可平铺、六个 PBR 通道全部接好的程序化材质；
+重建前自动把当前工程另存为 `autosave-before-reconstruct`，结果载入为 `reconstructed-<图标签>`，所有参数都可继续调。
+
 读取器的单元测试（夹具在内存里生成，仓库不放二进制）：
 
 ```bash
 npm run fixtures:sbsar   # 重新生成 docs/reports/sbsar-import/fixtures 里的演示归档
-npm run test:sbsar       # 25 条断言：容器、XML、参数、位图、拒绝路径
+npm run test:sbsar       # 46 条断言：容器/7z/LZMA、真实布局、XML、参数、位图、拒绝路径
+npm run test:reconstruct # 14 条断言：重建图的节点/端口/通道/幂等性
 ```

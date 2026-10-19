@@ -777,6 +777,12 @@ by file name (basecolor/normal/roughness/metallic/height/ao/emissive/opacity), t
 wired into the PBR Output. Data maps are switched to the raw **Data (RGB)** channel mode so normals and
 roughness keep their numeric values instead of being sRGB-decoded.
 
+A .sbsar cannot be ported node-for-node (its graph is compiled into `.sbsasm`), but the archive card offers
+**Approximate rebuild**: it measures the embedded preview render (percentile-trimmed palette, contrast,
+brightness, colourfulness), generates a tileable 14-node procedural material wired to all six PBR channels,
+saves the previous project as `autosave-before-reconstruct` and loads the result as
+`reconstructed-<graph label>`. Everything in it stays editable.
+
 Unit tests for the reader (fixtures generated in memory, no binary assets in the repo):
 
 ```bash
