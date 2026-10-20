@@ -67,6 +67,13 @@ export default defineComponent({
     const worldStyle = computed(() => ({ transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})` }))
     const edgeSvgStyle = computed(() => ({ left: -OFFSET + 'px', top: -OFFSET + 'px' }))
     const menuStyle = computed(() => ({ left: menu.x + 'px', top: menu.y + 'px' }))
+    // Vue sets numeric style values verbatim (no implicit px), so unitless numbers would produce an
+    // invalid declaration and an invisible 0×0 box — build the style string explicitly.
+    const marqueeStyle = computed(() => {
+      const m = marquee.value
+      if (!m) return null
+      return { left: m.left + 'px', top: m.top + 'px', width: m.width + 'px', height: m.height + 'px' }
+    })
 
     const edges = computed(() => {
       const map = new Map(state.graph.nodes.map((n) => [n.id, n]))
@@ -141,7 +148,16 @@ export default defineComponent({
       selectNode(null)
       state.selectedEdgeId = null
       const start = toWorld(e.clientX, e.clientY)
-      inter = { kind: 'marquee', start, startClient: { x: e.clientX, y: e.clientY }, moved: false }
+      const rect = root.value.getBoundingClientRect()
+      inter = {
+        kind: 'marquee',
+        start,
+        startClient: { x: e.clientX, y: e.clientY },
+        // canvas-local anchor: the highlight box lives inside .graph, so it must not depend on
+        // viewport position (position: fixed would also break under scaled/transformed layouts)
+        startLocal: { x: e.clientX - rect.left, y: e.clientY - rect.top },
+        moved: false
+      }
       listen()
     }
 
@@ -202,11 +218,14 @@ export default defineComponent({
         const dy = e.clientY - inter.startClient.y
         if (!inter.moved && Math.hypot(dx, dy) > 4) inter.moved = true
         if (inter.moved) {
+          const rect = root.value.getBoundingClientRect()
+          const curX = e.clientX - rect.left
+          const curY = e.clientY - rect.top
           marquee.value = {
-            left: Math.min(e.clientX, inter.startClient.x),
-            top: Math.min(e.clientY, inter.startClient.y),
-            width: Math.abs(dx),
-            height: Math.abs(dy)
+            left: Math.min(curX, inter.startLocal.x),
+            top: Math.min(curY, inter.startLocal.y),
+            width: Math.abs(curX - inter.startLocal.x),
+            height: Math.abs(curY - inter.startLocal.y)
           }
         }
       } else if (inter.kind === 'link') {
@@ -248,8 +267,9 @@ export default defineComponent({
           if (inter.moved) pushHistoryRaw(inter.snapshot, t('history.move'))
         }
         if (inter.kind === 'marquee' && inter.moved && marquee.value) {
-          const x1 = (marquee.value.left - root.value.getBoundingClientRect().left - view.x) / view.scale
-          const y1 = (marquee.value.top - root.value.getBoundingClientRect().top - view.y) / view.scale
+          // marquee is stored in canvas-local pixels; convert the box to graph (world) units
+          const x1 = (marquee.value.left - view.x) / view.scale
+          const y1 = (marquee.value.top - view.y) / view.scale
           const x2 = x1 + marquee.value.width / view.scale
           const y2 = y1 + marquee.value.height / view.scale
           const picked = state.graph.nodes.filter((n) => {
@@ -431,6 +451,7 @@ export default defineComponent({
       worldStyle,
       edgeSvgStyle,
       menuStyle,
+      marqueeStyle,
       edges,
       W,
       HEADER,
@@ -566,7 +587,7 @@ export default defineComponent({
         </template>
       </div>
 
-      <div v-if="marquee" class="marquee" :style="marquee"></div>
+      <div v-if="marquee" class="marquee" :style="marqueeStyle"></div>
     </div>
   `
 })

@@ -591,9 +591,11 @@ input[type='color']::-webkit-color-swatch {
   line-height: 1.5;
 }
 .marquee {
-  position: fixed;
+  position: absolute;
   border: 1px solid var(--blue);
-  background: rgba(88, 183, 255, 0.1);
+  background: rgba(88, 183, 255, 0.12);
+  box-shadow: 0 0 0 1px rgba(88, 183, 255, 0.28), 0 0 12px rgba(88, 183, 255, 0.18) inset;
+  border-radius: 2px;
   pointer-events: none;
   z-index: 30;
 }
