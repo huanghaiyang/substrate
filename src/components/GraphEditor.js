@@ -15,6 +15,7 @@ import {
   deleteSelected,
   disconnectInput,
   reachableIds,
+  canConnect,
   openPaintStudio
 } from '../engine/store.js'
 import { NODE_DEFS, CATEGORIES } from '../engine/nodes/index.js'
@@ -46,6 +47,30 @@ function bezier(x1, y1, x2, y2) {
   return `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`
 }
 
+/**
+ * Purpose of the best-known input ports. The graph itself is an untyped RGBA stream (any output
+ * can feed any input), so these strings explain *intent* rather than enforce a type system.
+ * Unknown port names fall back to the receiving node's own description.
+ */
+const PORT_ROLE_KEYS = {
+  input: 'link.role.input',
+  base: 'link.role.base',
+  blend: 'link.role.blend',
+  mask: 'link.role.mask',
+  height: 'link.role.height',
+  warper: 'link.role.warper',
+  r: 'link.role.r',
+  g: 'link.role.g',
+  b: 'link.role.b',
+  basecolor: 'link.role.basecolor',
+  normal: 'link.role.normal',
+  roughness: 'link.role.roughness',
+  metallic: 'link.role.metallic',
+  ao: 'link.role.ao',
+  emissive: 'link.role.emissive',
+  opacity: 'link.role.opacity'
+}
+
 export default defineComponent({
   name: 'GraphEditor',
   emits: ['open-paint'],
@@ -56,6 +81,9 @@ export default defineComponent({
     const rubber = ref(null)
     const marquee = ref(null)
     const hoverInput = ref(null)
+    const invalidPort = ref(null)
+    const linkSource = ref(null)
+    const pointer = reactive({ x: 0, y: 0 })
     const panning = ref(false)
     const menu = reactive({ open: false, x: 0, y: 0, wx: 0, wy: 0, mode: 'add', nodeId: null, filter: '' })
     let inter = null
@@ -95,6 +123,167 @@ export default defineComponent({
       return out
     })
 
+    // ------------------------------------------------------- link suggestions
+    // While a link is being dragged we collect every input port that can legally receive the
+    // stream (i.e. no cycle), then rank them: semantic match first, free ports before occupied
+    // ones, and finally by graph distance so nearby nodes surface first.
+    const candidates = computed(() => (linkSource.value ? collectCandidates(linkSource.value) : []))
+    const candidateMap = computed(() => {
+      const map = new Map()
+      for (const c of candidates.value) map.set(c.key, c)
+      return map
+    })
+    const linkableIds = computed(() => new Set(candidates.value.map((c) => c.nodeId)))
+    // The suggestion dock is selection-driven (single selection only) and never shown while
+    // a link is being dragged.
+    const selectedNode = computed(() => {
+      if (linkSource.value || state.selectedIds.length !== 1) return null
+      return nodeById(state.selectedIds[0])
+    })
+    const selectionCandidates = computed(() =>
+      selectedNode.value ? collectSelectionCandidates(selectedNode.value) : []
+    )
+    const selectionTop = computed(() => selectionCandidates.value.slice(0, 7))
+    const hoverDetail = computed(() => candidateMap.value.get(hoverInput.value) || null)
+    const invalidDetail = computed(() => {
+      const key = invalidPort.value
+      if (!key || !linkSource.value) return null
+      const at = key.indexOf(':')
+      const nodeId = key.slice(key.indexOf('|') + 1, at)
+      const port = key.slice(at + 1)
+      const node = nodeById(nodeId)
+      const def = defOf(node)
+      if (!node || !def) return null
+      const inp = (def.inputs || []).find((i) => i.name === port)
+      if (!inp) return null
+      const check = canConnect(linkSource.value, nodeId)
+      return {
+        nodeTitle: node.data?.title || def.name,
+        label: inp.label,
+        reason: nodeId === linkSource.value ? t('link.self') : check.reason || t('link.invalidTitle')
+      }
+    })
+    // Keep the port tooltip on the side away from the viewport edge so it never covers the node
+    // being aimed at: right/below on the top-left half, left/above on the bottom-right half.
+    const tipStyle = computed(() => {
+      const w = 272
+      const h = 150
+      const vw = typeof window !== 'undefined' ? window.innerWidth : 1920
+      const vh = typeof window !== 'undefined' ? window.innerHeight : 1080
+      const left = pointer.x > vw / 2 ? pointer.x - w - 18 : pointer.x + 18
+      const top = pointer.y > vh / 2 ? pointer.y - h - 20 : pointer.y + 20
+      return { left: Math.max(8, Math.min(left, vw - w - 8)) + 'px', top: Math.max(8, Math.min(top, vh - h - 8)) + 'px' }
+    })
+
+    function portRole(def, inp) {
+      const key = PORT_ROLE_KEYS[inp.name]
+      const text = key ? t(key) : ''
+      if (text && text !== key) return text
+      return def.desc || ''
+    }
+    function spaceLabel(space) {
+      return space === 'color' ? t('link.spaceColor') : t('link.spaceData')
+    }
+    function collectCandidates(fromId) {
+      const src = nodeById(fromId)
+      if (!src) return []
+      const srcDef = defOf(src)
+      const srcSpace = (srcDef && srcDef.space) || 'data'
+      const out = []
+      for (const n of state.graph.nodes) {
+        if (n.id === fromId) continue
+        const def = defOf(n)
+        if (!def) continue
+        const check = canConnect(fromId, n.id)
+        if (!check.ok) continue
+        for (const inp of def.inputs || []) {
+          const space = inp.space || def.space || 'data'
+          out.push({
+            key: 'out|' + n.id + ':' + inp.name,
+            direction: 'out',
+            fromId,
+            toId: n.id,
+            toPort: inp.name,
+            nodeId: n.id,
+            port: inp.name,
+            nodeTitle: n.data?.title || def.name,
+            label: inp.label,
+            role: portRole(def, inp),
+            category: def.category,
+            space,
+            match: space === srcSpace,
+            occupied: hasInput(n.id, inp.name),
+            dist: Math.hypot(n.x + W - src.x, n.y + HEADER - src.y)
+          })
+        }
+      }
+      return rankCandidates(out)
+    }
+    function rankCandidates(list) {
+      return list.sort(
+        (a, b) =>
+          Number(b.match) - Number(a.match) ||
+          Number(a.occupied) - Number(b.occupied) ||
+          a.dist - b.dist
+      )
+    }
+    /**
+     * Selection suggestions cover both directions around the selected node:
+     * - `out`: the selected node's output feeding another node's input (click connects them)
+     * - `in`: another node feeding one of the selected node's inputs
+     * Entries carry concrete from/to endpoints so a click in the dock can connect immediately.
+     */
+    function collectSelectionCandidates(sel) {
+      const def = defOf(sel)
+      if (!def) return []
+      const out = []
+      if (!def.isOutput) out.push(...collectCandidates(sel.id))
+      for (const inp of def.inputs || []) {
+        const targetSpace = inp.space || def.space || 'data'
+        const occupied = hasInput(sel.id, inp.name)
+        for (const src of state.graph.nodes) {
+          if (src.id === sel.id) continue
+          const srcDef = defOf(src)
+          if (!srcDef || srcDef.isOutput) continue
+          if (!canConnect(src.id, sel.id).ok) continue
+          out.push({
+            key: 'in|' + src.id + '|' + inp.name,
+            direction: 'in',
+            fromId: src.id,
+            toId: sel.id,
+            toPort: inp.name,
+            nodeId: src.id,
+            port: inp.name,
+            nodeTitle: src.data?.title || srcDef.name,
+            label: inp.label,
+            role: portRole(def, inp),
+            category: srcDef.category,
+            space: targetSpace,
+            match: (srcDef.space || 'data') === targetSpace,
+            occupied,
+            dist: Math.hypot(sel.x - src.x, sel.y - src.y)
+          })
+        }
+      }
+      return rankCandidates(out)
+    }
+    function portKey(nodeId, port) {
+      return 'out|' + nodeId + ':' + port
+    }
+    function isCandidate(nodeId, port) {
+      return candidateMap.value.has(portKey(nodeId, port))
+    }
+    function isMismatch(nodeId, port) {
+      const c = candidateMap.value.get(portKey(nodeId, port))
+      return !!c && !c.match
+    }
+    function isInvalidPort(nodeId, port) {
+      return invalidPort.value === portKey(nodeId, port)
+    }
+    function connectSuggestion(c) {
+      if (!c || !c.fromId) return
+      addConnection(c.fromId, 'out', c.toId, c.toPort)
+    }
     const menuGroups = computed(() => {
       const q = (menu.filter || '').trim().toLowerCase()
       return CATEGORIES.map((cat) => ({
@@ -189,6 +378,10 @@ export default defineComponent({
       const x1 = node.x + W
       const y1 = node.y + outputYRel(node)
       inter = { kind: 'link', fromNode: node.id, x1, y1 }
+      linkSource.value = node.id
+      invalidPort.value = null
+      pointer.x = e.clientX
+      pointer.y = e.clientY
       const end = { x: start.x + OFFSET, y: start.y + OFFSET }
       rubber.value = { d: bezier(x1 + OFFSET, y1 + OFFSET, end.x, end.y), ex: end.x, ey: end.y }
       listen()
@@ -196,6 +389,8 @@ export default defineComponent({
 
     function onWindowMove(e) {
       lastPointer = { x: e.clientX, y: e.clientY }
+      pointer.x = e.clientX
+      pointer.y = e.clientY
       if (!inter) return
       if (inter.kind === 'pan') {
         view.x = inter.vx + (e.clientX - inter.sx)
@@ -241,21 +436,26 @@ export default defineComponent({
             const iy = node.y + HEADER + portOffset(i)
             const d = Math.hypot(ix - to.x, iy - to.y)
             if (d < 26 / view.scale + 10) {
-              hit = node.id + ':' + def.inputs[i].name
+              hit = portKey(node.id, def.inputs[i].name)
               snap = { x: ix + OFFSET, y: iy + OFFSET }
               break
             }
           }
           if (hit) break
         }
-        const end = snap || { x: to.x + OFFSET, y: to.y + OFFSET }
+        // Only legal targets may snap and be picked up on release; any other port is flagged
+        // red with an explanation ("would create a cycle", "cannot connect to itself").
+        const valid = !!hit && candidateMap.value.has(hit)
+        hoverInput.value = valid ? hit : null
+        invalidPort.value = hit && !valid ? hit : null
+        const end = valid ? snap : { x: to.x + OFFSET, y: to.y + OFFSET }
         rubber.value = {
           d: bezier(inter.x1 + OFFSET, inter.y1 + OFFSET, end.x, end.y),
           ex: end.x,
           ey: end.y,
-          snapped: !!snap
+          snapped: valid,
+          invalid: !!invalidPort.value && !valid
         }
-        hoverInput.value = hit
       }
     }
 
@@ -279,16 +479,16 @@ export default defineComponent({
           if (picked.length) selectNodes(picked.map((n) => n.id))
         }
         if (inter.kind === 'link') {
-          if (hoverInput.value) {
-            const [toId, port] = hoverInput.value.split(':')
-            addConnection(inter.fromNode, 'out', toId, port)
-          }
+          const picked = hoverInput.value ? candidateMap.value.get(hoverInput.value) : null
+          if (picked) addConnection(picked.fromId, 'out', picked.toId, picked.toPort)
         }
         inter = null
       }
       rubber.value = null
       marquee.value = null
       hoverInput.value = null
+      invalidPort.value = null
+      linkSource.value = null
       unlisten()
     }
 
@@ -442,6 +642,15 @@ export default defineComponent({
       rubber,
       marquee,
       hoverInput,
+      invalidPort,
+      linkSource,
+      selectedNode,
+      selectionCandidates,
+      selectionTop,
+      linkableIds,
+      hoverDetail,
+      invalidDetail,
+      tipStyle,
       panning,
       menu,
       menuGroups,
@@ -462,6 +671,12 @@ export default defineComponent({
       hasInput,
       catColor,
       defOf,
+      portKey,
+      isCandidate,
+      isMismatch,
+      isInvalidPort,
+      connectSuggestion,
+      spaceLabel,
       onCanvasDown,
       onNodeDown,
       onOutputDown,
@@ -495,14 +710,19 @@ export default defineComponent({
             <path class="edge" :class="{ selected: e.selected }" :d="e.d" @pointerdown.stop="selectEdge(e.id)"></path>
           </g>
           <path v-if="rubber" class="edge rubber" :d="rubber.d"></path>
-      <circle v-if="rubber" class="rubber-dot" :class="{ snapped: rubber.snapped }" :cx="rubber.ex" :cy="rubber.ey" r="4.5"></circle>
+          <circle v-if="rubber" class="rubber-dot" :class="{ snapped: rubber.snapped, invalid: rubber.invalid }" :cx="rubber.ex" :cy="rubber.ey" r="4.5"></circle>
         </svg>
 
         <div
           v-for="node in nodes"
           :key="node.id"
           class="gnode"
-          :class="{ selected: isSelected(node.id), dim: !reachable.has(node.id), output: defOf(node).isOutput }"
+          :class="{
+            selected: isSelected(node.id),
+            dim: !reachable.has(node.id),
+            output: defOf(node).isOutput,
+            linkable: linkableIds.has(node.id)
+          }"
           :style="nodeStyle(node)"
           @pointerdown.stop="onNodeDown($event, node)"
           @dblclick.stop="onNodeDblClick(node)"
@@ -519,7 +739,13 @@ export default defineComponent({
             v-for="(inp, i) in defOf(node).inputs"
             :key="inp.name"
             class="port input"
-            :class="{ connected: hasInput(node.id, inp.name), hot: hoverInput === node.id + ':' + inp.name }"
+            :class="{
+              connected: hasInput(node.id, inp.name),
+              hot: hoverInput === portKey(node.id, inp.name),
+              candidate: isCandidate(node.id, inp.name),
+              mismatch: isMismatch(node.id, inp.name),
+              invalid: isInvalidPort(node.id, inp.name)
+            }"
             :style="{ top: (HEADER + portOffset(i)) + 'px' }"
           ></div>
           <span
@@ -546,12 +772,60 @@ export default defineComponent({
         </div>
       </div>
 
+      <div v-if="selectedNode" class="link-dock" @pointerdown.stop @contextmenu.prevent>
+        <span class="link-dock-count">{{ $t('link.suggestTitle', { n: selectionCandidates.length }) }}</span>
+        <div v-if="selectionTop.length" class="link-dock-list">
+          <button
+            v-for="c in selectionTop"
+            :key="c.key"
+            class="link-item"
+            :title="$t('link.itemTitle', { node: c.nodeTitle, port: c.label, role: c.role })"
+            @pointerdown.prevent.stop="connectSuggestion(c)"
+          >
+            <span class="link-item-main">
+              <span class="cat-dot" :style="{ background: catColor(c.category) }"></span>
+              <span class="link-item-name">{{ c.nodeTitle }}</span>
+              <span class="link-item-dir" :class="c.direction">{{ c.direction === 'out' ? '→' : '←' }}</span>
+              <span class="link-item-port">{{ c.label }}</span>
+              <span class="link-item-space" :class="{ warn: !c.match }">{{ spaceLabel(c.space) }}</span>
+              <span v-if="c.occupied" class="link-item-replace">{{ $t('link.replaceShort') }}</span>
+            </span>
+            <span class="link-item-role">{{ c.role }}</span>
+          </button>
+        </div>
+        <span v-else class="link-dock-empty">{{ $t('link.empty') }}</span>
+      </div>
+
+      <div v-if="hoverDetail" class="link-tip" :style="tipStyle">
+        <div class="link-tip-title">
+          <span class="cat-dot" :style="{ background: catColor(hoverDetail.category) }"></span>
+          <span class="link-tip-node">{{ hoverDetail.nodeTitle }}</span>
+          <span class="link-tip-arrow">→</span>
+          <span class="link-tip-port">{{ hoverDetail.label }}</span>
+        </div>
+        <div class="link-tip-role">{{ hoverDetail.role }}</div>
+        <div class="link-tip-meta">
+          <span class="link-chip" :class="{ warn: !hoverDetail.match }">{{ spaceLabel(hoverDetail.space) }}</span>
+          <span v-if="!hoverDetail.match" class="link-chip warn">{{ $t('link.spaceMismatch') }}</span>
+          <span v-if="hoverDetail.occupied" class="link-chip warn">{{ $t('link.replace') }}</span>
+        </div>
+        <div class="link-tip-action">{{ $t('link.release') }}</div>
+      </div>
+      <div v-else-if="invalidDetail" class="link-tip invalid" :style="tipStyle">
+        <div class="link-tip-title">
+          <span class="link-tip-node">{{ invalidDetail.nodeTitle }}</span>
+          <span class="link-tip-arrow">→</span>
+          <span class="link-tip-port">{{ invalidDetail.label }}</span>
+        </div>
+        <div class="link-tip-action">{{ $t('link.invalidTitle') }} · {{ invalidDetail.reason }}</div>
+      </div>
+
       <div class="graph-tools">
         <button class="icon-btn" :title="$t('graph.zoomIn')" @click="zoomBy(1.25)">+</button>
         <button class="icon-btn" :title="$t('graph.zoomOut')" @click="zoomBy(0.8)">−</button>
         <button class="icon-btn" :title="$t('graph.fit')" @click="fit">⛶</button>
       </div>
-      <div class="graph-hint">{{ $t('graph.hint') }}</div>
+      <div v-if="!selectedNode && !linkSource" class="graph-hint">{{ $t('graph.hint') }}</div>
 
       <div v-if="menu.open" class="graph-menu" :style="menuStyle" @pointerdown.stop @contextmenu.prevent>
         <template v-if="menu.mode === 'add'">
