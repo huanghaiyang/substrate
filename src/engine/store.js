@@ -777,7 +777,8 @@ export function createImagePbrMaterial({
     const tile = addNode('seamless_tile', { x: baseX + 230, y: baseY })
     if (!tile) return null
     setParam(tile.id, 'enabled', seamless.enabled !== false)
-    setParam(tile.id, 'mode', Number(seamless.mode) === 1 ? 1 : 0)
+    setParam(tile.id, 'mode', Number(seamless.mode) === 1 ? 1 : Number(seamless.mode) === 2 ? 2 : 0)
+    setParam(tile.id, 'curve', Math.min(2, Math.max(0, Number(seamless.curve) || 0)))
     setParam(tile.id, 'band', Math.min(0.25, Math.max(0.005, Number(seamless.band) || 0.08)))
     addConnection(image.id, 'out', tile.id, 'input')
 

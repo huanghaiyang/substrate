@@ -20,6 +20,7 @@ export default defineComponent({
     const fit = ref('crop')
     const seamlessOn = ref(true)
     const mode = ref(0)
+    const curve = ref(0)
     const band = ref(0.08)
     const channels = ref({
       basecolor: true,
@@ -35,6 +36,11 @@ export default defineComponent({
 
     const hasImage = computed(() => !!image.value)
     const bandPct = computed(() => Math.round(band.value * 100))
+    const modeHint = computed(() => {
+      if (mode.value === 1) return t('imagePbr.modeMirrorHint')
+      if (mode.value === 2) return t('imagePbr.modeWrapHint')
+      return t('imagePbr.modeBlendHint')
+    })
     const channelList = [
       { key: 'basecolor', label: 'imagePbr.chBase' },
       { key: 'height', label: 'imagePbr.chHeight' },
@@ -58,13 +64,14 @@ export default defineComponent({
         const processed = processSeamless(previewSource, {
           enabled: seamlessOn.value,
           mode: mode.value,
-          band: band.value
+          band: band.value,
+          curve: curve.value
         })
         drawTiled(seamlessCanvas.value, processed, 2, 2)
       })
     }
 
-    watch([fit, seamlessOn, mode, band], render, { flush: 'post' })
+    watch([fit, seamlessOn, mode, curve, band], render, { flush: 'post' })
 
     async function handleFile(file) {
       if (!file) return
@@ -119,7 +126,7 @@ export default defineComponent({
         const result = createImagePbrMaterial({
           dataURL,
           fileName: fileName.value,
-          seamless: { enabled: seamlessOn.value, mode: mode.value, band: band.value },
+          seamless: { enabled: seamlessOn.value, mode: mode.value, band: band.value, curve: curve.value },
           channels: channels.value
         })
         if (!result) throw new Error(t('imagePbr.failed'))
@@ -145,8 +152,10 @@ export default defineComponent({
       fit,
       seamlessOn,
       mode,
+      curve,
       band,
       bandPct,
+      modeHint,
       channels,
       channelList,
       busy,
@@ -222,6 +231,15 @@ export default defineComponent({
                 <select v-model.number="mode" class="top-select">
                   <option :value="0">{{ $t('imagePbr.modeBlend') }}</option>
                   <option :value="1">{{ $t('imagePbr.modeMirror') }}</option>
+                  <option :value="2">{{ $t('imagePbr.modeWrap') }}</option>
+                </select>
+              </div>
+              <div class="ipbr-row" :class="{ dim: !seamlessOn || mode === 1 }">
+                <label>{{ $t('imagePbr.curve') }}</label>
+                <select v-model.number="curve" class="top-select">
+                  <option :value="0">{{ $t('imagePbr.curveCosine') }}</option>
+                  <option :value="1">{{ $t('imagePbr.curveSmooth') }}</option>
+                  <option :value="2">{{ $t('imagePbr.curveLinear') }}</option>
                 </select>
               </div>
               <div class="ipbr-row" :class="{ dim: !seamlessOn || mode === 1 }">
@@ -229,7 +247,7 @@ export default defineComponent({
                 <input class="ipbr-range" type="range" min="1" max="25" step="1" :value="bandPct" @input="setBand" />
                 <span class="ipbr-value">{{ bandPct }}%</span>
               </div>
-              <div class="hint ipbr-mode-hint">{{ mode === 1 ? $t('imagePbr.modeMirrorHint') : $t('imagePbr.modeBlendHint') }}</div>
+              <div class="hint ipbr-mode-hint">{{ modeHint }}</div>
 
               <div class="ipbr-channels">
                 <div class="ipbr-channels-title">{{ $t('imagePbr.channels') }}</div>
