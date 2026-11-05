@@ -173,10 +173,33 @@ export function nodeInputConnection(nodeId, port) {
 }
 
 // ------------------------------------------------------------------- history
+let historyBatch = 0
+let batchSnapshot = null
 export function graphJSON() {
   return JSON.stringify(state.graph, (k, v) => (k.startsWith('_') ? undefined : v))
 }
+/**
+ * Group a multi-node edit (such as the one-click image→PBR import) into a single undo step.
+ * The snapshot is taken before the first mutation and pushed when the last batch ends.
+ */
+export function beginHistoryBatch(label) {
+  if (historyBatch === 0) batchSnapshot = { graph: graphJSON(), label }
+  historyBatch++
+}
+export function endHistoryBatch() {
+  if (historyBatch <= 0) return
+  historyBatch--
+  if (historyBatch > 0 || !batchSnapshot) return
+  const snapshot = batchSnapshot
+  batchSnapshot = null
+  state.undoStack.push(snapshot)
+  if (state.undoStack.length > 80) state.undoStack.shift()
+  state.redoStack.length = 0
+  state.historyLabel = snapshot.label
+  schedulePersist()
+}
 export function pushHistory(label, coalesceKey) {
+  if (historyBatch > 0) return
   if (coalesceKey) {
     const now = Date.now()
     if (coalesce.key === coalesceKey && now - coalesce.at < 700) {
@@ -708,6 +731,116 @@ export function setNodeImage(nodeId, dataURL, fileName, sourceAssetId) {
   img.src = dataURL
   requestEval(true)
 }
+
+/**
+ * One-click "photo → PBR material" graph builder.
+ *
+ *   texture input → seamless tile → base colour
+ *                       ├→ desaturate → levels → height
+ *                       │                     ├→ normal
+ *                       │                     └→ AO
+ *                       └→ desaturate → invert → levels → roughness
+ *   constant 0 → metallic
+ *
+ * Everything is created in a single undo step; the photo is stored as the node texture and
+ * the seamless step stays a live node, so the blend width can be tuned after the import.
+ */
+export function createImagePbrMaterial({
+  dataURL,
+  fileName,
+  seamless = {},
+  channels = {},
+  normalDirectX = false
+} = {}) {
+  if (!dataURL) return null
+  beginHistoryBatch(t('history.imagePbr'))
+  try {
+    const out = outputNode() || addNode('material_output', { x: 900, y: 0 })
+    if (!out) return null
+    const want = {
+      basecolor: channels.basecolor !== false,
+      height: channels.height !== false,
+      normal: channels.normal !== false,
+      roughness: channels.roughness !== false,
+      ao: channels.ao !== false,
+      metallic: channels.metallic === true
+    }
+    const maxY = state.graph.nodes.reduce((m, n) => Math.max(m, n.y), 0)
+    const baseX = 80
+    const baseY = Math.round(maxY + 140)
+
+    const image = addNode('image_input', { x: baseX, y: baseY })
+    if (!image) return null
+    setParam(image.id, 'channelMode', 0)
+    setNodeImage(image.id, dataURL, fileName || 'texture.jpg')
+
+    const tile = addNode('seamless_tile', { x: baseX + 230, y: baseY })
+    if (!tile) return null
+    setParam(tile.id, 'enabled', seamless.enabled !== false)
+    setParam(tile.id, 'mode', Number(seamless.mode) === 1 ? 1 : 0)
+    setParam(tile.id, 'band', Math.min(0.25, Math.max(0.005, Number(seamless.band) || 0.08)))
+    addConnection(image.id, 'out', tile.id, 'input')
+
+    if (want.basecolor) {
+      disconnectInput(out.id, 'basecolor')
+      addConnection(tile.id, 'out', out.id, 'basecolor')
+    }
+
+    // shared luminance stream for the height chain and the roughness derivation
+    let grayId = null
+    if (want.height || want.normal || want.ao || want.roughness) {
+      const gray = addNode('grayscale', { x: baseX + 460, y: baseY })
+      if (!gray) return null
+      grayId = gray.id
+      addConnection(tile.id, 'out', gray.id, 'input')
+    }
+    if (want.height || want.normal || want.ao) {
+      const levels = addNode('levels', { x: baseX + 690, y: baseY })
+      addConnection(grayId, 'out', levels.id, 'input')
+      if (want.height) {
+        disconnectInput(out.id, 'height')
+        addConnection(levels.id, 'out', out.id, 'height')
+      }
+      if (want.normal) {
+        const n = addNode('normal', { x: baseX + 920, y: baseY - 110 })
+        addConnection(levels.id, 'out', n.id, 'height')
+        setParam(n.id, 'directx', !!normalDirectX)
+        disconnectInput(out.id, 'normal')
+        addConnection(n.id, 'out', out.id, 'normal')
+      }
+      if (want.ao) {
+        const ao = addNode('ao', { x: baseX + 920, y: baseY + 90 })
+        addConnection(levels.id, 'out', ao.id, 'height')
+        disconnectInput(out.id, 'ao')
+        addConnection(ao.id, 'out', out.id, 'ao')
+      }
+    }
+    if (want.roughness) {
+      const inv = addNode('invert', { x: baseX + 690, y: baseY + 260 })
+      addConnection(grayId, 'out', inv.id, 'input')
+      const levels = addNode('levels', { x: baseX + 920, y: baseY + 260 })
+      setParam(levels.id, 'outLow', 0.55)
+      setParam(levels.id, 'outHigh', 0.95)
+      addConnection(inv.id, 'out', levels.id, 'input')
+      disconnectInput(out.id, 'roughness')
+      addConnection(levels.id, 'out', out.id, 'roughness')
+    }
+    if (want.metallic) {
+      const flat = addNode('flat_value', { x: baseX + 460, y: baseY + 400 })
+      setParam(flat.id, 'value', 0)
+      disconnectInput(out.id, 'metallic')
+      addConnection(flat.id, 'out', out.id, 'metallic')
+    }
+
+    state.engine?.clearCache()
+    selectNode(image.id)
+    requestEval(true)
+    return { imageNodeId: image.id, seamlessNodeId: tile.id, outputId: out.id, channels: Object.keys(want).filter((k) => want[k]) }
+  } finally {
+    endHistoryBatch()
+  }
+}
+
 async function hydrateImages() {
   for (const node of state.graph.nodes) {
     if (node.type !== 'image_input' || !node.data?.imageSrc) continue

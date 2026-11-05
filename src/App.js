@@ -8,6 +8,7 @@ import PaintStudio from './components/PaintStudio.js'
 import ExportDialog from './components/ExportDialog.js'
 import AiPanel from './components/AiPanel.js'
 import AssetLibrary from './components/AssetLibrary.js'
+import ImagePbrDialog from './components/ImagePbrDialog.js'
 import TrashDialog from './components/TrashDialog.js'
 import AiFloating from './components/AiFloating.js'
 import { aiChat, hideFloating } from './engine/ai-chat.js'
@@ -37,7 +38,7 @@ import { MANUAL_SECTIONS, MANUAL_TAGS, GLOSSARY } from './manual.js'
 
 export default defineComponent({
   name: 'App',
-  components: { NodePalette, GraphEditor, Inspector, Preview3D, MapPanel, PaintStudio, ExportDialog, TrashDialog, AiPanel, AssetLibrary, AiFloating },
+  components: { NodePalette, GraphEditor, Inspector, Preview3D, MapPanel, PaintStudio, ExportDialog, TrashDialog, AiPanel, AssetLibrary, AiFloating, ImagePbrDialog },
   setup() {
     const graphRef = ref(null)
     const showExport = ref(false)
@@ -47,6 +48,7 @@ export default defineComponent({
     const showHelp = ref(false)
     const showAi = ref(false)
     const showAssets = ref(false)
+    const showImagePbr = ref(false)
     const mcpCheck = ref(null)
     const mcpChecking = ref(false)
     const projects = ref([])
@@ -315,6 +317,12 @@ export default defineComponent({
       notify(t('toast.layoutDone', { n: result.moved }))
     }
 
+    // the freshly built image→PBR chain lands below the existing graph — frame it for the user
+    function onImagePbrGenerated() {
+      showImagePbr.value = false
+      nextTick(() => graphRef.value?.fit())
+    }
+
     function onResolution(e) {
       setResolution(Number(e.target.value))
     }
@@ -429,6 +437,7 @@ export default defineComponent({
       toggleAi,
       showAi,
       showAssets,
+      showImagePbr,
       mcpCheck,
       mcpChecking,
       runMcpCheck,
@@ -453,6 +462,7 @@ export default defineComponent({
       closePaint,
       runSelfTest,
       doAutoLayout,
+      onImagePbrGenerated,
       onResolution,
       onProxy,
       undo,
@@ -504,6 +514,7 @@ export default defineComponent({
         <button class="icon-btn" :title="$t('assets.title')" @click="showAssets = true">▦</button>
         <button class="icon-btn" :title="$t('trash.open')" @click="openTrash">🗑</button>
         <button class="icon-btn" :title="$t('top.help')" @click="showHelp = true">?</button>
+        <button class="btn" @click="showImagePbr = true" :title="$t('imagePbr.title')">{{ $t('imagePbr.button') }}</button>
         <button class="btn primary" @click="showExport = true">{{ $t('top.export') }}</button>
       </header>
 
@@ -549,6 +560,9 @@ export default defineComponent({
     <AiPanel v-if="showAi" @close="showAi = false" />
     <AiFloating v-if="!showAi && aiChat.floatingVisible" @expand="expandAi" />
     <AssetLibrary v-if="showAssets" @close="showAssets = false" @open-trash="openTrash" />
+    <ImagePbrDialog v-if="showImagePbr"
+                     @close="showImagePbr = false"
+                     @generated="onImagePbrGenerated" />
 
       <TrashDialog v-if="showTrash" @close="showTrash = false" @changed="onTrashChanged" />
 

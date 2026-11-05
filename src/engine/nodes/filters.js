@@ -576,5 +576,59 @@ export const filterDefs = [
         vec4 c = texture(uIn_b, uv);
         return vec4(pick(a, u_chR), pick(b, u_chG), pick(c, u_chB), 1.0);
       }`
+  },
+  {
+    type: 'seamless_tile',
+    name: 'Seamless Tile',
+    category: 'Filter',
+    space: 'color',
+    desc: 'Feather or mirror the borders so a photo repeats without a visible seam.',
+    inputs: [{ name: 'input', label: 'Input', def: 0.5 }],
+    params: [
+      { key: 'enabled', label: 'Enabled', type: 'bool', def: true },
+      { key: 'mode', label: 'Mode', type: 'select', options: ['Edge Blend', 'Mirror'], def: 0 },
+      { key: 'band', label: 'Blend Width', type: 'float', min: 0.005, max: 0.25, step: 0.001, def: 0.08 }
+    ],
+    // Mirror of the CPU implementation in src/engine/seamless.js: the two passes are
+    // separable (horizontal first, then vertical), so left/right and top/bottom borders
+    // both collapse onto their shared average and the tile repeats without a seam.
+    prelude: /* glsl */ `
+      vec4 seamH(vec2 uv) {
+        vec4 c = texture(uIn_input, uv);
+        vec4 mid = (
+          texture(uIn_input, vec2(0.5 * uPx.x, uv.y)) +
+          texture(uIn_input, vec2(1.0 - 0.5 * uPx.x, uv.y))
+        ) * 0.5;
+        float b = max(u_band, 1e-4);
+        if (uv.x < b) {
+          c = mix(c, mid, 0.5 + 0.5 * cos(PI * uv.x / b));
+        } else if (uv.x > 1.0 - b) {
+          c = mix(c, mid, 0.5 + 0.5 * cos(PI * (1.0 - uv.x) / b));
+        }
+        return c;
+      }`,
+    body: /* glsl */ `
+      vec4 nodeColor(vec2 uv) {
+        if (!u_enabled) return texture(uIn_input, uv);
+        if (u_mode == 1) {
+          vec2 p = vec2(
+            uv.x < 0.5 ? uv.x + 0.5 : 1.5 - uv.x,
+            uv.y < 0.5 ? uv.y + 0.5 : 1.5 - uv.y
+          );
+          return texture(uIn_input, p);
+        }
+        vec4 h = seamH(uv);
+        vec4 vmid = (
+          seamH(vec2(uv.x, 0.5 * uPx.y)) +
+          seamH(vec2(uv.x, 1.0 - 0.5 * uPx.y))
+        ) * 0.5;
+        float b = max(u_band, 1e-4);
+        if (uv.y < b) {
+          h = mix(h, vmid, 0.5 + 0.5 * cos(PI * uv.y / b));
+        } else if (uv.y > 1.0 - b) {
+          h = mix(h, vmid, 0.5 + 0.5 * cos(PI * (1.0 - uv.y) / b));
+        }
+        return h;
+      }`
   }
 ]

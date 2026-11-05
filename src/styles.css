@@ -2282,3 +2282,172 @@ code {
   color: var(--accent);
 }
 
+/* -------------------------------------------------------- image → PBR import */
+.ipbr-file {
+  display: none;
+}
+.ipbr-sub {
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+.ipbr-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 46px 24px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  text-align: center;
+  transition: border-color 0.15s, background 0.15s;
+}
+.ipbr-drop.over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.ipbr-drop-icon {
+  font-size: 34px;
+  line-height: 1;
+  color: var(--text-faint);
+}
+.ipbr-drop-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+.ipbr-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 16px;
+  align-items: start;
+}
+.ipbr-previews {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  min-width: 0;
+}
+.ipbr-preview {
+  min-width: 0;
+}
+.ipbr-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  letter-spacing: 0.3px;
+}
+.ipbr-canvas {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0a0c10;
+  image-rendering: auto;
+}
+.ipbr-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-width: 0;
+}
+.ipbr-row {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.ipbr-row.dim {
+  opacity: 0.45;
+}
+.ipbr-row label {
+  color: var(--text-dim);
+}
+.ipbr-row select {
+  width: 100%;
+}
+.ipbr-replace {
+  grid-column: 3;
+  white-space: nowrap;
+}
+.ipbr-switch {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+}
+.ipbr-range {
+  width: 100%;
+  accent-color: var(--accent);
+}
+.ipbr-value {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  min-width: 34px;
+  text-align: right;
+}
+.ipbr-mode-hint {
+  line-height: 1.45;
+  min-height: 30px;
+}
+.ipbr-channels {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
+}
+.ipbr-channels-title {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.ipbr-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ipbr-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  font-size: 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 0.12s, color 0.12s, background 0.12s;
+}
+.ipbr-chip.on {
+  border-color: rgba(242, 165, 65, 0.55);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.ipbr-chip input {
+  accent-color: var(--accent);
+  margin: 0;
+}
+.ipbr-error {
+  margin-top: 12px;
+  color: var(--red);
+  font-size: 12px;
+}
+.ipbr-actions {
+  display: flex;
+  gap: 8px;
+}
+@media (max-width: 860px) {
+  .ipbr-workspace {
+    grid-template-columns: 1fr;
+  }
+}
+
+
