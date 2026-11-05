@@ -1,30 +1,44 @@
 #!/usr/bin/env node
-// End-to-end test for the Substrate MCP integration.
-//
-// Prerequisites: the studio server (npm start) is running and a browser tab with the studio is
-// open so the MCP gateway can execute tools in the WebGL app.
-// Run: npm run test:mcp
+/**
+ * Substrate MCP 集成的端到端测试。
+ *
+ * 前提条件：Substrate 服务器（npm start）已运行，并且有一个打开了设计器的浏览器标签页，
+ * 这样 MCP 网关才能在 WebGL 应用里执行工具。
+ *
+ * 覆盖范围：HTTP 健康检查与工具目录、stdio 传输的 JSON-RPC 逻辑、各类工具的调用与错误归一化、
+ * HTTP 传输、自检端点、LLM 网关（密钥遮蔽）、在线素材搜索与 SSRF 防护、素材库 CRUD。
+ *
+ * 运行：npm run test:mcp
+ */
 import { existsSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { handleMessage } from '../mcp/server.mjs'
 import { sanitizeToolSequence } from '../server/llm.mjs'
 
+// 被测服务器地址（去掉末尾斜杠，方便拼接路径）
 const BASE = (process.env.SUBSTRATE_URL || 'http://127.0.0.1:3000').replace(/\/$/, '')
 const results = []
 let failed = 0
 let skipped = 0
+/** 记录一条断言；失败时打印原因并累加失败计数。 */
 function check(name, pass, info = '') {
   results.push({ name, pass: !!pass, info: pass ? '' : String(info) })
   if (!pass) failed++
   console.log(`${pass ? 'PASS' : 'FAIL'}  ${name}${pass ? '' : ' — ' + info}`)
 }
+/** 记录一条「跳过」的用例；跳过不算失败（例如缺少可选环境变量或沙箱禁止子进程）。 */
 function skip(name, reason) {
   skipped++
   results.push({ name, pass: true, skip: true })
   console.log(`SKIP  ${name} — ${reason}`)
 }
 
+/**
+ * 发送 JSON 请求并解析响应。
+ * 响应不是合法 JSON 时抛错（测试中这本身就说明服务端行为异常）。
+ * @returns {Promise<{status: number, body: any}>}
+ */
 async function httpJSON(pathname, opts = {}) {
   const res = await fetch(BASE + pathname, { ...opts, headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) } })
   const text = await res.text()
@@ -37,10 +51,11 @@ async function httpJSON(pathname, opts = {}) {
   return { status: res.status, body }
 }
 
-// The stdio server logic is imported directly: the sandbox used for development forbids
-// child_process.spawn, but handleMessage() is exactly what the stdio transport calls.
+// 直接导入 stdio 服务端逻辑：开发沙箱禁止 child_process.spawn，
+// 但 handleMessage() 正是 stdio 传输层实际调用的函数，所以可以直接在进程内测试。
 let seq = 0
 const request = (method, params) => handleMessage({ jsonrpc: '2.0', id: ++seq, method, params })
+/** 从 tools/call 的返回中取出第一段文本并解析为 JSON；失败返回 null。 */
 const toolText = (result) => {
   const text = result?.result?.content?.[0]?.text
   if (!text) return null
@@ -51,8 +66,14 @@ const toolText = (result) => {
   }
 }
 
+/**
+ * 真实 stdio 帧格式的冒烟测试（仅在允许创建子进程时执行）：
+ * 启动 mcp/server.mjs，向 stdin 写入一行 initialize 请求，然后从 stdout 逐行解析 JSON，
+ * 直到收到 id=1 的响应为止；超过 15 秒未响应则判定为超时。
+ * 目的是验证「按行分隔的 JSON-RPC」这一真实传输格式，而不仅是进程内调用。
+ */
 async function stdioFramingSmokeTest() {
-  // validate the real newline-delimited JSON-RPC framing when spawning is permitted
+  // 在允许 spawn 的环境中验证真实的换行分隔 JSON-RPC 帧格式
   return new Promise((resolve) => {
     let proc
     try {
@@ -65,7 +86,7 @@ async function stdioFramingSmokeTest() {
       try {
         proc.kill()
       } catch (e) {
-        /* ignore */
+        /* 忽略：进程可能已经退出 */
       }
       resolve({ ok: false, error: 'timeout' })
     }, 15000)
@@ -80,12 +101,12 @@ async function stdioFramingSmokeTest() {
             try {
               proc.kill()
             } catch (e) {
-              /* ignore */
+              /* 忽略：进程可能已经退出 */
             }
             resolve({ ok: msg.result?.serverInfo?.name === 'substrate-texture-designer', msg })
           }
         } catch (e) {
-          /* wait for a complete line */
+          /* 等待一整行 JSON 收齐后再解析 */
         }
       }
     })
@@ -106,12 +127,14 @@ async function stdioFramingSmokeTest() {
 }
 
 async function main() {
+  // ---- 健康检查：服务器可达、MCP 网关版本、是否有浏览器标签页连上桥接 ----
   const health = await httpJSON('/api/health')
   check('health: server reachable', health.body?.ok === true, JSON.stringify(health.body))
   check('health: mcp gateway exposes apiVersion', !!health.body?.mcp?.apiVersion, JSON.stringify(health.body?.mcp))
   const connected = health.body?.mcp?.connectedClients || 0
   check('bridge: app tab connected', connected > 0, `${connected} client(s) — open http://127.0.0.1:3000`)
 
+  // ---- 工具目录：数量、版本与关键工具是否齐全 ----
   const catalog = await httpJSON('/api/mcp/tools')
   check('catalog: tools listed', Array.isArray(catalog.body?.tools) && catalog.body.tools.length >= 25, `${catalog.body?.tools?.length}`)
   check('catalog: api version', catalog.body?.apiVersion === '1.0.0', catalog.body?.apiVersion)
@@ -120,7 +143,8 @@ async function main() {
     check(`catalog: includes ${expected}`, names.includes(expected))
   }
 
-  // ---------------------------------------------------------------- stdio transport logic
+  // ---------------------------------------------------------------- stdio 传输逻辑
+  // 直接在进程内调用 handleMessage，覆盖 initialize / tools/list / tools/call 及各类错误路径
   const init = await request('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'substrate-mcp-test', version: '1.0.0' } })
   check('stdio: initialize', init.result?.serverInfo?.name === 'substrate-texture-designer', JSON.stringify(init))
   check('stdio: capabilities.tools', init.result?.capabilities?.tools !== undefined)
@@ -160,7 +184,7 @@ async function main() {
   const res = toolText(await request('tools/call', { name: 'substrate_set_resolution', arguments: { resolution: 512, proxy: 1 } }))
   check('stdio: set_resolution', res?.ok === true && res.data.resolution === 512, JSON.stringify(res?.data))
 
-  // painting needs a material that actually has a paint layer
+  // 绘制需要材质里存在绘制层，所以先切到 painted-sign 示例再落笔
   await request('tools/call', { name: 'substrate_load_demo', arguments: { id: 'painted-sign' } })
   const painted = toolText(
     await request('tools/call', {
@@ -201,7 +225,7 @@ async function main() {
     try {
       rmSync(dir, { recursive: true, force: true })
     } catch (e) {
-      /* cleanup is best effort */
+      /* 清理失败不影响测试结论 */
     }
   }
 
@@ -216,12 +240,13 @@ async function main() {
   const ping = await request('ping', {})
   check('stdio: ping', !!ping.result)
 
-  // real stdio framing (spawn) — skipped automatically where the sandbox forbids child processes
+  // 真实 stdio 帧格式（spawn）——沙箱禁止子进程时会自动跳过
   const framing = await stdioFramingSmokeTest()
   if (framing.skipped) skip('stdio: newline JSON-RPC framing (spawn)', framing.skipped)
   else check('stdio: newline JSON-RPC framing (spawn)', framing.ok, JSON.stringify(framing.msg || framing.error))
 
-  // ---------------------------------------------------------------- HTTP transports
+  // ---------------------------------------------------------------- HTTP 传输
+  // 覆盖 /mcp（标准 JSON-RPC）与 /api/mcp/call（简化信封）两条入口，以及未知方法的错误码
   const httpInit = await httpJSON('/mcp', { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } }) })
   check('http: /mcp initialize', httpInit.body?.result?.serverInfo?.name === 'substrate-texture-designer', JSON.stringify(httpInit.body))
   const httpList = await httpJSON('/mcp', { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }) })
@@ -236,12 +261,12 @@ async function main() {
   const directInvalid = await httpJSON('/api/mcp/call', { method: 'POST', body: JSON.stringify({ name: 'substrate_load_demo', arguments: { id: 'nope' } }) })
   check('http: /api/mcp/call normalized error', directInvalid.body?.ok === false && directInvalid.body.error.code === 'INVALID_ARGUMENT', JSON.stringify(directInvalid.body))
 
-  // ---------------------------------------------------------------- MCP self-check endpoint
+  // ---------------------------------------------------------------- MCP 自检端点
   const selfcheck = await httpJSON('/api/mcp/selfcheck')
   check('selfcheck: endpoint ok', selfcheck.body?.ok === true, JSON.stringify(selfcheck.body?.totals || selfcheck.body))
   check('selfcheck: reports bridge', (selfcheck.body?.checks || []).some((c) => c.name.includes('bridge') && c.ok), JSON.stringify(selfcheck.body?.checks))
 
-  // ---------------------------------------------------------------- LLM gateway (no secrets in responses)
+  // ---------------------------------------------------------------- LLM 网关（响应中不得泄露密钥）
   const models = await httpJSON('/api/llm/models')
   check('llm: models listed', models.body?.ok === true && (models.body.models || []).length >= 1, JSON.stringify(models.body?.error))
   check('llm: no API key leaked', !/sk-[A-Za-z0-9_-]{8,}/.test(JSON.stringify(models.body)), 'key material found in /api/llm/models')
@@ -249,8 +274,7 @@ async function main() {
   const chatInvalid = await httpJSON('/api/llm/chat', { method: 'POST', body: JSON.stringify({ modelKey: models.body?.defaultModel, messages: [] }) })
   check('llm: chat validates empty messages', chatInvalid.body?.ok === false && chatInvalid.body.error.code === 'INVALID_ARGUMENT', JSON.stringify(chatInvalid.body))
 
-  // Provider CRUD must not mutate the user's local provider config in a test run: only validate
-  // error paths and masking here.
+  // 供应商 CRUD 在测试中不能改动用户本地配置：这里只验证错误路径与遮蔽逻辑。
   const invalidProvider = await httpJSON('/api/llm/providers', { method: 'POST', body: JSON.stringify({ label: 'No models' }) })
   check('llm: provider validation rejects missing models', invalidProvider.body?.ok === false, JSON.stringify(invalidProvider.body))
   const unknownProviderDelete = await httpJSON('/api/llm/providers/delete', { method: 'POST', body: JSON.stringify({ id: '__does_not_exist__' }) })
@@ -268,7 +292,7 @@ async function main() {
     skip('llm: live chat call', 'set SUBSTRATE_TEST_LLM=1 to call the configured provider')
   }
 
-  // ---------------------------------------------------------------- AI rules + online asset tools
+  // ---------------------------------------------------------------- AI 规则 + 在线素材工具
   const rules = await httpJSON('/api/llm/rules')
   check('ai: rules endpoint', rules.body?.ok === true && (rules.body.rules || []).length >= 5, JSON.stringify(rules.body))
   check(
@@ -277,8 +301,8 @@ async function main() {
       (rules.body?.rules || []).some((r) => /API keys|environment/i.test(r)),
     JSON.stringify(rules.body?.rules)
   )
-  // Regression: every assistant tool_calls message needs one tool reply per call, otherwise the
-  // provider rejects the next request (OpenAI 400 "insufficient tool messages").
+  // 回归用例：assistant 的 tool_calls 中每个调用都必须有对应的 tool 回复，
+  // 否则下一次请求会被供应商拒绝（OpenAI 400 "insufficient tool messages"）。
   const incomplete = sanitizeToolSequence([
     { role: 'system', content: 's' },
     { role: 'assistant', content: null, tool_calls: [{ id: 'a' }, { id: 'b' }] },
@@ -296,7 +320,7 @@ async function main() {
   ])
   check('llm: complete tool turn preserved', complete.length === 3 && complete[0].tool_calls?.length === 2, JSON.stringify(complete))
 
-  // Calling conventions / attachment asset tools
+  // 调用约定 / 附件素材相关工具
   const catalogNow = await httpJSON('/api/mcp/tools')
   const toolsNow = catalogNow.body?.tools || []
   check('mcp: 32 tools catalogued', toolsNow.length === 32, String(toolsNow.length))
@@ -382,7 +406,7 @@ async function main() {
   const proto = await httpJSON('/api/assets/import-url', { method: 'POST', body: JSON.stringify({ url: 'file:///etc/passwd' }) })
   check('assets: URL import rejects non-http schemes', proto.body?.ok === false, JSON.stringify(proto.body))
 
-  // ---------------------------------------------------------------- material library CRUD
+  // ---------------------------------------------------------------- 素材库 CRUD
   const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAFUlEQVR42mP8z8BQz0AEYBxVSF+FABJADveWkH6oAAAAAElFTkSuQmCC'
   const assetImport = await httpJSON('/api/assets/import', { method: 'POST', body: JSON.stringify({ name: 'mcp-test.png', dataUrl: tinyPng }) })
   check('assets: import', assetImport.body?.ok === true && !!assetImport.body.asset?.id, JSON.stringify(assetImport.body?.error))

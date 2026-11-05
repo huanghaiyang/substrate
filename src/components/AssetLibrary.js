@@ -1,3 +1,18 @@
+// ============================================================================
+// AssetLibrary —— 素材库弹窗（工程/图片/.sbsar 归档管理）
+//
+// 界面位置：主界面工具栏「素材库」按钮打开的大尺寸模态框，底部还有入口进入回收站。
+//
+// 三类内容：
+//  1. 普通图片：可一键用作贴图输入节点，或填入绘制图层；
+//  2. .sbsar 归档：服务端解析出「接口」（图、参数、输出、内嵌资源），可展开查看、
+//     编辑参数、调用本地原生引擎烘焙，或用预览图做近似重建；
+//  3. 在线搜索结果：从外部图库搜索并导入（自动记录授权信息）。
+//
+// 与 engine 的交互：建节点/接线/写参数全部走 engine/store.js（addNode / setNodeImage /
+// addConnection / setParam / requestEval），图数据在浏览器内存中实时同步；
+// .sbsar 子资源与烘焙则通过本机服务端 HTTP 接口（/api/assets*、/api/sbsar/bake*）完成。
+// ============================================================================
 import { defineComponent, ref, onMounted, computed } from 'vue'
 import { state, nodeById, addNode, setNodeImage, commitStroke, addConnection, disconnectInput, setParam, outputNode, requestEval, graphJSON, loadGraph } from '../engine/store.js'
 import { analyzePreview, buildReconstructionProject } from '../engine/reconstruct.js'
@@ -6,9 +21,13 @@ import { t } from '../i18n/index.js'
 import JsonViewer from './JsonViewer.js'
 import SbsarParams from './SbsarParams.js'
 
-// .sbsar parameter overrides live in localStorage keyed by archive asset id: the archive interface is
-// stable, so a hash isn't needed here, and the values are small.
+// .sbsar 的参数覆盖值按「归档素材 id」存进 localStorage：
+// 归档接口是稳定的，因此不需要哈希；数据量也很小。
 const PARAM_STORAGE_KEY = 'substrate.sbsar.params'
+/**
+ * 读取所有归档的参数覆盖值。
+ * @returns {Object<string, Object<string, string>>} 解析失败时返回空对象
+ */
 function loadParamValues() {
   try {
     const raw = localStorage.getItem(PARAM_STORAGE_KEY)
@@ -18,11 +37,16 @@ function loadParamValues() {
     return {}
   }
 }
+/**
+ * 持久化参数覆盖值。
+ * @param {Object<string, Object<string, string>>} values
+ * @returns {void} 配额不足/隐私模式下静默失败（覆盖值只是不持久，不影响当前会话）
+ */
 function saveParamValues(values) {
   try {
     localStorage.setItem(PARAM_STORAGE_KEY, JSON.stringify(values || {}))
   } catch (e) {
-    /* quota / private mode: overrides simply don't persist */
+    /* 配额或隐私模式：覆盖值直接不持久化 */
   }
 }
 
@@ -31,26 +55,42 @@ export default defineComponent({
   components: { JsonViewer, SbsarParams },
   emits: ['close'],
   setup(_props, { emit }) {
+    /** 当前素材列表（含 .sbsar 归档及其子资源） */
     const assets = ref([])
+    /** 操作结果提示文案 */
     const status = ref('')
     const loading = ref(true)
+    /** 隐藏的主导入文件框（图片 + .sbsar） */
     const fileInput = ref(null)
+    /** 有耗时操作进行中时禁用按钮 */
     const busy = ref(false)
     const searchQuery = ref('')
     const searching = ref(false)
+    /** 在线搜索结果 */
     const searchResults = ref([])
     const searchError = ref('')
+    /** 非致命提示（例如服务端退化为本地检索） */
     const searchWarning = ref('')
+    /** 隐藏的 .sbsar 导入文件框 */
     const sbsarInput = ref(null)
+    /** 当前展开详情的 .sbsar 归档 id；空字符串表示全部收起 */
     const expanded = ref('')
-    const pbrInput = ref(null)     // hidden file input for a PBR map set
+    const pbrInput = ref(null) // 隐藏文件框：一次选择整套 PBR 通道贴图
+    /** 近似重建进行中 */
     const reconstructing = ref(false)
+    /** 本地引擎烘焙进行中 */
     const baking = ref(false)
+    /** 烘焙后端状态：loading / available / reason / installUrl / sbsrender 路径 */
     const bake = ref({ loading: true, available: false, reason: '', installUrl: '' })
-    const jsonTarget = ref(null)   // sbsar asset whose inspection report is open in the JSON viewer
-    const lightbox = ref(null)     // { url, name, width, height, bytes } previewed image
+    const jsonTarget = ref(null) // 正在用 JSON 查看器打开解析报告的归档
+    const lightbox = ref(null) // { url, name, width, height, bytes } 放大预览的图片
+    /**
+     * PBR 通道识别表。顺序很重要：先匹配到的规则生效，
+     * 因此通用规则（如 _r）要放在更具体的规则之后。
+     * mode 对应贴图输入节点的 channelMode（0=颜色，3=数据）。
+     */
     const PBR_CHANNELS = [
-      // order matters: first match wins
+      // 顺序很重要：先匹配到的规则生效
       { port: 'basecolor', mode: 0, re: /(base ?colou?r|albedo|diffuse|_diff|_bc\b|^colou?r)/i },
       { port: 'normal', mode: 3, re: /(normal|_nor\b|_nrm\b|_n\b|norm)/i },
       { port: 'roughness', mode: 3, re: /(rough|_r\b|rgh)/i },
@@ -60,15 +100,26 @@ export default defineComponent({
       { port: 'emissive', mode: 0, re: /(emiss|glow)/i },
       { port: 'opacity', mode: 3, re: /(opacity|alpha|_mask\b)/i }
     ]
-    /** which PBR channel a file name refers to (null = unknown) */
+    /**
+     * 根据文件名推断它属于哪个 PBR 通道。
+     * @param {string} name 文件名（可带扩展名）
+     * @returns {object|null} 命中的通道定义；无法识别时为 null
+     */
     const detectChannel = (name) => {
       const base = String(name || '').replace(/\.[a-z0-9]+$/i, '')
       for (const c of PBR_CHANNELS) if (c.re.test(base)) return c
       return null
     }
+    /** 打开 PBR 贴图集选择框 */
     const openPbrPicker = () => pbrInput.value?.click()
 
-    /** wire already-imported maps into the PBR Output: entries = [{ name, dataUrl, channel? }] */
+    /**
+     * 把（已导入的）贴图接到 PBR 输出节点：每个通道建一个 image_input 节点并连线。
+     * 同一通道出现多张时只取第一张，其余记入 skipped；无法识别的文件同样跳过。
+     * @param {Array<{name:string,dataUrl:string,channel?:string}>} entries 贴图条目
+     * @returns {Promise<{channels:string[], skipped:string[]}>} 已接上的通道与跳过的文件
+     * @throws {Error} 图中没有 PBR 输出节点时抛出
+     */
     async function applyMapEntries(entries) {
       const out = outputNode()
       if (!out) throw new Error(t('assets.pbrNoOutput'))
@@ -88,6 +139,7 @@ export default defineComponent({
       }
       let row = 0
       for (const [port, { ch, entry }] of found) {
+        // 节点依次排在输出节点左侧，按行错开避免互相遮挡
         const node = addNode('image_input', { x: out.x - 640, y: out.y - 320 + row * 190 })
         row++
         if (!node) continue
@@ -101,6 +153,11 @@ export default defineComponent({
       return { channels: [...found.keys()], skipped }
     }
 
+    /**
+     * 读取 Blob 内容并转成 dataURL。
+     * @param {Blob} blob
+     * @returns {Promise<string>}
+     */
     const blobToDataUrl = (blob) =>
       new Promise((resolve, reject) => {
         const reader = new FileReader()
@@ -109,6 +166,7 @@ export default defineComponent({
         reader.readAsDataURL(blob)
       })
 
+    /** 查询本地烘焙后端是否可用（sbsrender 是否安装），失败时按不可用处理 */
     async function refreshBakeStatus() {
       try {
         const r = await fetch('/api/sbsar/bake/status')
@@ -120,12 +178,16 @@ export default defineComponent({
     }
 
     /**
-     * Bake through the *local* Adobe engine (SAT sbsrender) and wire the results. The engine is native
-     * and per-user licensed, so it cannot ship as WebAssembly: the browser asks the local studio server
-     * to run it. Without SAT the button explains what to install instead of pretending.
+     * 通过本地 Adobe 引擎（SAT sbsrender）烘焙并把结果接进图中。
+     * 该引擎是原生程序且按用户授权，无法以 WebAssembly 形式随应用分发，
+     * 因此由浏览器请求本机 studio 服务端代为执行。没有 SAT 时按钮会说明需要安装什么，
+     * 而不是伪造一个预览。
      *
-     * `paramOverrides` is the parameter workbench's draft: every changed input is forwarded as a
-     * `--set-value` override, which is what makes "edit" real rather than cosmetic.
+     * paramOverrides 是参数工作台提交的草稿：所有被改动的输入都会作为
+     * `--set-value` 覆盖项转发给引擎，这才让「编辑」具有真实效果。
+     * @param {object} asset 归档素材
+     * @param {Object<string,string>|null} [paramOverrides] 参数覆盖值
+     * @returns {Promise<void>}
      */
     async function bakeInApp(asset, paramOverrides = null) {
       if (baking.value) return
@@ -161,31 +223,44 @@ export default defineComponent({
       }
     }
 
-    // ---- .sbsar parameter workbench -------------------------------------------------------------
-    // The archive interface is fully readable without Adobe's engine, so parameter edits are stored
-    // per asset and forwarded to the native baker. There is deliberately no fake browser preview:
-    // real pixels require the engine (see docs/reports/sbsar-engine-re/REPORT.md).
+    // ---- .sbsar 参数工作台 -----------------------------------------------------
+    // 归档的接口部分无需 Adobe 引擎即可完整读取，因此参数编辑按素材分别存储，
+    // 再转发给原生烘焙器。这里刻意不做「假的浏览器预览」：
+    // 真实像素必须依赖引擎（参见 docs/reports/sbsar-engine-re/REPORT.md）。
+    /** 当前打开参数工作台的归档 */
     const paramTarget = ref(null)
+    /** 全部归档的参数覆盖值（初始化自 localStorage） */
     const paramValues = ref(loadParamValues())
-    /** count of overridden (non-default) inputs per archive id */
+    /** 某个归档被改动（非默认值）的参数数量，用于卡片角标 */
     function changedParamCount(asset) {
       const overrides = paramValues.value[asset.id] || {}
       const params = asset.inspection?.parameters || []
       return params.filter((p) => overrides[p.id] !== undefined && String(overrides[p.id]) !== String(p.default)).length
     }
+    /** 打开某归档的参数编辑工作台 */
     function openParams(asset) {
       paramTarget.value = asset
     }
+    /**
+     * 保存参数草稿：工作台提交的是完整草稿（其初始值就是已存覆盖值），
+     * 因此直接整体替换是正确的 —— 恢复某项默认值会删除对应覆盖项，
+     * 不会残留旧值。
+     * @param {Object<string,string>} draft 参数 id → 值
+     */
     function applyParamDraft(draft) {
       if (!paramTarget.value) return
       const id = paramTarget.value.id
       const next = { ...(paramValues.value || {}) }
-      // the panel always holds the complete draft (it starts from the stored overrides), so replacing
-      // is correct: resetting an input removes its override instead of leaving a stale one behind
+      // 工作台始终持有完整草稿（初始值就是已存覆盖值），因此这里整体替换是正确的：
+      // 恢复某项默认值会移除对应覆盖项，而不会残留旧值
       next[id] = { ...(draft || {}) }
       paramValues.value = next
       saveParamValues(next)
     }
+    /**
+     * 参数工作台点击「烘焙」：保存草稿、关闭工作台，再用覆盖值请求真实烘焙。
+     * @param {Object<string,string>} draft
+     */
     function onParamsBake(draft) {
       applyParamDraft(draft)
       const asset = paramTarget.value
@@ -194,9 +269,11 @@ export default defineComponent({
     }
 
     /**
-     * Import a baked PBR map set (basecolor/normal/roughness/…), register every file as an asset and
-     * wire one Texture Input per channel into the PBR Output. This is the practical end of the
-     * ".sbsar → real PBR" pipeline: the maps have to be baked by Adobe's engine first.
+     * 导入一整套已烘焙的 PBR 贴图（basecolor/normal/roughness/…），
+     * 把每个文件注册为素材，并按通道各建一个贴图输入节点接入 PBR 输出。
+     * 这是「.sbsar → 真实 PBR」流程的实操终点：贴图需要先由 Adobe 引擎烘焙出来。
+     * @param {Event} event 文件选择框的 change 事件
+     * @returns {Promise<void>}
      */
     async function onPbrSet(event) {
       const files = [...(event.target?.files || [])]
@@ -234,12 +311,15 @@ export default defineComponent({
       }
     }
 
+    /** 打开某归档的 JSON 解析报告查看器 */
     const openJson = (asset) => (jsonTarget.value = asset)
 
     /**
-     * Approximate reconstruction: a .sbsar has no node graph to port (it is compiled into .sbsasm),
-     * so we measure its embedded preview render and build a tileable procedural material that
-     * reproduces that look. The result is a new project, loaded immediately.
+     * 近似重建：.sbsar 里没有可移植的节点图（它被编译成 .sbsasm），
+     * 因此改为分析归档内嵌的预览渲染图，再生成一个外观相近、可平铺的程序化材质工程，
+     * 结果作为新工程立即载入。
+     * @param {object} asset .sbsar 归档素材
+     * @returns {Promise<void>}
      */
     async function reconstruct(asset) {
       if (reconstructing.value) return
@@ -264,7 +344,7 @@ export default defineComponent({
             resolution: state.resolution || 1024
           }
         })
-        // keep whatever the user was working on
+        // 保留用户当前正在编辑的工程（先尽力自动保存一份快照）
         try {
           await fetch('/api/projects/save', {
             method: 'POST',
@@ -278,7 +358,7 @@ export default defineComponent({
             })
           })
         } catch (e) {
-          /* best effort */
+          /* 尽力而为，失败不阻塞重建 */
         }
         const saved = await fetch('/api/projects/save', {
           method: 'POST',
@@ -299,7 +379,9 @@ export default defineComponent({
         reconstructing.value = false
       }
     }
+    /** 打开图片放大预览 */
     const openLightbox = (img) => (lightbox.value = img)
+    /** 关闭放大预览 */
     const closeLightbox = () => (lightbox.value = null)
     /** 资源类型标签：按扩展名给出可读种类（图片/描述符/程序集/其他） */
     const entryKind = (name) => {
@@ -310,13 +392,23 @@ export default defineComponent({
       if (n.endsWith('.json')) return 'json'
       return 'other'
     }
+    /**
+     * 格式化字节数为 KB / MB（不足 1KB 也显示 1KB）。
+     * @param {number} n 字节数
+     * @returns {string}
+     */
     const fmtBytes = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB')
-    /** 接口图布局：参数分组 → 图 → 输出通道（节点拓扑在 .sbsasm 里，不可还原） */
+    /**
+     * 推导「接口图」的布局数据：参数分组 → 图 → 输出通道。
+     * 节点拓扑本身在 .sbsasm 里，无法还原，所以这里只画接口层。
+     * @param {object} a 归档素材
+     * @returns {{groupList:Array<{name:string,count:number}>, outs:string[]}}
+     */
     const interfaceLayout = (a) => {
       const ins = a.inspection || {}
       let groupList
       if (ins.parameterGroups && ins.parameterGroups.length) {
-        // server-side histogram over all parameters (the inline list is truncated)
+        // 服务端已对全部参数做过直方图统计（内联参数列表被截断过，不能直接数）
         groupList = ins.parameterGroups.slice(0, 14).map((g) => ({ name: g.name, count: g.count }))
       } else {
         const groups = new Map()
@@ -330,6 +422,11 @@ export default defineComponent({
       return { groupList, outs }
     }
 
+    /**
+     * 在线搜索素材：请求本机服务端的聚合搜索接口（最多 12 条）。
+     * 服务端可能降级到本地索引（fallback），此时用 searchWarning 提示而非报错。
+     * @returns {Promise<void>}
+     */
     async function searchOnline() {
       const q = String(searchQuery.value || '').trim()
       if (!q) return
@@ -352,6 +449,12 @@ export default defineComponent({
         searching.value = false
       }
     }
+    /**
+     * 导入一条在线搜索结果：服务端按 URL 下载并登记素材，
+     * 同时保存来源（provider/creator/license）以便后续追溯授权。
+     * @param {object} result 搜索结果项（需含 downloadUrl）
+     * @returns {Promise<void>}
+     */
     async function importSearchResult(result) {
       if (!result?.downloadUrl) return
       busy.value = true
@@ -380,6 +483,12 @@ export default defineComponent({
       }
     }
 
+    /**
+     * 重新拉取素材列表。
+     * 若当前没有展开任何归档且只有 1 个 .sbsar，则自动展开它，
+     * 让用户一进来就能看到接口图与归档内容。
+     * @returns {Promise<void>}
+     */
     async function load() {
       loading.value = true
       try {
@@ -390,19 +499,27 @@ export default defineComponent({
         status.value = String(e.message || e)
       } finally {
         loading.value = false
-        // auto-open a single archive so its interface map / contents are visible right away
+        // 只有一个归档时自动展开，方便立刻看到接口图 / 内容
         const archives = assets.value.filter((a) => a.kind === 'sbsar')
         if (!expanded.value && archives.length === 1) expanded.value = archives[0].id
       }
     }
+    /** 打开主导入文件框（图片 json 与 .sbsar） */
     function openPicker() {
       fileInput.value?.click()
     }
+    /** 打开 .sbsar 专用导入文件框 */
     function openSbsarPicker() {
       sbsarInput.value?.click()
     }
 
-    /** .sbsar import: metadata + embedded bitmaps (the graph itself needs Adobe's engine, see note) */
+    /**
+     * 导入单个 .sbsar：读取成 dataURL 交给服务端解析。
+     * 服务端会抽取出元数据与内嵌位图（节点图本身仍需 Adobe 引擎，见界面提示）。
+     * @param {File} file .sbsar 文件
+     * @returns {Promise<string>} 供状态栏显示的摘要文案
+     * @throws {Error} 解析失败时抛出
+     */
     async function importSbsarFile(file) {
       const data = await new Promise((resolve, reject) => {
         const reader = new FileReader()
@@ -422,6 +539,11 @@ export default defineComponent({
       return `${file.name}: ${ins.container} · ${(ins.graphs || []).length} 图 · ${ins.parameterCount || 0} 参数 · ${ins.imageCount || 0} 图片`
     }
 
+    /**
+     * .sbsar 文件选择框 change：批量导入并汇总每个文件的解析摘要。
+     * @param {Event} event
+     * @returns {Promise<void>}
+     */
     async function onSbsarFile(event) {
       const files = [...(event.target?.files || [])]
       event.target.value = ''
@@ -439,13 +561,27 @@ export default defineComponent({
       }
     }
 
+    /**
+     * 切换归档的展开/收起状态。
+     * @param {object} asset 归档素材
+     */
     const toggleExpand = (asset) => {
       expanded.value = expanded.value === asset.id ? '' : asset.id
     }
+    /**
+     * 取某个归档的所有子资源（.sbsar 内嵌图片）。
+     * @param {object} asset 归档素材
+     * @returns {Array<object>}
+     */
     const childAssets = (asset) => assets.value.filter((a) => a.parentId === asset.id)
+    /**
+     * 把参数格式化为一行可读描述：种类 / 默认值 / 范围 / 枚举。
+     * @param {object} p 参数项
+     * @returns {string}
+     */
     const fmtParam = (p) => {
       const bits = []
-      // real sbsar: label/group/kind come from <inputgui> + widget; older/synthetic: raw type code
+      // 真实 sbsar：label/group/kind 来自 <inputgui> 与 widget；旧的/合成数据：只有原始类型码
       if (p.kind && p.kind !== 'other') bits.push(p.kind)
       else if (p.type) bits.push('type ' + p.type)
       if (p.default !== null && p.default !== undefined && p.default !== '') bits.push('= ' + p.default)
@@ -453,6 +589,12 @@ export default defineComponent({
       if (p.enumItems && p.enumItems.length) bits.push('{' + p.enumItems.slice(0, 4).join(' | ') + (p.enumItems.length > 4 ? ' | …' : '') + '}')
       return bits.join(' · ')
     }
+    /**
+     * 主导入框 change：逐个体处理，.sbsar 走归档解析，其余只接受 PNG/JPEG/WebP 图片。
+     * 任一个文件失败即中断并显示错误（已成功的仍保留）。
+     * @param {Event} event 文件选择框的 change 事件
+     * @returns {Promise<void>}
+     */
     async function onFile(event) {
       const files = [...(event.target?.files || [])]
       event.target.value = ''
@@ -490,6 +632,11 @@ export default defineComponent({
       }
     }
 
+    /**
+     * 下载素材文件并转成 dataURL（贴图节点需要内联数据，不能只存 URL）。
+     * @param {object} asset 素材
+     * @returns {Promise<string>} dataURL
+     */
     async function assetDataUrl(asset) {
       const res = await fetch(asset.url)
       const blob = await res.blob()
@@ -501,6 +648,12 @@ export default defineComponent({
       })
     }
 
+    /**
+     * 把素材用作贴图：优先写入当前选中的贴图输入节点，没有则复用第一个，仍没有就新建。
+     * .sbsar 的内嵌预览图会额外提示「仅供近似参考」。
+     * @param {object} asset 素材
+     * @returns {Promise<void>}
+     */
     async function useAsTexture(asset) {
       busy.value = true
       try {
@@ -522,6 +675,12 @@ export default defineComponent({
       }
     }
 
+    /**
+     * 把素材作为图案填充到绘制图层：先加载图案，再提交一条 fill 笔画（可撤销），
+     * 并记录来源素材 id 以便追踪引用关系。
+     * @param {object} asset 素材
+     * @returns {Promise<void>}
+     */
     async function useInPaint(asset) {
       const paintNode = state.graph.nodes.find((n) => n.type === 'paint')
       if (!paintNode) {
@@ -541,6 +700,12 @@ export default defineComponent({
       }
     }
 
+    /**
+     * 把素材移入回收站（不是真正删除，可从回收站恢复）。
+     * 若素材仍被工程引用则拒绝删除，并列出引用它的工程名。
+     * @param {object} asset 素材
+     * @returns {Promise<void>}
+     */
     async function removeAsset(asset) {
       if (isAssetLocked(asset)) {
         status.value = t('assets.deleteBlocked', { list: usageLabel(assetUsage(asset)) })
@@ -570,6 +735,11 @@ export default defineComponent({
       }
     }
 
+    /**
+     * 拖拽文件到弹窗：把 DataTransfer 里的文件塞进隐藏的 file input 并手动派发 change，
+     * 这样拖放与点选走同一套导入逻辑（无需重复实现）。
+     * @param {DragEvent} event
+     */
     function onDrop(event) {
       event.preventDefault()
       const files = [...(event.dataTransfer?.files || [])]
@@ -583,7 +753,7 @@ export default defineComponent({
         }
       }
     }
-    /** assets referenced by the graph that is open right now (not saved yet, so the server cannot know) */
+    /** 当前打开的图所引用的素材 id 集合（工程尚未保存，服务端无法知道，因此需在本地统计） */
     const currentGraphAssetIds = computed(() => {
       const ids = new Set()
       for (const node of state.graph.nodes) {
@@ -591,14 +761,24 @@ export default defineComponent({
         if (typeof d.imageAssetId === 'string') ids.add(d.imageAssetId)
         if (typeof d.patternAssetId === 'string') ids.add(d.patternAssetId)
         for (const stroke of Array.isArray(d.strokes) ? d.strokes : []) {
+          // 从图案 URL 里提取素材 id（形如 /assets/<id>.png）
           const m = /\/assets\/([0-9a-f]{8,16})\./.exec(String(stroke.pattern || ''))
           if (m) ids.add(m[1])
         }
       }
       return ids
     })
+    /**
+     * 该素材是否被当前打开的图引用。
+     * @param {object} asset 素材
+     * @returns {boolean}
+     */
     const usedInCurrentGraph = (asset) => currentGraphAssetIds.value.has(asset.id)
-    /** every material that references the asset: saved projects (from the API) + the open graph */
+    /**
+     * 汇总所有引用该素材的材质：已保存工程（来自接口）+ 当前打开的图。
+     * @param {object} asset 素材
+     * @returns {Array<{project:string,nodeId:string|null,current?:boolean,trashed?:boolean}>}
+     */
     const assetUsage = (asset) => {
       const list = (asset.usage || []).slice()
       if (usedInCurrentGraph(asset) && !list.some((u) => u.project === state.projectName)) {
@@ -606,14 +786,29 @@ export default defineComponent({
       }
       return list
     }
-    /** "name" for saved materials, "name（回收站）" for binned ones — bindings survive the bin */
+    /**
+     * 把引用列表格式化为可读文本：已保存材质显示名称，已进回收站的追加「（回收站）」——
+     * 因为引用关系不会随回收站消失。
+     * @param {Array<object>} list assetUsage 的返回
+     * @returns {string}
+     */
     const usageLabel = (list) => list.map((u) => (u.trashed ? u.project + ' ' + t('assets.binSuffix') : u.project)).join('、')
+    /** 素材被任何材质引用时禁止删除（保护工程的可复现性） */
     const isAssetLocked = (asset) => assetUsage(asset).length > 0
+    /**
+     * 删除按钮的悬停提示：被引用时说明引用方，否则提示将移入回收站。
+     * @param {object} asset 素材
+     * @returns {string}
+     */
     const usageTitle = (asset) => {
       const list = assetUsage(asset)
       return list.length ? t('assets.inUse', { list: usageLabel(list) }) : t('assets.trashTitle')
     }
 
+    /**
+     * 复制素材的绝对 URL 到剪贴板，方便在其它工具里直接引用。
+     * @param {object} asset 素材
+     */
     function quoteUrl(asset) {
       const url = location.origin + asset.url
       if (navigator.clipboard?.writeText) navigator.clipboard.writeText(url).then(() => (status.value = '✓ 已复制 ' + url), () => {})
@@ -624,6 +819,7 @@ export default defineComponent({
       refreshBakeStatus()
     })
 
+    // 对外暴露：素材列表、操作函数与状态，供模板绑定
     return {
       assets,
       assetUsage,
@@ -695,9 +891,11 @@ export default defineComponent({
           <button class="icon-btn" @click="close">✕</button>
         </div>
         <div class="modal-body">
+          <!-- 顶部说明：支持的内容、.sbsar 与 PBR 导入的限制 -->
           <div class="hint">{{ $t('assets.hint') }}</div>
           <div class="hint small sbsar-hint">{{ $t('assets.sbsarHint') }}</div>
           <div class="hint small sbsar-hint">{{ $t('assets.pbrHint') }}</div>
+          <!-- 在线素材搜索区：输入关键词或回车触发 -->
           <div class="asset-search">
             <input v-model="searchQuery" :placeholder="$t('assets.searchPlaceholder')" @keydown.enter="searchOnline" />
             <button class="btn" :disabled="searching" @click="searchOnline">{{ searching ? $t('assets.searching') : $t('assets.searchOnline') }}</button>
@@ -705,6 +903,7 @@ export default defineComponent({
           <div v-if="searchError" class="asset-search-error">{{ searchError }}</div>
           <div v-if="searchWarning" class="asset-search-error">{{ searchWarning }}</div>
           <div v-if="searchResults.length" class="asset-search-results">
+            <!-- 搜索结果卡片：缩略图、来源/作者/许可证，以及「导入」按钮 -->
             <div v-for="r in searchResults" :key="r.id" class="asset-search-card">
               <img :src="r.thumbnail" :alt="r.title" loading="lazy" />
               <div class="asset-search-meta">
@@ -720,8 +919,10 @@ export default defineComponent({
             <button class="btn" @click="openPicker">{{ $t('assets.importFirst') }}</button>
           </div>
           <div v-else class="asset-library">
+            <!-- 素材网格：sbsar 归档卡片（可展开详情）与普通图片卡片两种形态 -->
             <div v-for="a in assets" :key="a.id" class="asset-card" :class="{ 'asset-card-sbsar': a.kind === 'sbsar' }">
               <template v-if="a.kind === 'sbsar'">
+                <!-- 归档头部：图标、文件名、能力徽标（容器/图数/参数数/资源数/已改参数） -->
                 <div class="sbsar-head" @click="toggleExpand(a)">
                   <div class="sbsar-icon">SA</div>
                   <div class="sbsar-head-body">
@@ -738,6 +939,7 @@ export default defineComponent({
                   <button class="icon-btn" @click.stop="toggleExpand(a)">{{ expanded === a.id ? '▾' : '▸' }}</button>
                 </div>
                 <div v-if="expanded === a.id" class="sbsar-detail">
+                  <!-- 展开详情：报告说明/元数据/图/输出通道/接口图/归档内容/参数列表/烘焙状态/警告 -->
                   <div class="sbsar-note">{{ a.inspection?.evaluateBlockedReason }}</div>
                   <div v-for="(n, i) in (a.inspection?.notes || [])" :key="'note' + i" class="sbsar-note soft">{{ n }}</div>
                   <div v-if="a.inspection?.metadata && Object.keys(a.inspection.metadata).length" class="sbsar-block">
@@ -757,6 +959,7 @@ export default defineComponent({
                       {{ $t('assets.sbsarInterface') }}
                       <span class="hint small">{{ $t('assets.sbsarInterfaceNote') }}</span>
                     </div>
+                    <!-- 接口图：左侧参数分组 → 中间图 → 右侧输出通道（纯示意，代表可编辑的接口层） -->
                     <svg class="sbsar-igraph" :viewBox="'0 0 460 ' + (interfaceLayout(a).groupList.length * 26 + 40)" preserveAspectRatio="xMidYMin meet">
                       <g v-for="(g, i) in interfaceLayout(a).groupList" :key="g.name">
                         <rect x="4" :y="8 + i * 26" width="150" height="20" rx="5" class="ig-node" />
@@ -814,6 +1017,7 @@ export default defineComponent({
                   </div>
                   <div v-if="childAssets(a).length" class="sbsar-block">
                     <div class="sbsar-label">{{ $t('assets.sbsarExtracted') }}</div>
+                    <!-- 归档内嵌资源：预览图可作贴图/绘制图案，其余资源仅展示 -->
                     <div class="sbsar-thumbs">
                       <div v-for="c in childAssets(a)" :key="c.id" class="sbsar-thumb">
                         <img :src="c.url" :alt="c.name" loading="lazy" class="sbsar-zoomable" @click="openLightbox({ url: c.url, name: c.name, width: c.width, height: c.height, bytes: c.bytes })" />
@@ -830,6 +1034,7 @@ export default defineComponent({
                     </div>
                   </div>
                   <div v-if="assetUsage(a).length" class="asset-usage">🔒 {{ $t('assets.usedBy', { list: usageLabel(assetUsage(a)) }) }}</div>
+                  <!-- 归档操作：近似重建、参数编辑、原生引擎烘焙、JSON 报告、删除 -->
                   <div class="asset-actions">
                     <button class="btn tiny accent" :disabled="reconstructing" @click="reconstruct(a)" :title="$t('assets.reconstructTitle')">{{ reconstructing ? $t('assets.reconstructing') : $t('assets.reconstruct') }}</button>
                     <button class="btn tiny" @click="openParams(a)" :title="$t('assets.sbsarParamsEditTitle')">{{ $t('assets.sbsarParamsEdit') }}</button>
@@ -843,6 +1048,7 @@ export default defineComponent({
                 </div>
               </template>
               <template v-else>
+                <!-- 普通图片卡片：缩略图、尺寸、授权信息与被引用提示 -->
                 <img :src="a.url" :alt="a.name" loading="lazy" />
                 <div class="asset-card-body">
                   <div class="asset-name" :title="a.name">{{ a.name }}</div>
@@ -863,6 +1069,7 @@ export default defineComponent({
           <div v-if="status" class="asset-status">{{ status }}</div>
         </div>
         <div class="modal-foot">
+          <!-- 底部：说明与回收站入口 -->
           <span class="hint">{{ $t('assets.foot') }}</span>
           <div style="display: flex; gap: 8px">
             <button class="btn tiny" @click="$emit('open-trash')">🗑 {{ $t('trash.open') }}</button>

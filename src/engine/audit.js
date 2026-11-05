@@ -1,8 +1,18 @@
-// Full application audit harness (dev tool): schema, every node, value semantics,
-// store actions, DOM interactions and i18n coverage. Runs in the browser against the live engine.
-//
-//   await runAudit(engine, 'schema' | 'render' | 'values' | 'actions' | 'dom' | 'i18n' | 'all')
-//
+/**
+ * 全量应用审计工具（开发用，非生产路径）。
+ *
+ * 覆盖六个维度：节点 schema 完整性、每个节点的渲染合理性、数值语义正确性、
+ * store 动作（增删改/撤销/重做/持久化）、真实 DOM 交互、i18n 覆盖度；
+ * 另外按需转发 MCP 自检与 UI 自检结果。
+ *
+ * 架构位置：运行在浏览器中，直接对接活着的渲染引擎与 store，因此能验证
+ * “从节点定义 → GPU 求值 → 像素读回”的端到端行为，而不只是静态断言。
+ *
+ * 用法：
+ *   await runAudit(engine, 'schema' | 'render' | 'values' | 'actions' | 'dom' | 'i18n' | 'mcp' | 'ui' | 'all')
+ *
+ * 主要导出：runAudit。
+ */
 import {
   state,
   nodeById,
@@ -42,6 +52,16 @@ import { PRESETS, planFiles, exportMaterial } from './exporter.js'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+/**
+ * 创建一次审计的上下文对象。
+ *
+ * add() 记录“断言型”用例（pass/info），失败时保留说明；
+ * info() 记录“备注型”条目（note: true，永远算通过），用于输出统计数字而不影响结论。
+ *
+ * @param {object} engine 渲染引擎实例
+ * @param {string} section 当前审计分区名
+ * @returns {object} 含 engine / section / tests / add / info 的上下文
+ */
 function makeCtx(engine, section) {
   const tests = []
   return {
@@ -58,6 +78,15 @@ function makeCtx(engine, section) {
   }
 }
 
+/**
+ * 汇总一个分区的结果。
+ *
+ * note 类条目不计入通过/失败，失败列表最多保留 200 条以控制报告体积；
+ * ok 仅由“真正的断言失败”决定，备注不影响结论。
+ *
+ * @param {object} ctx makeCtx 产出的上下文
+ * @returns {object} { section, ok, passed, failed, failures, notes }
+ */
 function summarize(ctx) {
   const failed = ctx.tests.filter((t) => !t.pass && !t.note)
   return {
@@ -71,6 +100,15 @@ function summarize(ctx) {
 }
 
 // ------------------------------------------------------------------ schema ---
+/**
+ * 静态校验节点定义（不涉及 GPU）。
+ *
+ * 校验项：type 唯一、名称/分类/描述齐全、非输出节点必须有渲染体（body 或 passes）、
+ * 输入端口名唯一且默认值在 [0,1]、参数 key 唯一、参数类型合法且默认值落在范围/枚举内、
+ * 渐变至少 2 个且至多 8 个色标并按位置递增、颜色必须是 #rrggbb。
+ *
+ * @param {object} ctx 审计上下文
+ */
 function auditSchema(ctx) {
   const types = new Set()
   const labels = new Set()
@@ -120,7 +158,7 @@ function auditSchema(ctx) {
     labels.add(def.name)
   }
 
-  // every input named in shader source must exist as a declared input port
+  // 着色器源码中引用的每个输入名，都必须在节点定义里声明为输入端口
   for (const def of NODE_DEFS) {
     const src = [def.body || '', ...(def.passes || []).map((p) => p.body || '')].join('\n')
     const used = new Set([...src.matchAll(/uIn_([A-Za-z0-9_]+)/g)].map((m) => m[1]))
@@ -135,7 +173,7 @@ function auditSchema(ctx) {
     }
   }
 
-  // output channels
+  // 输出通道
   ctx.add('channels: 8 outputs', OUTPUT_CHANNELS.length === 8, String(OUTPUT_CHANNELS.length))
   for (const ch of OUTPUT_CHANNELS) {
     ctx.add(`channel ${ch.key}: label`, typeof ch.label === 'string' && ch.label.length > 0)
@@ -143,7 +181,7 @@ function auditSchema(ctx) {
   }
   ctx.add('channels: unique keys', new Set(OUTPUT_CHANNELS.map((c) => c.key)).size === OUTPUT_CHANNELS.length)
 
-  // export presets
+  // 导出预设
   ctx.add('presets: 5 entries', PRESETS.length === 5, String(PRESETS.length))
   for (const p of PRESETS) {
     ctx.add(`preset ${p.id}: fields`, !!(p.name && p.desc && p.engine && p.targetNormal), JSON.stringify(Object.keys(p)))
@@ -152,12 +190,12 @@ function auditSchema(ctx) {
     ctx.add(`preset ${p.id}: unique file names`, new Set(files.map((f) => f.fileName)).size === files.length)
     ctx.add(`preset ${p.id}: labels`, files.every((f) => typeof f.label === 'string' && f.label))
   }
-  // height/alpha plan variants
+  // 高度/透明度规划的各变体
   const h16 = planFiles({ preset: 'gltf', name: 'A', height16: true })
   const h8 = planFiles({ preset: 'gltf', name: 'A', height16: false })
   ctx.add('plan: height bit depth option', h16.length === h8.length, `${h16.length}/${h8.length}`)
 
-  // shader compilation audit
+  // 着色器编译审计
   const shader = ctx.engine.validateShaders()
   ctx.add('shaders: all compile', shader.ok, JSON.stringify(shader.failures || shader).slice(0, 500))
   ctx.add('shaders: count >= 30', shader.checked >= 30, String(shader.checked))
@@ -165,14 +203,41 @@ function auditSchema(ctx) {
 
 // ----------------------------------------------------------- graph helpers ---
 let uidN = 0
+
+/**
+ * 构造一个用于探针测试的节点对象（不经过 store，纯数据结构）。
+ *
+ * 参数以“默认值 + 覆盖值”合并，保证未显式指定的参数也有合法取值。
+ *
+ * @param {string} type 节点类型
+ * @param {string} id 节点 id
+ * @param {object} [params] 需要覆盖的参数
+ * @param {object} [data] 节点的 data 字段（如图片 url、渐变等）
+ * @returns {object} 节点对象
+ * @throws {Error} 未知节点类型
+ */
 function mk(type, id, params = {}, data = {}) {
   const def = NODE_MAP[type]
   if (!def) throw new Error('unknown node type ' + type)
   return { id, type, x: 0, y: 0, params: { ...defaultParams(def), ...params }, data }
 }
+/** 构造一条探针连线（id 用递增计数保证唯一，默认从 'out' 端口引出）。 */
 function mkLink(from, fromPort, to, toPort) {
   return { id: 'l' + ++uidN, from: { node: from, port: fromPort || 'out' }, to: { node: to, port: toPort } }
 }
+
+/**
+ * 为某个节点类型自动搭一个“最小可求值图”：目标节点 + 每个输入端口各接一个噪声源。
+ *
+ * 这样无需依赖用户当前图即可单独验证某节点的渲染行为。
+ * opts.skipInputs 可跳过指定端口（用于验证缺省输入时的行为），
+ * opts.sourceType / opts.sourceParams 可替换源节点类型与参数。
+ *
+ * @param {string} type 目标节点类型
+ * @param {object} [params] 目标节点参数覆盖
+ * @param {object} [opts] { res, data, skipInputs, sourceType, sourceParams }
+ * @returns {{nodes: object[], connections: object[], res: number}} 探针图
+ */
 function buildProbeGraph(type, params = {}, opts = {}) {
   const def = NODE_MAP[type]
   const res = opts.res || 128
@@ -191,14 +256,29 @@ function buildProbeGraph(type, params = {}, opts = {}) {
   return { nodes, connections: links, res }
 }
 
+/** sRGB → 线性空间的单通道转换（与 GPU 端 sRGB 解码公式一致，用于比对像素值）。 */
 function srgbToLinear(c) {
   return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)
 }
+
+/** 把 #rrggbb 十六进制颜色转成线性空间的三元组，用于校验颜色参数的 GPU 端表现。 */
 function hexToLinear(hex) {
   const n = parseInt(hex.slice(1), 16)
   return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255].map(srgbToLinear)
 }
 
+/**
+ * 把任意纹理原样读回 CPU（Float32Array，每像素 RGBA 四通道）。
+ *
+ * 做法：借引擎的 encodeMaterial 以 uMode=0 做一次“透传”渲染，再 readRenderTargetPixels。
+ * 这样可绕过编码/打包差异，拿到真实的线性浮点值。用完必须 release 临时 RT，
+ * 并恢复被改动的 uniform（uTex / uMode），避免污染引擎后续求值。
+ *
+ * @param {object} engine 引擎
+ * @param {object} texture 源纹理
+ * @param {number} size 读回边长（方形）
+ * @returns {Float32Array} 像素缓冲
+ */
 function readRaw(engine, texture, size) {
   const rt = engine.acquire(size, size, engine.floatType || engine.rtType)
   const mat = engine.encodeMaterial
@@ -218,6 +298,24 @@ function readRaw(engine, texture, size) {
   return buf
 }
 
+/**
+ * 统计一帧像素的数值特征，用于自动判定“输出是否合理”。
+ *
+ * 统计内容：
+ * - min/max/mean/std（逐通道）；
+ * - invalid：NaN / Infinity 像素数（必须为 0）；
+ * - negative / overOne：越界像素数（线性空间下不应频繁越界）；
+ * - seamH / seamV：左右、上下边界处的平均阶跃（用于无缝性判定）；
+ * - seamHr / seamVr：接缝阶跃相对“内部相邻像素阶跃 99 分位”的比值。
+ *
+ * 无缝性判定为何用比值而非绝对值：棋盘、光栅等高频率图案本身相邻像素阶跃就很大，
+ * 边界处的阶跃与内部同量级属正常；真正的不连续会显著大于内部任意相邻像素差。
+ *
+ * @param {Float32Array} buf 像素缓冲
+ * @param {number} w 宽
+ * @param {number} h 高
+ * @returns {object} 统计结果
+ */
 function statsOf(buf, w, h) {
   const st = {
     min: [Infinity, Infinity, Infinity, Infinity],
@@ -258,9 +356,8 @@ function statsOf(buf, w, h) {
     st.mean[c] = sums[c] / n
     st.std[c] = Math.sqrt(Math.max(0, sq[c] / n - st.mean[c] * st.mean[c]))
   }
-  // seam metric: wrapped-edge step vs the 99th percentile of interior adjacent steps.
-  // High-frequency patterns (checker/grating) legitimately have matching edge steps, while a real
-  // discontinuity is much larger than any normal neighbouring-pixel step.
+  // 接缝度量：把回绕边界处的阶跃，与内部相邻像素阶跃的 99 分位做对比。
+  // 高频率图案（棋盘/光栅）在边界处本就与内部同量级，而真正的不连续会远大于正常相邻像素差。
   const P = (x, y) => buf[(y * w + x) * 4]
   const horiz = []
   const vert = []
@@ -285,6 +382,19 @@ function statsOf(buf, w, h) {
   return st
 }
 
+/**
+ * 求值一张临时图并把指定节点输出读回 CPU。
+ *
+ * 只把 targetId 作为 sink（不渲染其他通道），减少无关计算；读完立即释放渲染结果，
+ * 防止大量探针测试把显存/RT 池耗尽。
+ *
+ * @param {object} engine 引擎
+ * @param {object} graph 临时图
+ * @param {string} targetId 目标节点 id
+ * @param {number} res 分辨率
+ * @returns {{buf: Float32Array, stats: object, res: number}}
+ * @throws {Error} 目标节点没有渲染目标时抛出
+ */
 function evalGraph(engine, graph, targetId, res) {
   const result = engine.evaluate(graph, { res, sinks: [targetId] })
   const rt = result.rts.get(targetId)
@@ -294,16 +404,21 @@ function evalGraph(engine, graph, targetId, res) {
   return { buf, stats: statsOf(buf, res, res), res }
 }
 
+/** 按归一化坐标 (u, v) ∈ [0,1] 取一个像素的 RGBA（坐标夹紧到边界，避免越界读取）。 */
 function pixel(buf, res, u, v) {
   const x = Math.min(res - 1, Math.max(0, Math.floor(u * res))) 
   const y = Math.min(res - 1, Math.max(0, Math.floor(v * res)))
   const i = (y * res + x) * 4
   return [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
 }
+/** 单值近似相等判定（默认容差 1e-3，用于浮点像素比对）。 */
 const near = (a, b, eps = 1e-3) => Math.abs(a - b) <= eps
+/** 三通道近似相等判定（只比较 RGB，忽略 alpha）。 */
 const near3 = (a, b, eps = 1e-3) => near(a[0], b[0], eps) && near(a[1], b[1], eps) && near(a[2], b[2], eps)
 
 // -------------------------------------------------------------- render audit ---
+// 需要进行“平铺无缝性”断言的节点类型白名单；由人工维护，
+// 只有被列入的节点才会检查 seamHr / seamVr 是否超标。
 const SEAMLESS = new Set([
   'perlin', 'cellular', 'grunge', 'waves', 'checker', 'bricks', 'tiles', 'shape', 'gradient_map',
   'wood_planks', 'fur', 'grass', 'plastic', 'burlap', 'fabric', 'leather', 'concrete',
@@ -312,6 +427,20 @@ const SEAMLESS = new Set([
   'posterize', 'transform', 'channels', 'blend', 'paint', 'flat_value', 'flat_color', 'constant_value'
 ])
 
+/**
+ * 根据节点类型与像素统计，追加该节点“输出是否合理”的断言。
+ *
+ * 分类型规则：
+ * - 常量类：标准差必须接近 0（确认真的输出常量）；
+ * - image_input：占位图必须有变化（确认没有被渲染成全黑/全白）；
+ * - normal：按 0.5 偏移解码法线并检查单位长度（采样内部像素，避开边界伪影）；
+ * - 白名单内节点：接缝比值 < 3；
+ * - ao / threshold / curvature / edges：数值须落在 [0,1]。
+ *
+ * @param {object} ctx 审计上下文
+ * @param {string} type 节点类型
+ * @param {object} st statsOf 结果（渲染分支会临时挂上 st.buf 供法线检查）
+ */
 function expectNode(ctx, type, st) {
   const std = Math.max(st.std[0], st.std[1], st.std[2])
   if (['flat_value', 'flat_color', 'constant_value'].includes(type)) {
@@ -324,7 +453,7 @@ function expectNode(ctx, type, st) {
   }
   ctx.add(`${type}: output varies`, std > 1e-4, `std=${std.toFixed(6)}`)
   if (type === 'normal') {
-    // decode normals and validate unit length on interior pixels
+    // 解码法线（存储值 = (n+1)/2），在内部像素上抽样验证向量长度接近 1
     let bad = 0
     let count = 0
     const res = Math.round(Math.sqrt(st.pixels))
@@ -351,6 +480,14 @@ function expectNode(ctx, type, st) {
   }
 }
 
+/**
+ * 渲染审计：对每个非输出节点做默认参数求值，并遍历参数极值/枚举，确认不产生 NaN。
+ *
+ * 分辨率故意取小（128/96/64），因为这里验证的是“是否出错/是否合理”，
+ * 而非视觉质量；小分辨率能让几十个节点 × 多个参数组合在可接受时间内跑完。
+ *
+ * @param {object} ctx 审计上下文
+ */
 function auditRender(ctx) {
   const engine = ctx.engine
   const res = 128
@@ -365,7 +502,7 @@ function auditRender(ctx) {
       out.stats.buf = out.buf
       expectNode(ctx, def.type, out.stats)
 
-      // every select option renders cleanly
+      // 遍历所有 select 枚举值，确认每种取值都能正常渲染
       for (const p of def.params || []) {
         if (p.type === 'select') {
           for (let oi = 0; oi < p.options.length; oi++) {
@@ -426,6 +563,14 @@ function auditRender(ctx) {
 }
 
 // -------------------------------------------------------------- value audit ---
+/**
+ * 数值语义审计：用“常量输入 → 单节点 → 读中心像素”的方式，验证各算子的数学定义。
+ *
+ * 之所以用常量输入：结果可解析计算（如 invert(0.25)=0.75），便于精确断言；
+ * 每个小括号块对应一个算子，注释标明了它验证的语义点。
+ *
+ * @param {object} ctx 审计上下文
+ */
 function auditValues(ctx) {
   const engine = ctx.engine
   const R = 64
@@ -442,14 +587,14 @@ function auditValues(ctx) {
     return { nodes, connections: links }
   }
 
-  // constant value
+  // 常量输出：验证数值被原样写入 RGB，且默认 alpha 为 1
   {
     const g = single('flat_value', { value: 0.25 })
     const p = pixel(chain(g.nodes, g.connections).buf, R, 0.5, 0.5)
     ctx.add('flat_value: exact 0.25 rgb', near3(p, [0.25, 0.25, 0.25], 1e-3), JSON.stringify(p))
     ctx.add('flat_value: alpha 1', near(p[3], 1, 1e-3), String(p[3]))
   }
-  // flat color linear conversion
+  // 颜色常量：验证 UI 里的 sRGB 十六进制会被正确转换到线性空间，并保留 alpha 参数
   {
     const g = single('flat_color', { color: '#3366cc', alpha: 0.4 })
     const p = pixel(chain(g.nodes, g.connections).buf, R, 0.5, 0.5)
@@ -457,7 +602,7 @@ function auditValues(ctx) {
     ctx.add('flat_color: sRGB->linear', near3(p, want, 2e-3), `got=${p.slice(0, 3).map((v) => v.toFixed(4))} want=${want.map((v) => v.toFixed(4))}`)
     ctx.add('flat_color: alpha param', near(p[3], 0.4, 1e-3), String(p[3]))
   }
-  // invert
+  // 反相：验证数值反转、alpha 反转，以及单通道开关只影响被开启的通道
   {
     const g = single('invert', {}, [flat(0.25)])
     const p = pixel(chain(g.nodes, g.connections).buf, R, 0.5, 0.5)
@@ -470,7 +615,7 @@ function auditValues(ctx) {
     const want = hexToLinear('#3366cc')
     ctx.add('invert: per-channel flags', near(pr[0], 1 - want[0], 2e-3) && near(pr[1], want[1], 2e-3), JSON.stringify(pr))
   }
-  // threshold / histogram scan
+  // 阈值与直方图扫描：验证硬阈值、反相，以及“落在范围窗口内才输出 1”的语义
   {
     const hi = single('threshold', { threshold: 0.5, softness: 0 }, [flat(0.7)])
     const lo = single('threshold', { threshold: 0.5, softness: 0 }, [flat(0.3)])
@@ -483,7 +628,7 @@ function auditValues(ctx) {
     const hs = single('histogram_scan', { position: 0.5, width: 0.05 }, [flat(0.7)])
     ctx.add('histogram_scan: 0.7 -> 1', near(pixel(chain(hs.nodes, hs.connections).buf, R, 0.5, 0.5)[0], 1, 2e-3))
   }
-  // levels / posterize
+  // levels（色阶）与 posterize（色调分离）
   {
     const lv = single('levels', { inLow: 0.2, inHigh: 0.8, outLow: 0, outHigh: 1, gamma: 1 }, [flat(0.5)])
     ctx.add('levels: mid stays mid', near(pixel(chain(lv.nodes, lv.connections).buf, R, 0.5, 0.5)[0], 0.5, 2e-3))
@@ -493,7 +638,7 @@ function auditValues(ctx) {
     const po = single('posterize', { steps: 3 }, [flat(0.33)])
     ctx.add('posterize: 0.33@3 -> 0.5', near(pixel(chain(po.nodes, po.connections).buf, R, 0.5, 0.5)[0], 0.5, 2e-3))
   }
-  // grayscale weights
+  // 灰度权重（验证四种灰度模式的加权公式）
   {
     const red = hexToLinear('#ff0000')
     for (const [mode, want] of [[0, red[0] * 0.2126 + red[1] * 0.7152 + red[2] * 0.0722], [1, (red[0] + red[1] + red[2]) / 3], [2, Math.max(...red)], [3, Math.min(...red)]]) {
@@ -502,7 +647,7 @@ function auditValues(ctx) {
       ctx.add(`grayscale: mode ${mode}`, near(v, want, 3e-3), `got=${v.toFixed(4)} want=${want.toFixed(4)}`)
     }
   }
-  // hsl
+  // HSL：色相旋转、去饱和与明度调整
   {
     const g = single('hsl', { hue: 180, saturation: 1, lightness: 0 }, [colorNode('#ff0000')])
     const p = pixel(chain(g.nodes, g.connections).buf, R, 0.5, 0.5)
@@ -511,7 +656,7 @@ function auditValues(ctx) {
     const p2 = pixel(chain(g2.nodes, g2.connections).buf, R, 0.5, 0.5)
     ctx.add('hsl: saturation 0 is grey', Math.abs(p2[0] - p2[1]) < 2e-3 && Math.abs(p2[1] - p2[2]) < 2e-3, JSON.stringify(p2.map((v) => v.toFixed(3))))
   }
-  // blend maths
+  // 混合模式的数学定义
   {
     const blend = (mode, a, b, opacity = 1, mask) => {
       const nodes = [mk('blend', 'n0', { mode, opacity }), flat(a, 's0'), flat(b, 's1')]
@@ -532,7 +677,7 @@ function auditValues(ctx) {
     ctx.add('blend: lighten = max', near(blend(7, 0.3, 0.6), 0.6, 2e-3))
     ctx.add('blend: darken = min', near(blend(6, 0.3, 0.6), 0.3, 2e-3))
   }
-  // normal / ao / curvature / edges constants
+  // 法线 / AO / 曲率 / 边缘 等常量输入下的输出特性
   {
     const ng = single('normal', {}, [flat(0.5)])
     const np = pixel(chain(ng.nodes, ng.connections).buf, R, 0.5, 0.5)
@@ -544,13 +689,13 @@ function auditValues(ctx) {
     const eg = single('edges', {}, [flat(0.5)])
     ctx.add('edges: flat -> 0', near(pixel(chain(eg.nodes, eg.connections).buf, R, 0.5, 0.5)[0], 0, 5e-3))
   }
-  // blur on flat
+  // 常量输入下的模糊：结果应与输入一致（避免模糊把常量偏移）
   {
     const g = single('blur', { radius: 12 }, [flat(0.5)])
     const p = pixel(chain(g.nodes, g.connections).buf, R, 0.5, 0.5)
     ctx.add('blur: flat stays flat', near3(p, [0.5, 0.5, 0.5], 2e-3), JSON.stringify(p))
   }
-  // identity filters
+  // 恒等类滤镜：默认参数下输出应等于输入
   {
     const gm = single('warp', { intensity: 0, offset: 0 }, [mk('gradient', 's0', { repeat: 2 }), flat(0.5)])
     const base = single('gradient', { repeat: 2 })
@@ -570,7 +715,7 @@ function auditValues(ctx) {
     const basePix = pixel(tb, R, 0.25, 0.5)
     ctx.add('transform: offset .25 correspondence', near(pixel(tf, R, 0.5, 0.5)[0], basePix[0], 3e-3), `got=${pixel(tf, R, 0.5, 0.5)[0].toFixed(4)} want=${basePix[0].toFixed(4)}`)
   }
-  // channels mapping
+  // 通道映射（swizzle/合并）
   {
     const nodes = [mk('channels', 'n0', { chR: 2, chG: 1, chB: 0 }), colorNode('#ff0000', 1, 's0'), colorNode('#00ff00', 1, 's1'), colorNode('#0000ff', 1, 's2')]
     const links = [mkLink('s0', 'out', 'n0', 'r'), mkLink('s1', 'out', 'n0', 'g'), mkLink('s2', 'out', 'n0', 'b')]
@@ -580,7 +725,7 @@ function auditValues(ctx) {
     const blue = hexToLinear('#0000ff')
     ctx.add('channels: channel picking', near(p[0], red[2], 2e-3) && near(p[1], green[1], 2e-3) && near(p[2], blue[0], 2e-3), JSON.stringify(p))
   }
-  // gradient semantics
+  // 渐变语义（色标插值与超出范围的钳制）
   {
     const ramp = [{ p: 0, c: '#000000' }, { p: 1, c: '#ffffff' }]
     const g1 = single('gradient', { type: 0, repeat: 1, offset: 0, gradient: ramp })
@@ -596,7 +741,7 @@ function auditValues(ctx) {
     const p4 = pixel(chain(g4.nodes, g4.connections, 'n0', 128).buf, 128, 0.5, 0.5)
     ctx.add('gradient: diamond center 0', near(p4[0], 0, 0.02), String(p4[0].toFixed(4)))
   }
-  // gradient map
+  // 渐变映射（用渐变给灰度图重新着色）
   {
     const ramp = [{ p: 0, c: '#000000' }, { p: 1, c: '#ffffff' }]
     const g = single('gradient_map', { gradient: ramp, contrast: 1, offset: 0 }, [flat(0.25)])
@@ -606,7 +751,7 @@ function auditValues(ctx) {
     const pi = pixel(chain(gi.nodes, gi.connections).buf, R, 0.5, 0.5)
     ctx.add('gradient_map: invert', near(pi[0], 0.75, 3e-3), String(pi[0].toFixed(3)))
   }
-  // paint layer with no strokes is the base stream
+  // 没有笔迹的画笔层应当等价于基础流（不会把画面染黑）
   {
     const g = single('paint', {}, [mk('perlin', 's0', { seed: 3 }), flat(1)])
     const base = single('perlin', { seed: 3 })
@@ -616,7 +761,7 @@ function auditValues(ctx) {
     for (let i = 0; i < a.length; i++) max = Math.max(max, Math.abs(a[i] - b[i]))
     ctx.add('paint: empty layer equals base', max < 3e-3, 'maxdiff=' + max.toFixed(5))
   }
-  // tile generator modes differ
+  // 平铺生成器的各模式必须产生互不相同的图案
   {
     const c = evalGraph(engine, single('tiles', { mode: 0 }), 'n0', 96)
     const h = evalGraph(engine, single('tiles', { mode: 1 }), 'n0', 96)
@@ -625,6 +770,18 @@ function auditValues(ctx) {
 }
 
 // ------------------------------------------------------------- action audit ---
+/**
+ * store 动作审计：在真实 store 上跑一遍完整的编辑流程（有副作用，结束时必须还原）。
+ *
+ * 流程覆盖：添加所有节点类型 → 删除/撤销/重做 → 连线与环检测 → 参数编辑的 undo 合并 →
+ * 移动/重命名的 undo → 复制 → 分辨率/代理切换 → 示例载入 → 项目保存/载入/删除往返 →
+ * 图片输入 → 画笔涂抹 → 导出预设与法线翻转。
+ *
+ * 设计要点：每步之后 sleep 一小段时间，是因为 store 的持久化与求值是异步/防抖的；
+ * 开头对图/项目名/分辨率/代理/语言做快照，finally 里整体恢复，保证审计不破坏用户现场。
+ *
+ * @param {object} ctx 审计上下文
+ */
 async function auditActions(ctx) {
   const engine = ctx.engine
   const snapshot = {
@@ -642,7 +799,7 @@ async function auditActions(ctx) {
     }).catch(() => null)
 
   try {
-    // ---------- add every node type ----------
+    // ---------- 1. 逐个添加所有节点类型，并检查新增节点被自动选中、参数默认值齐全 ----------
     loadDemo('blank')
     await sleep(80)
     const before = state.graph.nodes.length
@@ -669,7 +826,7 @@ async function auditActions(ctx) {
     doEval()
     ctx.add('addNode: thumbnails generated', state.graph.nodes.filter((n) => n._thumb).length > 0, String(state.graph.nodes.filter((n) => n._thumb).length))
 
-    // ---------- delete + undo / redo ----------
+    // ---------- 2. 删除后 undo / redo 应能精确复原节点数量 ----------
     const full = state.graph.nodes.length
     selectNodes(state.graph.nodes.filter((n) => n.type !== 'material_output').map((n) => n.id))
     deleteSelected()
@@ -684,7 +841,7 @@ async function auditActions(ctx) {
     undo()
     await sleep(80)
 
-    // ---------- connections, cycle detection, undo ----------
+    // ---------- 3. 连线、环路检测（自环必须被拒绝）以及连线删除的 undo ----------
     const a = addNode('perlin', { x: 800, y: 800 })
     const b = addNode('blur', { x: 1100, y: 800 })
     const conns0 = state.graph.connections.length
@@ -702,7 +859,7 @@ async function auditActions(ctx) {
     await sleep(60)
     ctx.add('redo: connection restored', state.graph.connections.length === conns0 + 1)
 
-    // ---------- param edit undo + coalescing ----------
+    // ---------- 4. 参数编辑与 undo 合并（连续微调应合并成一步，而非产生大量历史） ----------
     let nodeB = nodeById(b.id)
     const old = nodeB.params.radius
     setParam(nodeB.id, 'radius', old + 10, { coalesce: true })
@@ -715,7 +872,7 @@ async function auditActions(ctx) {
     redo()
     await sleep(60)
 
-    // ---------- move + rename undo ----------
+    // ---------- 5. 移动/重命名的 undo ----------
     const x0 = nodeById(b.id).x
     setNodePosition(b.id, x0 + 120, nodeById(b.id).y)
     undo()
@@ -725,7 +882,7 @@ async function auditActions(ctx) {
     undo()
     ctx.add('rename: undo', nodeById(a.id).data.title !== 'Audit Title')
 
-    // ---------- duplicate ----------
+    // ---------- 6. 复制选中节点（应新增一个节点且可撤销） ----------
     selectNodes([b.id])
     const dupCount = state.graph.nodes.length
     duplicateSelected()
@@ -735,7 +892,7 @@ async function auditActions(ctx) {
     await sleep(60)
     ctx.add('duplicate: undo', state.graph.nodes.length === dupCount)
 
-    // ---------- resolution / proxy ----------
+    // ---------- 7. 分辨率与代理分辨率切换（含来回切换，验证不残留错误状态） ----------
     for (const res of [512, 1024, 512]) {
       setResolution(res)
       await sleep(120)
@@ -749,7 +906,7 @@ async function auditActions(ctx) {
     }
     setResolution(1024)
 
-    // ---------- demos ----------
+    // ---------- 8. 逐一载入内置示例，确认节点数、求值、缩略图都正常 ----------
     for (const id of ['weathered-steel', 'mossy-rock', 'painted-sign', 'blank']) {
       loadDemo(id)
       await sleep(500)
@@ -760,7 +917,7 @@ async function auditActions(ctx) {
       ctx.add(`demo ${id}: thumbnails`, state.lastThumbCount > 0, String(state.lastThumbCount))
     }
 
-    // ---------- save / load / delete roundtrip ----------
+    // ---------- 9. 项目保存 / 列出 / 载入 / 删除的完整往返（比较载入前后的 graphJSON 是否一致） ----------
     loadDemo('mossy-rock')
     await sleep(500)
     const savedName = 'Audit Roundtrip 审计'
@@ -780,7 +937,7 @@ async function auditActions(ctx) {
     const after = await listProjects()
     ctx.add('deleteProject: removed', !after.some((p) => p.name === savedName), JSON.stringify(after.map((p) => p.name)))
 
-    // ---------- image input ----------
+    // ---------- 10. 图片输入：写入 DataURL 后应能采样到原始颜色，invert 开关应生效 ----------
     loadDemo('blank')
     await sleep(100)
     const imgNode = addNode('image_input', { x: 100, y: 400 })
@@ -807,7 +964,7 @@ async function auditActions(ctx) {
     const ipi = pixel(iri.buf, 64, 0.5, 0.5)
     ctx.add('image: invert', near3(ipi, [1 - want[0], 1 - want[1], 1 - want[2]], 0.02), JSON.stringify(ipi.slice(0, 3)))
 
-    // ---------- paint ----------
+    // ---------- 11. 画笔：必须能 attach 画布、提交一笔、写入 strokes 并撤销 ----------
     loadDemo('painted-sign')
     await sleep(500)
     const paint = state.graph.nodes.find((n) => n.type === 'paint')
@@ -831,7 +988,7 @@ async function auditActions(ctx) {
     await sleep(250)
     ctx.add('paint: undo clear restores', (nodeById(paint.id).data.strokes || []).length === strokes0, String((nodeById(paint.id).data.strokes || []).length))
 
-    // ---------- export presets + normal flip ----------
+    // ---------- 12. 导出预设：每种预设都应产出至少 4 个文件，且 PNG 签名正确 ----------
     loadDemo('weathered-steel')
     await sleep(500)
     for (const preset of PRESETS.map((p) => p.id)) {
@@ -854,7 +1011,9 @@ async function auditActions(ctx) {
         ctx.add(`export ${preset}: ok`, false, e?.message || String(e))
       }
     }
-    // normal convention flip: export the same normal graph with GL and DX, decode and compare G channel
+    // 法线约定翻转：同一张法线图分别按 GL / DX 导出，解码后比较 G 通道。
+    // DirectX 与 OpenGL 的绿通道方向相反，因此两者的 G 值应满足 gGL + gDX ≈ 255（误差 ≤ 3），
+    // 而 R 通道不应受约定切换影响。
     try {
       const graph = {
         nodes: [mk('perlin', 's0', { seed: 2 }), mk('normal', 'n0', { intensity: 0.5 }), mk('material_output', 'out', {})],
@@ -877,7 +1036,8 @@ async function auditActions(ctx) {
     } catch (e) {
       ctx.add('export: DirectX normal green flip', false, e?.message || String(e))
     }
-    // height bit depth / alpha plan
+    // 导出位深/通道规划：height16 开关应决定高度图是 16 位还是 8 位；
+    // 带透明度的 basecolor 应使用 colorType=6（RGBA）
     try {
       const h16 = planFiles({ preset: 'gltf', name: 'A', height16: true })
       const h8 = planFiles({ preset: 'gltf', name: 'A', height16: false })
@@ -899,15 +1059,25 @@ async function auditActions(ctx) {
       await sleep(150)
       doEval()
     } catch (e) {
-      /* restore best effort */
+      /* 恢复尽力而为：即使还原失败也不应让审计整体崩溃 */
     }
   }
 }
 
+/** 构造只含单个节点的图，用于不需要上游输入的数值测试。 */
 function singleNodeGraph(type, params = {}, id = 'n0') {
   return { nodes: [mk(type, id, params)], connections: [] }
 }
 
+/**
+ * 把 PNG 字节解码成 RGBA 像素数组（每像素 4 字节，0..255）。
+ *
+ * 借助 Blob + objectURL + Image 走浏览器原生解码，避免自写 PNG 解析器；
+ * 无论成功失败都必须 revoke objectURL，防止内存泄漏。
+ *
+ * @param {Uint8Array} bytes PNG 文件内容
+ * @returns {Promise<Uint8ClampedArray>} 像素数据
+ */
 async function decodePng(bytes) {
   const blob = new Blob([bytes], { type: 'image/png' })
   const url = URL.createObjectURL(blob)
@@ -930,6 +1100,18 @@ async function decodePng(bytes) {
 }
 
 // ------------------------------------------------------------------ dom audit ---
+/**
+ * DOM 交互审计：直接在页面元素上模拟用户操作（点击、输入、键盘快捷键、拖拽等）。
+ *
+ * 前置条件：页面已挂载（存在 .app），否则直接判定失败。
+ * 关键技巧：
+ * - 修改 input 值必须走原生 setter 再派发 input 事件，否则 Vue 的 v-model 监听不到；
+ * - 期间临时接管 console.error / console.warn 与 window.onerror，把所有报错收集成断言
+ *   （包含 [i18n] 缺失键告警），结束后恢复原函数并统一判失败；
+ * - 测试会改变语言、图内容与预览状态，finally 中恢复现场。
+ *
+ * @param {object} ctx 审计上下文
+ */
 async function auditDom(ctx) {
   if (typeof document === 'undefined' || !document.querySelector('.app')) {
     ctx.add('dom: app mounted', false, 'no .app element')
@@ -946,6 +1128,7 @@ async function auditDom(ctx) {
     el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     return true
   }
+  // 设置原生 value 再派发事件，绕过 Vue 的 value 拦截，确保 v-model 收到更新
   const setInput = (el, value, event = 'input') => {
     if (!el) return false
     const proto = el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype
@@ -955,6 +1138,7 @@ async function auditDom(ctx) {
     return true
   }
   const key = (k, opts = {}) => window.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, ...opts }))
+  // 接管控制台输出，把运行期报错/告警都记为 DOM 审计的失败证据（结束后恢复）
   const errors = []
   const origError = console.error
   const origWarn = console.warn
@@ -1337,18 +1521,31 @@ async function auditDom(ctx) {
         const { setLocale: restoreLocale } = await import('../i18n/index.js')
         restoreLocale(localeBeforeAudit, false)
       } catch (e) {
-        /* ignore */
+        /* 忽略：还原语言失败不应中断审计，后续步骤仍需继续 */
       }
       await sleepMs(250)
       doEval()
     } catch (e) {
-      /* best effort */
+      /* 尽力而为：单步失败不阻断后续审计 */
     }
   }
   ctx.add('dom: no console errors/warnings', errors.length === 0, errors.slice(0, 8).join(' | '))
 }
 
 // ----------------------------------------------------------------- i18n audit ---
+/**
+ * 多语言审计：验证中英文词条键位一致、界面无未翻译串、无原始 key 泄漏。
+ *
+ * 分三层：
+ * 1. 词典层：EN/ZH 键集合完全对齐，且相同取值的词条数量极少（否则说明漏翻）；
+ * 2. 数据层：节点名/描述、参数 label、select 选项、示例名都能被翻译；
+ * 3. 运行时：切换语言后检查 document.title、品牌副标题与整页 innerText，
+ *    确保没有出现形如 `top.xxx` 的原始 key 或 `[i18n]` 缺键标记。
+ *
+ * 结束时会恢复原语言。
+ *
+ * @param {object} ctx 审计上下文
+ */
 async function auditI18n(ctx) {
   const i18n = await import('../i18n/index.js')
   const { EN, ZH } = await import('../i18n/messages.js')
@@ -1364,7 +1561,7 @@ async function auditI18n(ctx) {
   setLocale('zh', false)
   await sleep(120)
 
-  // node dictionary coverage
+  // 节点词典覆盖度：若翻译结果与原文字相同，视为“未翻译”
   const nodeNamesUntranslated = []
   const descsUntranslated = []
   for (const def of NODE_DEFS) {
@@ -1391,7 +1588,7 @@ async function auditI18n(ctx) {
   setLocale(restore, false)
   await sleep(100)
 
-  // language must be remembered: storage + URL are both written on a real switch
+  // 语言必须被记住：真实切换时会同时写 storage 与 URL
   const savedBefore = localStorage.getItem('substrate.locale')
   const hrefBefore = location.href
   setLocale('zh', true)
@@ -1402,17 +1599,17 @@ async function auditI18n(ctx) {
   await sleep(80)
   ctx.add('i18n: en stored', localStorage.getItem('substrate.locale') === 'en', String(localStorage.getItem('substrate.locale')))
   ctx.add('i18n: en mirrored in URL', new URLSearchParams(location.search).get('lang') === 'en', new URL(location.href).search)
-  // restore the caller's storage + URL state
+  // 恢复调用方原有的 storage 与 URL 状态
   try {
     if (savedBefore === null) localStorage.removeItem('substrate.locale')
     else localStorage.setItem('substrate.locale', savedBefore)
     history.replaceState(history.state, '', hrefBefore)
   } catch (e) {
-    /* ignore */
+    /* 忽略：环境不允许修改 storage/URL */
   }
   setLocale(restore, false)
 
-  // runtime DOM check in both locales
+  // 在两种语言下各跑一次运行时 DOM 检查
   if (typeof document !== 'undefined' && document.querySelector('.app')) {
     for (const id of ['zh', 'en']) {
       setLocale(id, false)
@@ -1432,6 +1629,8 @@ async function auditI18n(ctx) {
 }
 
 // -------------------------------------------------------------------- runner ---
+// 分区名 → 审计函数映射。mcp / ui 采用动态 import，避免在不需要时加载较重模块，
+// 同时把它们的测试结果转成同一种 ctx.add 形态，便于统一汇总。
 const SECTIONS = {
   schema: auditSchema,
   render: auditRender,
@@ -1453,6 +1652,17 @@ const SECTIONS = {
   }
 }
 
+/**
+ * 运行审计入口。
+ *
+ * section='all' 时按 schema → render → values → actions → dom → i18n 顺序串行执行
+ * （串行是必要的：各分区都会改动全局 store/语言/图，并行会互相干扰）；
+ * 单个分区内部崩溃不会中断整体，而是记为一条失败继续往下跑。
+ *
+ * @param {object} engine 渲染引擎实例
+ * @param {string} [section='all'] 分区名，或 'all'
+ * @returns {Promise<object>} all 返回 { ok, sections, failed }；单分区返回该分区的 summarize 结果
+ */
 export async function runAudit(engine, section = 'all') {
   const list = section === 'all' ? ['schema', 'render', 'values', 'actions', 'dom', 'i18n'] : [section]
   const results = []

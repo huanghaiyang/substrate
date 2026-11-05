@@ -1,19 +1,29 @@
-// Zero-dependency LZMA / LZMA2 decoders (raw streams, as used inside 7z folders).
+// 零依赖 LZMA / LZMA2 解码器（原始流，用于 7z 归档中的 folder 数据）。
 //
-// Why this exists: a .sbsar is a **7-Zip (LZMA) archive** — Adobe's own docs say to unpack it with
-// "the LZMA decoder of your choice" and then read `assemblies/content/0000/<Graph>.xml` plus
-// `metadata.json`. Node ships zlib (deflate) but no LZMA, so the archive reader needs its own.
+// 为什么需要它：.sbsar 本质是 7-Zip(LZMA) 归档，Adobe 官方说明是「用任意 LZMA 解码器解包」，
+// 然后读 assemblies/content/0000/<Graph>.xml 与 metadata.json。Node 自带 zlib 只有 deflate，
+// 没有 LZMA，因此归档读取器必须自带一份实现。
 //
-// Scope: exactly what 7z folders use for substance packages — a single LZMA or LZMA2 coder, or a
-// stored (copy) stream. BCJ/Delta/ARM64 filter chains are not implemented; the 7z reader reports those
-// as unsupported instead of returning wrong bytes.
+// 范围：只覆盖 Substance 包里实际出现的编码——单个 LZMA 或 LZMA2 coder，或 stored(copy) 流。
+// BCJ/Delta/ARM64 等过滤器链未实现，7z 读取器会把它们标记为不支持，而不是返回错误字节。
 //
-// The algorithms follow the public LZMA specification (range coder + LZ77 + context-modelled literals).
+// 算法遵循公开的 LZMA 规范：范围编码器 + LZ77 滑动字典 + 上下文建模的字面量/长度/距离编码。
+// 所有函数输入均为只读 Buffer/Uint8Array，输出写入调用方提供的 out 视图，避免额外拷贝。
+//
+// 与其他模块的关系：被 sbsar.mjs 的 7z 解析器调用；本文件不做文件 I/O，也不校验 7z 头。
 
 const TOP = 1 << 24
 const MASK32 = 0xffffffff
 
-/** Range decoder over a byte buffer. */
+/**
+ * 创建范围解码器（range decoder）。
+ * 初始化要求首字节为 0，随后读入 4 字节作为 code 初值；normalize() 在 range 不足 2^24 时
+ * 持续左移补字节。流提前结束时按 0 补齐（容错，不抛错）。
+ * @param {Buffer|Uint8Array} buf 压缩数据
+ * @returns {{pos:number,bit:(probs:Uint16Array,index:number)=>number,directBits:(count:number)=>number}}
+ *          pos 为只读进度；bit 解码一个自适应概率位并更新概率；directBits 解码 count 个等概率位
+ * @throws {Error} 首字节非 0（流损坏）
+ */
 function createRangeDecoder(buf) {
   let pos = 0
   let range = MASK32
@@ -81,6 +91,14 @@ function createRangeDecoder(buf) {
   }
 }
 
+/**
+ * 创建 LZMA 解码状态：lc/lp/pb 参数、状态机、四个 rep 距离，以及全部概率表（初值 1024）。
+ * literal 概率表按 0x300 << (lc+lp) 惰性分配，避免无谓内存。
+ * @param {number} lc 字面量上下文位数 0..8
+ * @param {number} lp 位置上下文位数 0..4
+ * @param {number} pb 位置状态位数 0..4
+ * @returns {object} 解码状态
+ */
 function lzmaState(lc, lp, pb) {
   return {
     lc,
@@ -109,6 +127,10 @@ function lzmaState(lc, lp, pb) {
   }
 }
 
+/**
+ * 构造一套长度编码器概率表（choice / low / mid / high），初值均为 1024。
+ * @returns {object}
+ */
 function newLenCoder() {
   return {
     choice: new Uint16Array(2).fill(1024),
@@ -118,6 +140,11 @@ function newLenCoder() {
   }
 }
 
+/**
+ * 把长度编码器的所有概率复位为 1024（LZMA2 每个新块开始时调用）。
+ * @param {object} c 长度编码器
+ * @returns {void}
+ */
 function resetLenCoder(c) {
   c.choice.fill(1024)
   for (const a of c.low) a.fill(1024)
@@ -125,6 +152,12 @@ function resetLenCoder(c) {
   c.high.fill(1024)
 }
 
+/**
+ * 复位整个解码状态（LZMA2 的字典/状态重置标记）：状态机 0、rep 距离清零、概率表回 1024、
+ * 字面量表释放（下次按新 lc/lp 重新分配）。
+ * @param {object} s 解码状态
+ * @returns {void}
+ */
 function resetState(s) {
   s.state = 0
   s.rep0 = s.rep1 = s.rep2 = s.rep3 = 0
@@ -136,6 +169,20 @@ function resetState(s) {
 }
 
 /** Decode one LZMA symbol stream into `out` (a Uint8Array view) for `outSize` bytes. */
+/**
+ * 解码一段 LZMA 符号流，把结果写入 out[outStart, outStart+outSize)。
+ * dictStart 是当前字典有效起点（LZMA2 分块时前一块的输出可作为匹配距离来源）。
+ * 关键分支：字面量（普通/匹配字面量）与匹配（rep 匹配 / 新匹配）；匹配拷贝允许与目标区间重叠
+ * （LZ77 的 run-length 特性），因此是逐字节复制而不是 memcpy。
+ * @param {object} state lzmaState()
+ * @param {object} rc createRangeDecoder()
+ * @param {Uint8Array} out 输出缓冲（可能被多个 LZMA2 块共享）
+ * @param {number} outStart 本段写入起点
+ * @param {number} outSize 本段期望字节数
+ * @param {number} dictStart 字典起点（在本缓冲区中的下标）
+ * @returns {void}
+ * @throws {Error} rep 匹配出现在起点、匹配距离越界、或流损坏
+ */
 function decodeLzmaStream(state, rc, out, outStart, outSize, dictStart) {
   const { lc, lp, pb } = state
   const pbMask = (1 << pb) - 1
@@ -157,6 +204,7 @@ function decodeLzmaStream(state, rc, out, outStart, outSize, dictStart) {
     if (rc.bit(state.isMatch, (state.state << 4) + posState) === 0) {
       // ---------------- literal
       const prevByte = pos > dictStart ? out[pos - 1] : 0
+      // 字面量上下文地址：由「位置低位」与「前一字节高位」共同决定，0x300 是单组概率表大小。
       const base = 0x300 * (((pos & lpMask) << lc) + (prevByte >> (8 - lc)))
       let symbol = 1
       if (state.state >= 7) {
@@ -224,10 +272,11 @@ function decodeLzmaStream(state, rc, out, outStart, outSize, dictStart) {
         } else {
           state.rep0 = (state.rep0 + (((rc.directBits(directBits - 4) << 4) >>> 0) + rc.reverseBitTree(state.align, 0, 4))) >>> 0
         }
-        if (state.rep0 === 0xffffffff) break // end marker
+        if (state.rep0 === 0xffffffff) break // 结束标记（距离 0xFFFFFFFF 表示流正常结束）
       }
     }
 
+    // LZ77 匹配：源区间可能与本段重叠，必须逐字节向前复制（不能用 memcpy 一次性拷贝）。
     const from = pos - state.rep0 - 1
     if (from < dictStart) throw new Error('LZMA: corrupt stream at pos ' + pos + ' (match distance ' + (state.rep0 + 1) + ' exceeds available output)')
     for (let i = 0; i < length && pos < end; i++) {
@@ -239,6 +288,15 @@ function decodeLzmaStream(state, rc, out, outStart, outSize, dictStart) {
 }
 
 /** Decode a raw LZMA (LZMA1) stream. `props` = 5 bytes. */
+/**
+ * 解码 LZMA1 原始流。props 第一个字节编码 lc/lp/pb（pb = byte/45，lp = (byte/9)%5，lc = byte%9），
+ * 后 4 字节是字典大小（本实现按调用方给的 outSize 分配输出，不使用字典大小上限）。
+ * @param {Buffer|Uint8Array} props 5 字节属性
+ * @param {Buffer|Uint8Array} buf 压缩数据（不含属性头）
+ * @param {number} outSize 期望解压字节数
+ * @returns {Uint8Array} 解压结果
+ * @throws {Error} 属性缺失/非法或流损坏（错误对象附带 partial 与 decodedBytes 便于诊断）
+ */
 export function lzmaDecode(props, buf, outSize) {
   if (!props || props.length < 5) throw new Error('LZMA: missing properties')
   const d = props[0]
@@ -260,6 +318,18 @@ export function lzmaDecode(props, buf, outSize) {
 }
 
 /** Decode a raw LZMA2 stream (as used by 7-Zip's default "-m0=lzma2"). */
+/**
+ * 解码 LZMA2 原始流。LZMA2 由若干块组成，每块控制字节决定：
+ *   0 = 结束；1 = 字典重置 + 未压缩块；2 = 未压缩块；
+ *   ≥0x80 = 压缩块，高 2 位是 reset 模式（0 无重置 / 1 状态重置 / 2 状态+属性重置 / 3 字典重置），
+ *   低 5 位 + 后续 2 字节给出解压长度，随后 2 字节给出压缩长度。
+ * 属性字节在需要时读入并按 lc/lp/pb 更新状态。
+ * @param {number} propByte 字典大小属性字节（0..40）
+ * @param {Buffer|Uint8Array} buf 压缩数据
+ * @param {number} outSize 期望解压字节数
+ * @returns {Uint8Array} 解压结果
+ * @throws {Error} 字典属性非法、控制字节/块顺序非法、lc/lp/pb 非法或最终长度不符
+ */
 export function lzma2Decode(propByte, buf, outSize) {
   const dictSize = (() => {
     if (propByte > 40) throw new Error('LZMA2: invalid dictionary property')
@@ -342,6 +412,12 @@ export function lzma2Decode(propByte, buf, outSize) {
 }
 
 /** Copy coder: data is stored as-is. */
+/**
+ * 7z 的 Copy 编码：数据未压缩，直接复制；不足部分保持 0。
+ * @param {Buffer|Uint8Array} buf 原始数据
+ * @param {number} outSize 期望长度
+ * @returns {Uint8Array}
+ */
 export function copyDecode(buf, outSize) {
   const out = new Uint8Array(outSize)
   out.set(buf.subarray(0, Math.min(outSize, buf.length)))

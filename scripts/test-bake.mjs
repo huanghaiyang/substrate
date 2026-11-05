@@ -1,12 +1,20 @@
-// Tests for the local bake bridge (server/sbsar-bake.mjs).
-//
-// The interesting guarantees here are the *failure* contract: with no Adobe engine installed the API
-// must say so (and never fake a bake), because the engine is a native, per-user-licensed binary that
-// cannot be shipped as WebAssembly.
+/**
+ * 本地烘焙桥（server/sbsar-bake.mjs）的测试。
+ *
+ * 这里真正要验证的是「失败契约」：未安装 Adobe 引擎时，API 必须明确说明原因，
+ * 并且绝不能伪造烘焙结果。原因是 Substance 引擎是原生、按用户授权的闭源二进制，
+ * 无法以 WebAssembly 形式随应用分发。
+ *
+ * 覆盖内容：
+ * 1. 引擎发现契约：sbsrender 的查找结果与状态字段自洽；
+ * 2. 无引擎时 bakeSbsar 必须抛出 SAT_MISSING，并给出安装提示；
+ * 3. 输出文件名 → PBR 通道的映射规则。
+ */
 import { bakeStatus, bakeSbsar, detectChannel, findSbsrender } from '../server/sbsar-bake.mjs'
 
 let pass = 0
 let fail = 0
+/** 记录一条断言并打印结果。 */
 const ok = (label, cond, info = '') => {
   if (cond) {
     pass++

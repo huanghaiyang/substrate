@@ -1,13 +1,29 @@
 <!doctype html>
+<!--
+  Substrate 零打包入口页。
+  开发与生产共用同一份 HTML，没有构建产物差异：浏览器直接执行 /src 下的原生 ESM，
+  依赖放在 /vendor（均为可直接运行的分发文件），所以本地静态服务器即可调试，
+  也不需要 npm run build（dist/ 仅供部署，与本地调试无关）。
+  注意：页面全部使用绝对路径（/src、/vendor、/public），必须从站点根目录托管；
+  直接以 file:// 打开会因 ES 模块的跨源限制而加载失败。
+-->
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!-- 锁定初始缩放：这是桌面端工具界面，禁止移动端自动放大，避免各面板错位 -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+    <!-- 默认标题；i18n/index.js 启动时会按当前语言改写 <html lang> 与 document.title -->
     <title>Substrate — Procedural Texture Studio</title>
     <meta name="description" content="Node-based procedural PBR texture authoring, painting and standards-compliant export." />
     <link rel="icon" href="/public/favicon.svg" type="image/svg+xml" />
+    <!-- 全局样式拆两份：主界面基础样式 + AI/素材库等扩展模块样式，按书写顺序级联 -->
     <link rel="stylesheet" href="/src/styles.css" />
     <link rel="stylesheet" href="/src/styles-ai.css" />
+    <!--
+      importmap 让浏览器原生解析裸模块名：源码里 import 'vue' / 'three' 无需打包器改写，
+      而是在这里映射到 /vendor 下的 ESM 文件。
+      必须出现在任何 type="module" 脚本之前，否则模块解析器找不到这些裸导入。
+    -->
     <script type="importmap">
       {
         "imports": {
@@ -19,9 +35,12 @@
     </script>
   </head>
   <body>
+    <!-- Vue 应用挂载点：main.js 中 createApp(App).mount('#app') 依赖此 id -->
     <div id="app"></div>
-    <!-- third-party JSON pretty-printer (MIT, json-formatter-js) for the archive inspection report -->
+    <!-- 第三方 JSON 美化组件（MIT，json-formatter-js）供素材归档的检查报告使用；
+         它是 UMD 脚本，挂到 window 全局，必须先于模块入口加载 -->
     <script src="/vendor/json-formatter.umd.js"></script>
+    <!-- 应用入口：type="module" 按 ES 模块语义加载，并自动延迟到 DOM 解析完成后执行 -->
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

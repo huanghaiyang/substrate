@@ -1,8 +1,13 @@
-// Browser-side execution of the external MCP tool catalog.
-//
-// All handlers validate against src/engine/mcp-catalog.js and return plain, serialisable data.
-// Failures throw ToolError(code, message) which the MCP gateway turns into the normalized
-// error envelope { ok:false, error:{ code, message } }.
+/**
+ * MCP 外部工具目录的浏览器端执行实现。
+ *
+ * 架构位置：mcp-catalog.js 定义“接口契约”，本模块定义“接口行为”——
+ * 每个处理器先用 validateArguments 校验参数，再调用 store.js 的图操作，
+ * 最后返回可 JSON 序列化的纯数据（不返回 Three.js 对象等运行时引用）。
+ *
+ * 错误约定：处理器内部抛出 ToolError(code, message, details)，由 gateway/bridge 转换为
+ * 规范化信封 { ok:false, error:{ code, message, details } }。
+ */
 import {
   state,
   nodeById,
@@ -39,6 +44,10 @@ import { setLocale } from '../i18n/index.js'
 import { exportMaterial } from './exporter.js'
 import { runSelfTest } from './selftest.js'
 
+/**
+ * 工具执行错误。携带稳定的错误码与可选的结构化详情（可用端口、候选节点等），
+ * 便于外部代理在失败后自行纠正并重试。
+ */
 export class ToolError extends Error {
   constructor(code, message, details) {
     super(message)
@@ -48,8 +57,20 @@ export class ToolError extends Error {
   }
 }
 
+// 等待辅助：sleep 用于轮询间隔，waitFor 用于把“异步求值完成”转成可 await 的判定
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+/**
+ * 轮询等待条件成立。
+ *
+ * 引擎求值是异步的（requestAnimationFrame / GPU 回读），工具层无法直接 await，
+ * 因此统一用“等待某个状态量变化”的方式同步。
+ *
+ * @param {() => boolean} predicate 判定函数
+ * @param {number} [timeout=20000] 最长等待毫秒数
+ * @param {number} [interval=40] 轮询间隔毫秒数
+ * @returns {Promise<boolean>} 是否在超时前满足条件
+ */
 async function waitFor(predicate, timeout = 20000, interval = 40) {
   const t0 = performance.now()
   while (performance.now() - t0 < timeout) {
@@ -59,6 +80,7 @@ async function waitFor(predicate, timeout = 20000, interval = 40) {
   return false
 }
 
+/** 汇总最近一次求值的统计信息（节点数、通道 pass 数、耗时、GPU 耗时、缓存命中、错误）。 */
 function evalStats() {
   return {
     nodes: state.evalNodes,
@@ -70,6 +92,16 @@ function evalStats() {
   }
 }
 
+/**
+ * 请求一次强制全图求值，并等待其完成。
+ *
+ * 判定“完成”的方式是 previewNonce 递增（引擎每次求值结束都会自增该计数器），
+ * 比轮询 error/stats 更可靠，也不会因缓存命中而误判。
+ *
+ * @param {number} [timeout=20000] 等待上限（毫秒）
+ * @returns {Promise<object>} 求值统计
+ * @throws {ToolError} 超时抛出 TIMEOUT
+ */
 async function evaluate(timeout = 20000) {
   const before = state.previewNonce
   requestEval(true)
@@ -78,6 +110,14 @@ async function evaluate(timeout = 20000) {
   return evalStats()
 }
 
+/**
+ * 读取输出节点及其对外配置。
+ *
+ * connected 使用 Set 去重后排序，得到“已被连线占用的输出通道名”（如 basecolor/normal），
+ * 外部代理可据此判断哪些通道还没接上。
+ *
+ * @returns {object|null} 输出节点信息；没有输出节点时返回 null
+ */
 function outputInfo() {
   const out = outputNode()
   if (!out) return null
@@ -91,6 +131,14 @@ function outputInfo() {
   }
 }
 
+/**
+ * 生成“工作室状态”摘要（substrate_get_state 的返回体）。
+ *
+ * 除常规统计外，还给出 invalidConnections：目标端口在当前节点定义中已不存在的老连线。
+ * 这类连线会被求值器静默忽略，表现为“贴图没接上”，因此显式暴露便于代理修复。
+ *
+ * @returns {object} 状态摘要（材质名、模式、分辨率、节点/连线数、输出配置、求值统计、历史、选区等）
+ */
 function summarize() {
   return {
     material: state.projectName,
@@ -118,6 +166,14 @@ function summarize() {
   }
 }
 
+/**
+ * 生成“可序列化的节点图”快照（substrate_get_graph 的返回体）。
+ *
+ * 特意不包含缩略图（体积很大），只给结构信息：节点 id/type/位置/标题/输入端口名/参数，
+ * 以及连线端点。参数做深拷贝，避免外部代码意外改写内部响应式对象。
+ *
+ * @returns {object} { nodes, connections, outputNodeId, resolution, invalidConnections }
+ */
 function sanitizeGraph() {
   return {
     nodes: state.graph.nodes.map((n) => {
@@ -149,16 +205,31 @@ function sanitizeGraph() {
   }
 }
 
+/** 列出当前图里的节点 id/type（最多 80 个），用于错误提示中给代理提供候选节点。 */
 function availableNodeIds() {
   return state.graph.nodes.slice(0, 80).map((n) => ({ id: n.id, type: n.type }))
 }
 
+/**
+ * 按 id 取节点，不存在时抛出 NOT_FOUND 并在 details 里附带可用节点列表。
+ *
+ * @param {string} nodeId 节点 id
+ * @returns {object} 节点对象
+ * @throws {ToolError}
+ */
 function requireNode(nodeId) {
   const node = nodeById(nodeId)
   if (!node) throw new ToolError(ERROR_CODES.NOT_FOUND, `Node not found: ${nodeId}`, { availableNodes: availableNodeIds() })
   return node
 }
 
+/**
+ * 定位画笔图层节点：传 id 时校验其类型必须是 paint；不传则取第一个 paint 节点。
+ *
+ * @param {string} [nodeId] 可选节点 id
+ * @returns {object} paint 节点
+ * @throws {ToolError} 节点不存在、类型不对，或当前材质里根本没有画笔层
+ */
 function findPaintNode(nodeId) {
   if (nodeId) {
     const node = requireNode(nodeId)
@@ -170,11 +241,20 @@ function findPaintNode(nodeId) {
   return node
 }
 
+/**
+ * 读取本地服务端保存的工程列表，并裁剪成对外字段（只暴露 name/resolution/mtime/file）。
+ *
+ * @returns {Promise<{projects: Array<object>}>}
+ */
 async function projectList() {
   const projects = await listProjects()
   return { projects: projects.map((p) => ({ name: p.name, resolution: p.resolution, mtime: p.mtime, file: p.file })) }
 }
 
+/**
+ * 工具处理器注册表：键名必须与 mcp-catalog.js 的 TOOLS.name 一一对应
+ * （mcp-selfcheck 会校验双向一致性）。每个处理器接收已校验的参数，返回纯数据。
+ */
 const handlers = {
   async substrate_get_state() {
     return summarize()
@@ -238,13 +318,14 @@ const handlers = {
     if (target === 'paint') {
       const paintNode = state.graph.nodes.find((n) => n.type === 'paint')
       if (!paintNode) throw new ToolError(ERROR_CODES.NOT_FOUND, 'The current material has no paint layer')
-      // commitStroke() preloads/decodes the image URL asynchronously and re-rasterises when ready
+      // commitStroke() 会异步预载/解码图片 URL，并在就绪后重新栅格化，因此随后需要触发一次求值
       commitStroke(paintNode.id, { pattern: asset.url, patternScale: 1, opacity: 1 })
       const evalInfo = await evaluate()
       return { target, nodeId: paintNode.id, asset: { id: asset.id, name: asset.name, url: asset.url }, eval: evalInfo }
     }
     let node = state.graph.nodes.find((n) => n.type === 'image_input')
     if (!node) node = addNode('image_input', { x: 120, y: 120 })
+    // 下载完成后转成 DataURL，保证后续画布采样不受跨域限制
     const res = await fetch(asset.url)
     if (!res.ok) throw new ToolError(ERROR_CODES.INTERNAL, 'Could not download asset file')
     const blob = await res.blob()
@@ -260,6 +341,7 @@ const handlers = {
   },
 
   async substrate_get_thumbnail(args) {
+    // 缩略图可能尚未生成：先强制求值一次，再按 id 重新取节点（求值会替换节点对象引用）
     let node = args.nodeId ? requireNode(args.nodeId) : outputNode()
     if (!node) throw new ToolError(ERROR_CODES.NOT_FOUND, 'No output node')
     if (!node._thumb) {
@@ -285,6 +367,7 @@ const handlers = {
     const engine = state.engine
     const channel = args.channel || 'basecolor'
     const size = args.size || 256
+    // 颜色/自发光通道是 sRGB 编码，读回时需按 sRGB 处理；法线、粗糙度等数据通道保持线性
     const srgb = channel === 'basecolor' || channel === 'emissive'
     const dataUrl = engine?.mapDataURL(channel, size, { srgb })
     if (!dataUrl) throw new ToolError(ERROR_CODES.NOT_FOUND, `Channel "${channel}" is not connected on the output`)
@@ -364,6 +447,8 @@ const handlers = {
   async substrate_delete_node(args) {
     const node = requireNode(args.nodeId)
     if (defOf(node)?.isOutput) throw new ToolError(ERROR_CODES.INVALID_ARGUMENT, 'The output node cannot be deleted')
+    // store 的删除/复制操作依赖“当前选中集合”，这里临时替换选区并在完成后还原，
+    // 以免工具的副作用破坏用户原本的手动选择。
     const previous = [...state.selectedIds]
     state.selectedIds = [node.id]
     deleteSelected()
@@ -393,6 +478,7 @@ const handlers = {
     const fromNode = requireNode(args.fromNode)
     const toNode = requireNode(args.toNode)
     const inputs = (defOf(toNode)?.inputs || []).map((i) => i.name)
+    // 解析目标端口：兼容单输入节点上的 "in" 之类别名，返回真实的端口名；无法解析返回空
     const resolved = resolveInputPort(toNode, args.toPort)
     if (!resolved) {
       throw new ToolError(
@@ -405,6 +491,7 @@ const handlers = {
     if (!ok) throw new ToolError(ERROR_CODES.INVALID_ARGUMENT, state.error || 'Connection rejected', { error: state.error, availablePorts: inputs })
     await evaluate()
     const conn = state.graph.connections.find((c) => c.to.node === args.toNode && c.to.port === resolved)
+    // correctedPort 非空即表示端口被自动纠正，提示调用方下一次直接用正确名称
     return {
       connectionId: conn?.id || null,
       from: args.fromNode,
@@ -545,13 +632,28 @@ const handlers = {
   }
 }
 
+/** 已实现处理器名称的列表，供自检核对“目录 ↔ 实现”是否双向一致。 */
 export const HANDLER_NAMES = Object.keys(handlers)
 
+/** 取该工具的第一个非空参数示例，用于参数校验失败时给调用方“照抄”的提示。 */
 function firstExample(tool) {
   const examples = Array.isArray(tool?.examples) ? tool.examples : []
   return examples.find((e) => e && typeof e === 'object' && Object.keys(e).length) || examples[0] || undefined
 }
 
+/**
+ * 执行一次外部工具调用（唯一的对外入口）。
+ *
+ * 执行顺序：查目录 → 查处理器 → 参数校验 → 调用处理器。
+ * 参数校验失败时会把“工具名 + 示例 + inputSchema”塞进错误详情，
+ * 让不具备先验知识的代理能自我纠错；处理器内部的 ToolError 原样透传，
+ * 其他异常统一包装为 INTERNAL 错误。
+ *
+ * @param {string} name 工具名
+ * @param {object} [args={}] 调用参数
+ * @returns {Promise<any>} 可直接 JSON 序列化的结果
+ * @throws {ToolError} 任一阶段的失败
+ */
 export async function executeTool(name, args = {}) {
   const tool = getTool(name)
   if (!tool) throw new ToolError(ERROR_CODES.UNKNOWN_TOOL, `Unknown tool: ${name}`)
@@ -574,10 +676,12 @@ export async function executeTool(name, args = {}) {
   } catch (e) {
     if (e instanceof ToolError) {
       if (!e.details) e.details = {}
+      // 补齐“可照抄的示例”；NOT_FOUND 额外附带当前可用节点，便于代理改用正确 id
       if (!e.details.example) e.details.example = firstExample(tool)
       if (e.code === ERROR_CODES.NOT_FOUND && !e.details.availableNodes) e.details.availableNodes = availableNodeIds()
       throw e
     }
+    // 非预期异常：包装为 INTERNAL，并保留原始堆栈供服务端日志排查
     throw new ToolError(ERROR_CODES.INTERNAL, e?.message || String(e), { stack: e?.stack })
   }
 }

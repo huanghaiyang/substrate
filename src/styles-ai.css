@@ -1,4 +1,13 @@
-/* ---- AI assistant panel ---- */
+/* =====================================================================
+   styles-ai.css —— AI 助手 / 素材库 / .sbsar 归档 / JSON 查看器样式
+   与 styles.css 共用同一套 :root 主题变量，本文件只补充这些功能的专属布局。
+   分块顺序：AI 面板 → 素材库 → 自定义笔刷 → 自检结果 → 浮动对话窗
+             → 联网素材搜索 → .sbsar 卡片与参数工作台 → 图片灯箱 → JSON 查看器
+   ===================================================================== */
+
+/* ---- AI 助手面板 ---- */
+/* 固定侧栏贴在顶栏之下（top:46px 让出顶栏空间），z-index 45 高于顶栏(40)、
+   低于通用弹窗遮罩(100)，打开弹窗时面板会被正确压住 */
 .ai-btn {
   color: var(--accent);
 }
@@ -36,6 +45,7 @@
   height: 24px;
   font-size: 10.5px;
 }
+/* 设置区限高 46% 并可滚动，避免提供商列表把对话区挤没 */
 .ai-settings {
   border-bottom: 1px solid var(--line);
   padding: 10px;
@@ -105,6 +115,7 @@
   color: #ff8b8b;
   border-color: rgba(255, 139, 139, 0.4);
 }
+/* 消息区 flex:1 + overflow-y:auto：只有对话内容滚动，输入框与头部始终固定 */
 .ai-messages {
   flex: 1;
   overflow-y: auto;
@@ -136,6 +147,7 @@
 .ai-msg.user {
   align-items: flex-end;
 }
+/* 气泡保留换行、允许长单词折行，模型输出的代码/长串不会撑破侧栏 */
 .ai-bubble {
   padding: 7px 9px;
   border-radius: 8px;
@@ -213,7 +225,8 @@
   padding: 0 10px 8px;
 }
 
-/* ---- material library ---- */
+/* ---- 素材库 ---- */
+/* 三列等宽网格；minmax(0,1fr) 防止长文件名把列撑宽 */
 .asset-modal {
   width: 760px;
   max-width: 94vw;
@@ -300,7 +313,8 @@
   margin-bottom: 8px;
 }
 
-/* ---- custom brushes ---- */
+/* ---- 自定义笔刷 ---- */
+/* 相对定位是为了让右上角的删除角标能绝对叠在笔刷缩略图上 */
 .brush-item {
   position: relative;
 }
@@ -336,7 +350,8 @@
   color: #ff8b8b;
 }
 
-/* ---- MCP self-check result ---- */
+/* ---- MCP 自检结果 ---- */
+/* 自检面板用绿/红边框区分通过与否，色值与会话内其它状态色保持一致 */
 .selfcheck-box {
   margin-top: 10px;
   padding: 8px 10px;
@@ -353,7 +368,9 @@
   color: #ff8b8b;
 }
 
-/* ---- floating conversation window ---- */
+/* ---- 浮动对话窗口 ---- */
+/* 关键的毛玻璃效果：半透明背景 + blur，让浮窗叠在 3D 预览/画布上时不完全挡住内容；
+   z-index 46 略高于 AI 侧栏(45)，保证浮窗不会被侧栏盖住 */
 .ai-float {
   position: fixed;
   right: 18px;
@@ -413,6 +430,8 @@
   color: var(--text-faint);
   text-transform: uppercase;
 }
+/* 浮窗里的消息用多行截断（-webkit-line-clamp:5），高度受限，只展示摘要；
+   完整内容需要点“展开”进入侧栏 */
 .ai-float-text {
   white-space: pre-wrap;
   word-break: break-word;
@@ -445,7 +464,8 @@
   border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-/* ---- online asset search ---- */
+/* ---- 联网素材搜索 ---- */
+/* 搜索结果四列网格，卡片统一 1:1 缩略图，避免不同尺寸的原图打乱行高 */
 .asset-search {
   display: flex;
   gap: 6px;
@@ -506,6 +526,7 @@
   margin-bottom: 8px;
 }
 
+/* 规则说明区默认限高 130px 并滚动：既不占满面板，又能随时回看完整提示词规则 */
 .ai-rules {
   margin-top: 6px;
   padding: 6px 8px;
@@ -518,6 +539,7 @@
   overflow-y: auto;
 }
 
+/* 达到步骤上限时的提示条：橙色描边，与普通错误（红色）区分开 */
 .ai-step-limit {
   margin-top: 5px;
   padding: 4px 7px;
@@ -528,6 +550,8 @@
   background: rgba(224, 176, 106, 0.08);
 }
 
+/* 推理过程折叠块：默认收起（details/summary），展开后内部再限高滚动，
+   避免长思考把对话区推得很长 */
 .ai-reasoning {
   margin: 4px 0;
   border: 1px solid rgba(140, 160, 190, 0.22);
@@ -584,6 +608,7 @@
   accent-color: var(--accent);
 }
 
+/* 附件条与消息附件：缩略图固定尺寸 + 名称省略号，一行内可容纳多张图 */
 .ai-attachments {
   display: flex;
   flex-wrap: wrap;
@@ -642,6 +667,7 @@
   color: var(--text-faint);
 }
 
+/* 当前模型不支持视觉输入时的警告条：黄色系，提示而不是报错 */
 .ai-vision-warn {
   margin-top: 6px;
   padding: 5px 7px;
@@ -664,6 +690,7 @@
   border-radius: 3px;
 }
 
+/* 会话切换条：新建按钮固定宽度，下拉框 flex:1 吃掉剩余空间 */
 .ai-conv-bar {
   display: flex;
   align-items: center;
@@ -685,13 +712,14 @@
   flex: 0 0 auto;
 }
 
-/* ---- material library: Substance archive cards ---- */
+/* ---- 素材库：Substance 归档(.sbsar)卡片 ---- */
 .sbsar-hint {
   margin: 6px 0 0;
   border-left: 2px solid var(--accent-soft);
   padding-left: 8px;
   line-height: 1.6;
 }
+/* 归档卡片横跨整个网格（grid-column:1/-1），因为展开后的详情内容比普通素材卡片宽得多 */
 .asset-card-sbsar {
   grid-column: 1 / -1;
   display: block;
@@ -749,7 +777,8 @@
   background: rgba(88, 183, 255, 0.12);
 }
 
-/* --- .sbsar input-parameter workbench ------------------------------------------------------- */
+/* --- .sbsar 输入参数工作台 --------------------------------------------- */
+/* 参数可能上百条，弹窗内部滚动，工具栏跟随内容一起滚出（不再 sticky）以节省高度 */
 .sbsar-params-modal {
   display: flex;
   flex-direction: column;
@@ -787,6 +816,7 @@
   color: var(--accent);
   font-family: var(--mono);
 }
+/* 用透明原生 input 覆盖整个按钮区域，点按钮任意位置都能触发文件选择 */
 .sbsar-param-import {
   position: relative;
   overflow: hidden;
@@ -819,6 +849,7 @@
 .sbsar-param-row.changed {
   background: rgba(88, 183, 255, 0.07);
 }
+/* 参数双列：名称区固定 46%，控件区吃掉剩余宽度，长参数名用省略号截断 */
 .sbsar-param-meta {
   flex: 0 0 46%;
   min-width: 0;
@@ -892,6 +923,7 @@
   max-width: 62%;
   line-height: 1.5;
 }
+/* 展开后的详情区：与卡片头部用细线分隔，纵向排列说明/缩略图/元数据 */
 .sbsar-detail {
   border-top: 1px solid var(--line-soft);
   padding: 10px;
@@ -989,7 +1021,8 @@
 }
 
 
-/* ---- material library: sbsar interface map, contents list, image lightbox ---- */
+/* ---- 素材库：sbsar 接口图、内容清单、图片灯箱 ---- */
+/* 接口图用内联 SVG 绘制，max-height 限制图表高度；.ig-* 系列是 SVG 元素的命名空间 */
 .sbsar-igraph {
   width: 100%;
   max-height: 380px;
@@ -1059,6 +1092,7 @@
 .sbsar-zoomable {
   cursor: zoom-in;
 }
+/* 灯箱遮罩：z-index 120 高于通用弹窗(100)，可叠在素材库弹窗之上查看大图 */
 .lightbox-backdrop {
   z-index: 120;
 }
@@ -1080,6 +1114,7 @@
   padding: 12px 16px;
   border-bottom: 1px solid var(--line);
 }
+/* object-fit:contain 保证大图按比例完整显示，不被裁切 */
 .lightbox-img {
   max-width: 92vw;
   max-height: 72vh;
@@ -1088,7 +1123,8 @@
   image-rendering: auto;
 }
 
-/* ---- JSON viewer modal ---- */
+/* ---- JSON 查看器弹窗 ---- */
+/* 结构化视图（json-formatter）与原始文本共用同一滚动容器，切换时保持阅读位置 */
 .json-modal {
   max-width: 920px;
   height: 84vh;
@@ -1121,7 +1157,8 @@
   color: var(--red);
   font-size: 12px;
 }
-/* json-formatter-js dark theme polish to match the studio palette */
+/* 第三方 json-formatter-js 暗色主题配色，对齐工作台调色板：
+   key=蓝、string=绿、number=橙，和检查器里的数值语义保持一致 */
 .json-host .json-formatter-dark.json-formatter-row,
 .json-host .json-formatter-dark .json-formatter-row {
   font-family: var(--mono);

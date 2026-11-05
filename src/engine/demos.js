@@ -1,10 +1,21 @@
-// Built-in demo materials, authored as real node graphs.
+/**
+ * 内置示例材质库：每个示例都是「真实的节点图」，而不是预烘焙图片，
+ * 因此用户打开示例后可以任意改参数、看编译过程，也可作为学习节点用法的模板。
+ *
+ * 主要导出：DEMOS（示例数组，模块加载时即构建）、buildDemo（按 id 取示例并深拷贝）。
+ */
 import { NODE_MAP, defaultParams } from './nodes/index.js'
 import { PAINT_SIZE } from './paint.js'
 
+// 节点/连线的自增序号；与随机后缀组合，保证 id 在单次会话内唯一
 let seq = 0
 const uid = (prefix) => `${prefix}-${(++seq).toString(36)}${Math.random().toString(36).slice(2, 6)}`
 
+/**
+ * 创建节点对象。
+ * 参数先取节点定义的默认值，再覆盖传入的自定义值——这样即使节点定义新增了参数，
+ * 老示例也不会因为缺少字段而出错。
+ */
 function mk(type, x, y, params = {}, data = {}) {
   const def = NODE_MAP[type]
   return {
@@ -17,6 +28,7 @@ function mk(type, x, y, params = {}, data = {}) {
   }
 }
 
+/** 创建一条连线：默认从源节点的 'out' 口连到目标节点的 toPort 口。 */
 function link(fromNode, toNode, toPort, fromPort = 'out') {
   return {
     id: uid('link'),
@@ -25,7 +37,13 @@ function link(fromNode, toNode, toPort, fromPort = 'out') {
   }
 }
 
+/**
+ * 构造「手绘招牌」示例用的笔刷笔画集合。
+ * 笔画坐标为归一化坐标（0..1）；p 为笔压（0..1），绘制节点用它控制笔迹宽度/浓度。
+ * 包含：一条青色弧线、一条橙色横向笔触、以及 16 个带随机位置与大小的圆点。
+ */
 function demoStrokes() {
+  // 第一条：沿正弦轨迹的青色笔刷，笔压取正弦包络（起笔/收笔较细）
   const sweep = []
   for (let i = 0; i <= 42; i++) {
     const t = i / 42
@@ -44,12 +62,14 @@ function demoStrokes() {
     symmetry: { x: false, y: false },
     points: sweep
   }
+  // 第二条：接近水平的橙色长笔触，带轻微上下波动
   const stripe = []
   for (let i = 0; i <= 26; i++) {
     const t = i / 26
     stripe.push({ x: 0.2 + 0.6 * t, y: 0.82 + 0.05 * Math.sin(t * 7.0), p: 0.5 + 0.5 * Math.sin(t * Math.PI) })
   }
   const s2 = { color: '#c25f22', size: 84, opacity: 0.94, hardness: 0.6, erase: false, points: stripe }
+  // 第三条起：16 个单点笔刷，用取模运算生成看似随机但完全确定的分布与配色
   const dots = []
   for (let i = 0; i < 16; i++) {
     const tone = ['#1d5d68', '#d9772e', '#f2e6cd', '#7a4d2b'][i % 4]
@@ -67,9 +87,11 @@ function demoStrokes() {
   return [s1, s2, ...dots]
 }
 
-// ---------------------------------------------------------------------------
-// Demo 1 — weathered painted steel panels
-// ---------------------------------------------------------------------------
+/**
+ * 示例 1：风化的喷漆钢板。
+ * 结构：瓷砖图提供板缝与大形高度；细噪声补充表面微起伏；edges + threshold 提取板缝边缘作为磨损区域；
+ * 锈色用 grunge/perlin 生成蒙版后与钢色混合；粗糙度与金属度也用磨损蒙版区分「漆面」与「露出的金属」。
+ */
 function weatheredSteel() {
   const tilesH = mk('tiles', 40, 60, {
     count: [3, 3], gap: 0.014, round: 0.014, randomize: 0.14, rotate: 0.005, bevel: 0.06,
@@ -165,9 +187,12 @@ function weatheredSteel() {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Demo 2 — mossy rock
-// ---------------------------------------------------------------------------
+/**
+ * 示例 2：长满苔藓的岩石。
+ * 结构：Perlin 大形被细胞噪声 warp 扭曲，叠加高频细节与 grunge 后得到山石高度；
+ * 颜色：岩石用多段灰褐色渐变，苔藓用绿色渐变；苔藓的生长位置由「反相 AO」+ grunge 决定，
+ * 即凹陷处更容易长苔；粗糙度同样按苔藓蒙版混合。
+ */
 function mossyRock() {
   const perlinA = mk('perlin', 40, 60, { scale: 4, octaves: 6, persistence: 0.55, lacunarity: 2, contrast: 1.1, seed: 21 })
   const cellWarp = mk('cellular', 40, 330, { cells: 5, jitter: 1, mode: 0, invert: false, contrast: 1, seed: 4 })
@@ -248,9 +273,11 @@ function mossyRock() {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Demo 3 — hand painted sign (paint layer demo)
-// ---------------------------------------------------------------------------
+/**
+ * 示例 3：手绘招牌（绘制层演示）。
+ * 绘制节点直接覆盖在底材颜色之上；将「底材」与「绘制结果」做差异得到笔迹蒙版，
+ * 再让笔迹参与高度、法线与粗糙度，因此颜料看起来有厚度、且比底材更光滑。
+ */
 function paintedSign() {
   const wall = mk('grunge', 40, 60, { scale: 9, octaves: 5, detail: 3.2, threshold: 0.5, contrast: 4, invert: false, seed: 3 })
   const baseColor = mk('gradient_map', 320, 60, {
@@ -303,7 +330,10 @@ function paintedSign() {
   }
 }
 
-// ---------------------------------------------------------------------------
+/**
+ * 示例 4：空白起步工程。
+ * 只保留一个 Perlin 噪声 + 法线 + 输出节点，作为「新建材质」的默认画布。
+ */
 function bareMaterial() {
   const fbm = mk('perlin', 40, 60, { scale: 8, octaves: 5 })
   const normal = mk('normal', 320, 60, { intensity: 0.4, radius: 2 })
@@ -320,11 +350,22 @@ function bareMaterial() {
   }
 }
 
+/**
+ * 全部内置示例。模块加载时立即构建，之后按引用共享模板（buildDemo 会负责深拷贝）。
+ */
 export const DEMOS = [weatheredSteel(), mossyRock(), paintedSign(), bareMaterial()]
 
+/**
+ * 按 id 取示例并返回一份完全独立的副本。
+ * 通过 JSON 深拷贝隔离模板，用户对示例的任何编辑都不会污染 DEMOS 中的原始数据。
+ * id 不存在时回退到第一个示例。
+ *
+ * @param {string} id 示例 id（如 'weathered-steel'）
+ * @returns {{id: string, name: string, desc: string, resolution: number, graph: object}}
+ */
 export function buildDemo(id) {
   const src = DEMOS.find((d) => d.id === id) || DEMOS[0]
-  // deep clone so the demo can be edited without mutating the template
+  // 深拷贝，确保示例可被随意编辑而不影响模板
   const clone = JSON.parse(JSON.stringify({ name: src.name, resolution: src.resolution, graph: src.graph }))
   return { name: src.name, desc: src.desc, id: src.id, resolution: src.resolution, graph: clone.graph }
 }

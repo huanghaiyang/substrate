@@ -1,4 +1,10 @@
-// Bilingual semantic UI messages. Keys must match between EN and ZH.
+// 双语界面文案数据表（EN / ZH）。
+//
+// 结构：两个扁平对象 EN 与 ZH，key 为「点分命名空间」（界面区.语义名），value 为展示字符串。
+//   * 两个对象的 key 集合必须完全一致；缺失的 key 会回退显示原始 key（见 i18n 运行时）。
+//   * 占位符用花括号，如 {n}、{name}、{q}、{res}；运行时按同名参数替换，禁止在译文里改名或删除。
+//   * 本文件被 src/i18n/index.js 引用；节点名/参数标签等由 text.zh.js / text.en.js 提供。
+//   * 数据表按界面区域分组（见下方分区注释），组内顺序不影响功能，但新增 key 应放进对应分区。
 export const EN = {
   'app.title': 'Substrate — Procedural Texture Studio',
   'brand.sub': 'Procedural Texture Studio',
@@ -6,6 +12,7 @@ export const EN = {
   'lang.en': 'EN',
   'lang.zh': '中文',
 
+  // 分区：顶栏 / 工程操作 / 文档分辨率 / 语言与品牌
   'top.projectName': 'Material / project name',
   'top.new': 'New',
   'top.demos': 'Demos',
@@ -21,6 +28,7 @@ export const EN = {
   'top.proxy': 'Proxy resolution while editing',
   'top.proxyValue': 'Proxy {p}',
 
+  // 分区：Image → PBR 对话框（导入照片、无缝处理、通道推导）
   'imagePbr.button': 'Image → PBR',
   'imagePbr.title': 'Image → PBR Material',
   'imagePbr.sub': 'Derive base colour, height, normal, roughness and AO from one photo — no baking step.',
@@ -61,6 +69,7 @@ export const EN = {
   'imagePbr.failed': 'Could not create the material graph',
   'imagePbr.errType': 'Unsupported file type — choose a PNG, JPG or WebP image.',
 
+  // 分区：主视图标签、运行状态栏
   'tabs.3d': '3D View',
   'tabs.maps': '2D Maps',
 
@@ -71,6 +80,7 @@ export const EN = {
   'status.cache': 'cache {n} hits',
   'status.noSelection': 'No selection',
 
+  // 分区：节点库、画布操作、连线建议与端口语义
   'palette.title': 'Node Library',
   'palette.count': '{n} nodes',
   'palette.search': 'Search generators, filters…',
@@ -121,6 +131,7 @@ export const EN = {
   'link.role.emissive': 'Emissive channel — exported as an sRGB colour map.',
   'link.role.opacity': 'Opacity channel — single-channel grey map.',
 
+  // 分区：检查器、渐变编辑器、3D 预览、通道视图
   'insp.title': 'Properties',
   'insp.noSelection': 'no selection',
   'insp.emptyTitle': 'Select a node to edit its parameters.',
@@ -154,6 +165,7 @@ export const EN = {
   'maps.space.srgb': 'sRGB',
   'maps.space.linear': 'Linear',
 
+  // 分区：绘制工作室、笔刷与绘制层素材
   'paint.back': '← Graph',
   'paint.title': 'Paint Studio',
   'paint.meta': '{name} · {n} strokes · {size}²',
@@ -223,6 +235,7 @@ export const EN = {
   'assets.creator': 'Creator',
   'assets.source': 'Source',
   'assets.attribution': 'Attribution',
+  // 分区：AI 助手（会话、附件、思考过程、模型设置）
   'ai.title': 'AI Assistant',
   'ai.model': 'Model',
   'ai.selfcheck': 'MCP self-check',
@@ -253,6 +266,7 @@ export const EN = {
   'ai.hint': 'The assistant runs on the server-side model proxy; keys are never sent to the browser.',
   'ai.noModel': 'No model available — configure a provider first.',
   'ai.noKey': 'The selected model has no API key configured.',
+  // 分区：素材库、在线搜索、SBSAR 导入说明
   'assets.title': 'Material Library',
   'assets.import': 'Import assets',
   'assets.hint': 'Import PNG/JPEG/WebP textures and use them as graph textures or paint-layer patterns.',
@@ -288,6 +302,7 @@ export const EN = {
   'assets.inUse': 'Used by: {list} — delete the reference first',
   'assets.deleteBlocked': 'Cannot delete: still used by {list}',
 
+  // 分区：回收站、删除保护与删除提示
   'trash.open': 'Recycle bin',
   'trash.title': 'Recycle bin',
   'trash.count': '{n} item(s)',
@@ -312,6 +327,7 @@ export const EN = {
   'assets.trashed': 'Moved to the recycle bin: {name}',
   'assets.trashedChildren': '({n} extracted bitmap(s) went too)',
 
+  // 分区：本地引擎烘焙（SAT / sbsrender）与参数回传
   'assets.bake': 'Bake in app',
   'assets.baking': 'Baking…',
   'assets.bakeTitle': 'Bake through the local Adobe engine: {path}',
@@ -326,6 +342,7 @@ export const EN = {
   'assets.sbsarParamsEdited': '{n} edited',
   'assets.pbrUnknownCount': '{n} file(s) skipped',
 
+  // 分区：归档近似重建、SBSAR 输入参数面板
   'assets.reconstruct': 'Approximate rebuild',
   'assets.reconstructTitle': 'Rebuild an editable procedural material from the archive interface + its preview render (not a port: a .sbsar has no node graph)',
   'assets.reconstructing': 'Rebuilding…',
@@ -377,6 +394,7 @@ export const EN = {
   'assets.sbsarPreviewWarning': 'This is the asset preview render (a lit material ball), not a PBR map: it has baked shadows, a black background and no seams. Expect stretching/banding when used as a texture — use it as a reference, or import a real PBR map set.',
 
 
+  // 分区：JSON 检查报告查看器（json-formatter）
   'json.title': 'Archive inspection report',
   'json.depth1': 'Depth 1',
   'json.depth2': 'Depth 2',
@@ -403,6 +421,7 @@ export const EN = {
   'paint.taper': 'Pen Taper',
   'paint.taperOn': 'Taper stroke ends',
   'paint.taperLength': 'Taper length',
+  // 分区：笔刷预设名称与分类（随后是历史/错误等零散文案）
   'brush.softRound': 'Soft Round',
   'brush.hardRound': 'Hard Round',
   'brush.pencil': 'Pencil',
@@ -562,6 +581,7 @@ export const ZH = {
   'lang.en': 'EN',
   'lang.zh': '中文',
 
+  // 分区：顶栏 / 工程操作 / 文档分辨率 / 语言与品牌
   'top.projectName': '材质 / 项目名称',
   'top.new': '新建',
   'top.demos': '示例',
@@ -577,6 +597,7 @@ export const ZH = {
   'top.proxy': '编辑时的代理分辨率',
   'top.proxyValue': '代理 {p}',
 
+  // 分区：图片转 PBR 对话框（导入照片、无缝处理、通道推导）
   'imagePbr.button': '图片转 PBR',
   'imagePbr.title': '图片转 PBR 材质',
   'imagePbr.sub': '从一张照片直接生成基础色、高度、法线、粗糙度与 AO，无需烘焙。',
@@ -617,6 +638,7 @@ export const ZH = {
   'imagePbr.failed': '无法创建材质节点图',
   'imagePbr.errType': '不支持的文件类型，请选择 PNG、JPG 或 WebP 图片。',
 
+  // 分区：主视图标签、运行状态栏
   'tabs.3d': '3D 视图',
   'tabs.maps': '2D 贴图',
 
@@ -627,6 +649,7 @@ export const ZH = {
   'status.cache': '缓存命中 {n} 次',
   'status.noSelection': '未选择节点',
 
+  // 分区：节点库、画布操作、连线建议与端口语义
   'palette.title': '节点库',
   'palette.count': '{n} 个节点',
   'palette.search': '搜索生成器、滤镜…',
@@ -677,6 +700,7 @@ export const ZH = {
   'link.role.emissive': '自发光通道——导出为 sRGB 颜色贴图。',
   'link.role.opacity': '不透明度通道——单通道灰度贴图。',
 
+  // 分区：检查器、渐变编辑器、3D 预览、通道视图
   'insp.title': '属性',
   'insp.noSelection': '未选择',
   'insp.emptyTitle': '选择一个节点以编辑其参数。',
@@ -710,6 +734,7 @@ export const ZH = {
   'maps.space.srgb': 'sRGB',
   'maps.space.linear': '线性',
 
+  // 分区：绘制工作室、笔刷与绘制层素材
   'paint.back': '← 节点图',
   'paint.title': '绘制工作室',
   'paint.meta': '{name} · {n} 笔 · {size}²',
@@ -779,6 +804,7 @@ export const ZH = {
   'assets.creator': '作者',
   'assets.source': '来源',
   'assets.attribution': '署名信息',
+  // 分区：AI 助手（会话、附件、思考过程、模型设置）
   'ai.title': 'AI 助手',
   'ai.model': '模型',
   'ai.selfcheck': 'MCP 自检',
@@ -809,6 +835,7 @@ export const ZH = {
   'ai.hint': '助手使用服务端模型代理，密钥不会发送到浏览器。',
   'ai.noModel': '没有可用模型，请先配置提供商。',
   'ai.noKey': '当前模型未配置 API Key。',
+  // 分区：素材库、在线搜索、SBSAR 导入说明
   'assets.title': '素材库',
   'assets.import': '导入素材',
   'assets.hint': '导入 PNG/JPEG/WebP 贴图，可用作节点贴图或绘制层图案。',
@@ -844,6 +871,7 @@ export const ZH = {
   'assets.inUse': '被 {list} 使用中，先解除引用才能删除',
   'assets.deleteBlocked': '无法删除：仍被 {list} 使用',
 
+  // 分区：回收站、删除保护与删除提示
   'trash.open': '回收站',
   'trash.title': '回收站',
   'trash.count': '{n} 项',
@@ -868,6 +896,7 @@ export const ZH = {
   'assets.trashed': '已移到回收站：{name}',
   'assets.trashedChildren': '（连同 {n} 张提取的位图）',
 
+  // 分区：本地引擎烘焙（SAT / sbsrender）与参数回传
   'assets.bake': '应用内烘焙',
   'assets.baking': '烘焙中…',
   'assets.bakeTitle': '通过本地 Adobe 引擎烘焙：{path}',
@@ -882,6 +911,7 @@ export const ZH = {
   'assets.sbsarParamsEdited': '已改 {n} 项',
   'assets.pbrUnknownCount': '已跳过 {n} 个文件',
 
+  // 分区：归档近似重建、SBSAR 输入参数面板
   'assets.reconstruct': '近似重建',
   'assets.reconstructTitle': '按归档接口 + 内嵌预览图重建一份可编辑的程序化材质（不是移植：.sbsar 里没有节点图）',
   'assets.reconstructing': '重建中…',
@@ -933,6 +963,7 @@ export const ZH = {
   'assets.sbsarPreviewWarning': '这是资产预览渲染图（带光照的材质球），不是 PBR 贴图：光照已烘焙、背景是黑的、也不可平铺；当作贴图必然拉伸/接缝明显。建议只作参考图，或导入真正的 PBR 套图。',
 
 
+  // 分区：JSON 检查报告查看器（json-formatter）
   'json.title': '归档检查报告',
   'json.depth1': '展开 1 层',
   'json.depth2': '展开 2 层',
@@ -959,6 +990,7 @@ export const ZH = {
   'paint.taper': '笔锋',
   'paint.taperOn': '起收笔渐细',
   'paint.taperLength': '笔锋长度',
+  // 分区：笔刷预设名称与分类（随后是历史/错误等零散文案）
   'brush.softRound': '柔和圆头',
   'brush.hardRound': '硬圆头',
   'brush.pencil': '铅笔',

@@ -1,3 +1,13 @@
+/**
+ * 根组件 App。
+ *
+ * 职责：组装整个工作台的骨架（顶栏 / 左侧节点库 / 中间画布 / 右侧预览与检查器 / 状态栏），
+ * 并集中管理各类弹窗的显隐、工程与素材的增删读写、快捷键、预览重建与 toast 提示。
+ * 真正的渲染与业务逻辑分别下沉到 components/ 与 engine/store.js，这里只做编排与反馈。
+ *
+ * 模板以内联字符串形式声明（见文件末尾的 template），因此组件采用运行时模板编译，
+ * 所有按钮/弹窗都在同一处可见，便于对照 setup() 中的状态。
+ */
 import { defineComponent, ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import NodePalette from './components/NodePalette.js'
 import GraphEditor from './components/GraphEditor.js'
@@ -36,11 +46,14 @@ import { RESOLUTIONS, PROXIES } from './ui/theme.js'
 import { locale, locales, setLocale, t, trText } from './i18n/index.js'
 import { MANUAL_SECTIONS, MANUAL_TAGS, GLOSSARY } from './manual.js'
 
+// 组件注册表：模板里可直接使用 PascalCase 标签（如 <GraphEditor />），无需逐个 import 到模板
 export default defineComponent({
   name: 'App',
   components: { NodePalette, GraphEditor, Inspector, Preview3D, MapPanel, PaintStudio, ExportDialog, TrashDialog, AiPanel, AssetLibrary, AiFloating, ImagePbrDialog },
   setup() {
+    /** 画布组件实例引用：用于调用 addAtCenter() 与 fit()（新增节点后居中、载入工程后适配视图） */
     const graphRef = ref(null)
+    // 各弹窗/浮层的显隐开关；统一用独立 ref 便于模板里 v-if 精确控制挂载与卸载
     const showExport = ref(false)
     const showProjects = ref(false)
     const showTrash = ref(false)
@@ -51,36 +64,48 @@ export default defineComponent({
     const showImagePbr = ref(false)
     const mcpCheck = ref(null)
     const mcpChecking = ref(false)
+    // 工程列表弹窗自身的数据：projects 是服务端返回的素材清单，loadingProjects 控制加载态
     const projects = ref([])
     const loadingProjects = ref(false)
+    // 轻提示：type 为空表示普通信息，'error' 会渲染成红色；toastTimer 用于重置自动关闭计时
     const toast = ref({ msg: '', type: '' })
     let toastTimer = null
+    // 预览重建的防抖计时器：短时间内多次触发只重建一次，避免拖参数时反复编译
     let previewTimer = null
 
-    // Built-in manual / glossary panel state (content lives in src/manual.js)
+    // 内置手册 / 术语表面板状态（正文数据在 src/manual.js，不随组件重复创建）
     const helpTab = ref('manual')
     const helpQuery = ref('')
     const helpSection = ref(MANUAL_SECTIONS[0].id)
     const helpTag = ref('all')
 
-    /** current manual language — reactive through the global locale ref */
+    /** 手册当前语言：借助全局 locale 保持响应式，语言切换后手册正文即时更新 */
     const helpLang = computed(() => (locale.value === 'zh' ? 'zh' : 'en'))
+    // 手册的章节与标签是静态数据，包一层 computed 只是为了让模板以统一方式访问
     const manualSections = computed(() => MANUAL_SECTIONS)
     const manualTags = computed(() => MANUAL_TAGS)
 
+    /**
+     * 大小写不敏感的关键词匹配。
+     * @param {string} value 被检索的文本
+     * @param {string} q 已转小写的关键词；为空表示“不过滤”
+     * @returns {boolean} 是否命中
+     */
     const matchText = (value, q) => !q || String(value).toLowerCase().includes(q)
 
-    /** section whose body is shown: search results, or the single selected section */
+    /** 当前正文要展示的章节：无搜索词时只显示选中章节，有搜索词时返回全部命中章节 */
     const visibleSections = computed(() => {
       const lang = helpLang.value
       const q = helpQuery.value.trim().toLowerCase()
       if (!q) return MANUAL_SECTIONS.filter((s) => s.id === helpSection.value)
       return MANUAL_SECTIONS.filter((s) => {
+        // 把标题 + 各类型区块（段落/表格/列表）的文本拼成一段“检索语料”，再统一匹配
         const hay = [s.title[lang], ...s.blocks.flatMap((b) => (b.type === 'p' ? [b[lang]] : b.type === 'table' ? b.rows.flat().map((c) => c[lang]) : (b[lang] || [])))].join(' ')
         return matchText(hay, q)
       })
     })
 
+    /** 术语表过滤：先按标签筛选，再按关键词匹配术语名/释义/在本工具中的应用 */
     const visibleGlossary = computed(() => {
       const lang = helpLang.value
       const q = helpQuery.value.trim().toLowerCase()
@@ -89,7 +114,7 @@ export default defineComponent({
       )
     })
 
-    /** cross-search: how many glossary terms match whatever is typed in the manual tab */
+    /** 交叉检索：手册页里输入的关键词命中了多少条术语，用于提示“可跳转到术语表” */
     const glossaryMatches = computed(() => {
       const q = helpQuery.value.trim().toLowerCase()
       if (!q) return 0
@@ -97,13 +122,21 @@ export default defineComponent({
       return GLOSSARY.filter((g) => matchText(g.term[lang] + ' ' + g.desc[lang] + ' ' + g.app[lang], q)).length
     })
 
+    // 右上角的计数文案：手册页显示章节数，术语页显示命中词条数
     const helpCount = computed(() =>
       helpTab.value === 'manual'
         ? t('help.sectionCount', { n: helpQuery.value.trim() ? visibleSections.value.length : MANUAL_SECTIONS.length })
         : t('help.termCount', { n: visibleGlossary.value.length })
     )
 
-    /** tiny inline formatter for the manual text: **bold**, `code`, and newlines */
+    /**
+     * 手册正文的极简格式化：**粗体**、`代码`，其余原样输出。
+     *
+     * 安全要点：先转义 & < > 再插入标签，因为它最终会通过 v-html 渲染；
+     * 不允许任何用户输入绕过转义，避免手册文本里混入脚本。
+     * @param {string} text 原始文本（可含 ** 与 ` 标记）
+     * @returns {string} 可安全用于 v-html 的 HTML 片段
+     */
     function rich(text) {
       const esc = String(text == null ? '' : text)
         .replace(/&/g, '&amp;')
@@ -114,31 +147,53 @@ export default defineComponent({
         .replace(/`([^`]+)`/g, '<code>$1</code>')
     }
 
+    /**
+     * 弹出一条轻提示，并在 3.2 秒后自动消失。
+     * @param {string} msg 提示文本（调用方通常已用 t() 翻译）
+     * @param {''|'error'} [type=''] 为 'error' 时渲染红色样式
+     * @sideEffect 修改 toast 响应式状态；重复调用会重置计时，避免旧计时器提前清掉新提示
+     */
     function notify(msg, type = '') {
       toast.value = { msg, type }
       if (toastTimer) clearTimeout(toastTimer)
       toastTimer = setTimeout(() => (toast.value = { msg: '', type: '' }), 3200)
     }
 
+    /**
+     * 从左侧节点库点击某类节点时，在画布中心创建它。
+     * @param {string} type 节点类型 id
+     * @sideEffect 失败（画布未就绪）时弹出错误提示
+     */
     function onPaletteAdd(type) {
       const node = graphRef.value?.addAtCenter(type)
       if (!node) notify(t('toast.addFail'), 'error')
     }
 
+    /** 新建空白材质，并在渲染完成后把视图适配到内容（nextTick 等画布重建结束） */
     function doNew() {
       newProject()
       nextTick(() => graphRef.value?.fit())
       notify(t('toast.newMaterial'))
     }
 
+    /**
+     * 载入内置示例工程。
+     * @param {string} id 示例 id（对应 state.demos）
+     * @sideEffect 关闭示例下拉、适配视图、弹出成功提示
+     */
     function doDemo(id) {
       loadDemo(id)
       showDemos.value = false
       nextTick(() => graphRef.value?.fit())
+      // 提示语里用本地化后的示例名，取不到时退回 id，避免出现 undefined
       const demo = state.demos.find((d) => d.id === id)
       notify(t('toast.demoLoaded', { name: trText(demo?.name) || id }))
     }
 
+    /**
+     * 保存当前工程（以顶栏里的工程名为文件名）。
+     * @sideEffect 写入磁盘并提示结果；失败时提示错误详情
+     */
     async function doSave() {
       try {
         const res = await saveProject(state.projectName)
@@ -148,6 +203,7 @@ export default defineComponent({
       }
     }
 
+    /** 打开工程列表弹窗并拉取服务端素材清单；拉取失败时展示空列表而不是让弹窗卡在加载态 */
     async function openProjects() {
       showProjects.value = true
       loadingProjects.value = true
@@ -159,6 +215,12 @@ export default defineComponent({
       loadingProjects.value = false
     }
 
+    /**
+     * 把工程列表里的某项移入回收站（不强制删除）。
+     * @param {string} name 工程名
+     * @sideEffect 成功后刷新列表并提示；若该工程正被打开，服务端返回 PROJECT_ACTIVE，
+     *   这里转成“当前打开中，无法删除”的友好提示
+     */
     async function deleteProject(name) {
       try {
         const r = await fetch('/api/projects/delete', {
@@ -178,8 +240,14 @@ export default defineComponent({
       }
     }
 
-    /** tell the server which material is open, so it can refuse to delete it */
+    /** 告诉服务端当前打开的是哪个材质，服务端据此拒绝删除正在编辑的工程 */
     let activeTimer = 0
+    /**
+     * 防抖地把“当前工程名”同步给服务端（250ms）。
+     * 工程名输入框是 v-model 实时绑定的，逐字符请求会产生大量无效调用，
+     * 因此只在用户停手后上报一次；请求失败静默忽略，不影响编辑。
+     * @param {string} name 当前工程名（空串表示未命名/新建）
+     */
     function markActiveProject(name) {
       clearTimeout(activeTimer)
       activeTimer = setTimeout(() => {
@@ -190,20 +258,25 @@ export default defineComponent({
         }).catch(() => {})
       }, 250)
     }
+    // immediate:true 保证首次挂载时也上报一次，服务端从启动起就知道当前打开的工程
     watch(
       () => state.projectName,
       (name) => markActiveProject(name),
       { immediate: true }
     )
 
+    /** 防止重复点击“删除当前材质”导致并发请求 */
     const deletingMaterial = ref(false)
 
     /**
-     * Move the material that is open in the editor to the recycle bin.
+     * 把编辑器里正打开的材质移入回收站。
      *
-     * Its assets stay bound: the binned project keeps its graph (with the imageAssetId references), so
-     * the library still refuses to delete those assets until the material is purged from the bin.
-     * The editor then starts a blank material so it is never editing a file that no longer exists.
+     * 素材仍然绑定：被回收的工程保留完整图结构（含 imageAssetId 引用），
+     * 因此素材库在它被彻底清除前仍会拒绝删除对应素材。
+     * 删除后立即新建空白材质，保证编辑器永远不会指向一个已经不存在的文件。
+     *
+     * 请求带 force:true 表示“允许回收当前打开的工程”；NOT_FOUND 视为已删除，不报错。
+     * @sideEffect 关闭/重置工程、弹出提示
      */
     async function deleteCurrentMaterial() {
       if (deletingMaterial.value) return
@@ -227,6 +300,7 @@ export default defineComponent({
       }
     }
 
+    /** 删除画布中选中的节点；未选中任何节点时给出错误提示而不是静默无反应 */
     function deleteSelection() {
       if (!state.selectedIds.length) {
         notify(t('top.deleteSelectionEmpty'), 'error')
@@ -237,17 +311,27 @@ export default defineComponent({
       notify(t('toast.nodesDeleted', { n }))
     }
 
+    /** 打开回收站；同时收起工程列表与素材库，避免多个弹窗叠在一起 */
     function openTrash() {
       showTrash.value = true
       showProjects.value = false
       showAssets.value = false
     }
 
+    /**
+     * 回收站内容变化后的回调（恢复/彻底删除）。
+     * 若工程列表此刻可见，重新拉取一次，保证列表与回收站状态一致。
+     */
     async function onTrashChanged() {
-      // the bin changed: refresh the open material list and library if they are visible
+      // 回收站变了：如果工程列表正打开，刷新它
       if (showProjects.value) projects.value = await listProjects()
     }
 
+    /**
+     * 打开（载入）指定工程。
+     * @param {string} name 工程名
+     * @sideEffect 切换当前工程、关闭列表弹窗、适配视图并提示
+     */
     async function openProject(name) {
       try {
         await loadProject(name)
@@ -259,6 +343,7 @@ export default defineComponent({
       }
     }
 
+    /** 进入绘制模式：把目标节点设为当前绘制对象并选中它，画布先隐藏（模板里用 v-show 控制） */
     function openPaint(nodeId) {
       const node = nodeById(nodeId)
       if (!node) return
@@ -267,21 +352,29 @@ export default defineComponent({
       state.selectedIds = [nodeId]
       state.activeNodeId = nodeId
     }
+    /** 退出绘制模式并强制重新求值，让画布与 3D 预览看到最新笔触结果 */
     function closePaint() {
       state.mode = 'graph'
       state.activePaintId = null
       requestEval(true)
     }
 
+    /** 从浮动小窗展开为右侧完整 AI 面板（两者互斥，展开时隐藏浮窗） */
     function expandAi() {
       showAi.value = true
       hideFloating()
     }
+    /** 顶栏 ✦ 按钮：开/关 AI 面板；打开时同样收起浮窗，避免同一内容出现两份 */
     function toggleAi() {
       showAi.value = !showAi.value
       if (showAi.value) hideFloating()
     }
 
+    /**
+     * 运行 MCP 工具自检，结果既写入状态（供帮助弹窗展示明细）也弹 toast 汇总。
+     * 异常时构造一份失败报告，保证界面不会缺少 totals 字段而报错。
+     * @sideEffect 修改 mcpCheck / mcpChecking，并弹出提示
+     */
     async function runMcpCheck() {
       mcpChecking.value = true
       try {
@@ -296,6 +389,7 @@ export default defineComponent({
       }
     }
 
+    /** 从帮助弹窗里运行完整审计：先收起弹窗让用户看到画布，再动态加载审计模块 */
     async function runSelfTest() {
       showHelp.value = false
       notify(t('audit.running'))
@@ -311,25 +405,38 @@ export default defineComponent({
       }
     }
 
+    /** 自动整理节点布局，并汇报移动了多少个节点 */
     function doAutoLayout() {
       const result = autoLayout()
       nextTick(() => graphRef.value?.fit())
       notify(t('toast.layoutDone', { n: result.moved }))
     }
 
-    // the freshly built image→PBR chain lands below the existing graph — frame it for the user
+    /** 图片转 PBR 生成完成后：关闭导入弹窗，并等新节点写入后再适配视图把它们框进视野 */
     function onImagePbrGenerated() {
       showImagePbr.value = false
       nextTick(() => graphRef.value?.fit())
     }
 
+    /** 顶栏分辨率下拉：值来自 DOM，需显式转成数字再交给 store（store 会触发全局重算） */
     function onResolution(e) {
       setResolution(Number(e.target.value))
     }
+    /** 顶栏预览倍率下拉：同样需要 Number 转换，否则 0.5 会以字符串参与运算 */
     function onProxy(e) {
       setProxy(Number(e.target.value))
     }
 
+    /**
+     * 全局快捷键处理（挂在 window 的 keydown 上）。
+     *
+     * 规则：
+     *  - 正在输入框/文本域/下拉框/可编辑区域中时全部放行，不劫持用户输入；
+     *  - Ctrl/⌘ + Z/Shift+Z、Y、D、S、E 分别对应撤销/重做/复制/保存/导出；
+     *  - Esc 优先退出绘制模式，否则关闭当前弹窗；
+     *  - Delete/Backspace 仅在画布模式下删除节点，且选中连线时交给连线自身处理。
+     * @param {KeyboardEvent} e 键盘事件
+     */
     function onKey(e) {
       const tag = e.target && e.target.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target && e.target.isContentEditable)) return
@@ -337,6 +444,7 @@ export default defineComponent({
       const key = (e.key || '').toLowerCase()
       if (mod && key === 'z') {
         e.preventDefault()
+        // Shift+Z 约定为“重做”，与常见设计工具保持一致
         if (e.shiftKey) redo()
         else undo()
         return
@@ -372,22 +480,26 @@ export default defineComponent({
         return
       }
       if ((e.key === 'Delete' || e.key === 'Backspace') && state.mode === 'graph') {
+        // 选中连线时删除键由连线自己的键盘处理，这里直接返回避免误删节点
         if (state.selectedEdgeId) return
         e.preventDefault()
         deleteSelected()
       }
     }
 
+    // 预览重建：previewNonce 每次求值后自增，这里 120ms 防抖，避免连续拖动滑块时反复编译
     watch(
       () => state.previewNonce,
       () => {
         if (previewTimer) clearTimeout(previewTimer)
         previewTimer = setTimeout(() => {
           previewTimer = null
+          // 384 是折中分辨率：够看清结构，又不会让每次拖动都卡顿
           if (buildPreview(state.engine, 384)) state.previewVersion++
         }, 120)
       }
     )
+    // 引擎错误统一转成 toast；state.error 为空时不弹，避免清空错误时误报
     watch(
       () => state.error,
       (msg) => {
@@ -395,17 +507,21 @@ export default defineComponent({
       }
     )
 
+    /** 状态栏右上角：“节点名 · 节点 id”，用于快速定位当前节点 */
     const selectedInfo = computed(() => {
       const n = nodeById(state.activeNodeId)
       if (!n) return t('status.noSelection')
       return defOf(n)?.name + ' · ' + n.id
     })
+    // 历史记录标签（如“已保存/有未保存修改”）与当前输出分辨率，直接透传给状态栏
     const historyLabel = computed(() => state.historyLabel)
     const canvasSize = computed(() => state.resolution + ' × ' + state.resolution)
 
+    // 快捷键是全局行为：组件挂载时注册、卸载时移除，避免内存泄漏与重复响应
     onMounted(() => window.addEventListener('keydown', onKey))
     onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
+    // setup 的返回值即模板可访问的上下文；这里把状态、方法与常量统一暴露给内联模板
     return {
       state,
       graphRef,
@@ -469,6 +585,15 @@ export default defineComponent({
       redo
     }
   },
+  /**
+   * 内联模板：按屏幕区域自上而下组织，便于与 setup() 中的状态逐一对应。
+   *  - header.topbar：品牌、工程名、示例/保存/打开、撤销重做、分辨率与预览倍率、
+   *    语言切换，以及 AI/素材库/回收站/帮助/图片转 PBR/导出入口；
+   *  - main.workspace：左侧 <NodePalette>，中间 <GraphEditor> / <PaintStudio>（互斥），
+   *    右侧预览与贴图分页 + <Inspector>；
+   *  - footer.statusbar：引擎状态、求值耗时、缓存命中、历史与当前选中节点；
+   *  - 尾部弹层：导出、AI 面板/浮窗、素材库、图片转 PBR、回收站、工程列表、帮助手册、toast。
+   */
   template: `
     <div class="app">
       <header class="topbar">

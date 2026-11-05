@@ -1,5 +1,68 @@
-// Substrate Texture Studio — dependency-free Node server.
-// Serves the zero-bundler ESM app, project persistence and material package export.
+// Substrate Texture Studio — 零依赖本地 Node 服务入口。
+//
+// 职责：
+//   1. 静态托管：把零打包 ESM 前端（源码模式为仓库根目录，--dist 时为 dist/）与 /vendor/ 依赖
+//      （Vue、Three.js、json-formatter）直接发给浏览器，并做 SPA 回退；
+//   2. 工程持久化：projects/*.json 的保存、读取、删除（删除进回收站）；
+//   3. 材质导出：exports/ 下按时间戳目录写出贴图、manifest.json、README.md 与 zip 包；
+//   4. 素材库：assets/ 位图与 .sbsar 的导入、检索、软删除、回收站与在线图库搜索；
+//   5. SBSAR：归档检查报告、通过本机 Adobe SAT（sbsrender）烘焙；
+//   6. LLM 代理：模型配置、连通性测试、带工具调用的助手会话（密钥只留在服务端）；
+//   7. MCP 网关：浏览器每开一个标签页就建立一条 SSE 连接，服务端把工具调用排队后下发给该标签页，
+//      页面执行完再把结果回传；同时提供 HTTP JSON-RPC /mcp 与 /api/mcp/call 两种外部入口。
+//
+// 对外 HTTP 接口一览（均以 127.0.0.1:PORT 监听，默认 3000）：
+//   GET  /api/health                     健康检查与运行统计
+//   GET  /api/projects                   工程列表（含 active 标记）
+//   POST /api/projects/active            设置当前打开的工程
+//   POST /api/projects/save             保存工程（body 为工程 JSON）
+//   GET  /api/projects/load?name=        读取工程 JSON
+//   POST /api/projects/delete            删除工程（进回收站，当前打开的可被 force 覆盖）
+//   POST /api/export                     导出材质包（base64 文件数组 + manifest + readme）
+//   GET  /api/exports                    已导出包列表
+//   POST /api/debug/report               保存调试报告
+//   GET  /api/debug/last?kind=           读取最近一份报告
+//   GET  /api/debug/list                 报告文件名列表
+//   GET  /api/mcp/tools                  工具目录（含连接信息与鉴权方式）
+//   GET  /api/mcp/events                 浏览器 SSE 通道（接收 job、回传 ready/ping）
+//   POST /api/mcp/result                 浏览器回传工具执行结果
+//   POST /api/mcp/call                   外部直接调用单个工具（阻塞等待结果）
+//   POST /mcp                            MCP JSON-RPC 2.0（initialize / tools/list / tools/call …）
+//   GET  /mcp                            自述信息与工具名列表
+//   GET  /api/mcp/selfcheck              自检报告（目录、参数校验、桥接往返）
+//   GET  /api/llm/models                 公开模型/供应商列表（仅 hasKey 布尔，无密钥）
+//   GET  /api/llm/rules                  AI 行为规则文本
+//   POST /api/llm/providers              新增/更新供应商
+//   POST /api/llm/providers/delete       删除供应商
+//   POST /api/llm/chat                   运行助手（带 MCP 工具循环）
+//   POST /api/llm/test                   测试指定模型
+//   GET  /api/assets                     素材列表（附带被哪些工程引用）
+//   GET  /api/assets/search?q=&limit=    在线图库搜索
+//   POST /api/assets/import-url          从公网 URL 导入图片（含 SSRF 校验）
+//   POST /api/assets/import              导入 data URL 图片
+//   POST /api/assets/import-sbsar        导入 .sbsar 归档
+//   GET  /api/assets/sbsar?id=           读取归档检查报告
+//   POST /api/assets/delete              删除素材（被引用时返回 409）
+//   GET  /api/sbsar/bake/status          本机 SAT 探测状态
+//   POST /api/sbsar/bake                 烘焙归档并导入贴图
+//   GET  /api/trash                      回收站列表（工程 + 素材）
+//   POST /api/trash/restore              还原一项
+//   POST /api/trash/purge                永久删除一项
+//   POST /api/trash/empty                清空回收站
+//   GET  /assets/<file>                  素材文件（只读，需通过 assetFilePath 过滤）
+//   GET  /exports/<dir>/…                导出包浏览 / zip 下载
+//   GET  /vendor/…                       第三方依赖
+//
+// 安全边界：
+//   * 所有落盘路径都经过 safeJoin()/assetFilePath() 前缀校验，拒绝 ".." 与绝对路径穿越；
+//   * 请求体有上限（全局 320 MB，各接口更小），超限直接断开连接，避免内存耗尽；
+//   * 可选 MCP_TOKEN：设置后 /mcp、/api/mcp/* 需要 Bearer / x-mcp-token / ?token= 之一；
+//   * LLM 密钥只存在于本进程与 llm.config.local.json，响应与错误日志都会被脱敏；
+//   * 只能通过 Adobe 官方 sbsrender 真正烘焙，缺引擎时明确返回 SAT_MISSING 而非伪造结果。
+//
+// 与其他模块的关系：
+//   assets.mjs / trash.mjs / usage.mjs / sbsar*.mjs / llm.mjs 提供各领域实现，本文件只负责
+//   HTTP 路由、请求体解析、错误码映射与 MCP 网关调度；工具定义与参数校验来自 src/engine/mcp-catalog.js。
 import http from 'node:http'
 import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, rmSync } from 'node:fs'
 import path from 'node:path'
@@ -51,6 +114,14 @@ const mcpQueue = []
 const mcpJobs = new Map() // jobId -> { resolve, timer, tool, clientId }
 let mcpJobSeq = 0
 
+/**
+ * 校验 MCP 请求的鉴权。
+ * 未配置 MCP_TOKEN 时完全放行（本地开发默认）；配置后接受三种携带方式：
+ * Authorization: Bearer <token>、x-mcp-token 头、URL 查询参数 ?token=（SSE 场景无法自定义头）。
+ * @param {import('node:http').IncomingMessage} req
+ * @param {URL} [url] 已解析的请求 URL（SSE/GET 场景需要读查询参数）
+ * @returns {boolean} 是否允许访问
+ */
 function mcpAuthorized(req, url) {
   if (!MCP_TOKEN) return true
   const header = String(req.headers.authorization || '')
@@ -59,6 +130,11 @@ function mcpAuthorized(req, url) {
   return header === 'Bearer ' + MCP_TOKEN || token === MCP_TOKEN || queryToken === MCP_TOKEN
 }
 
+/**
+ * 统一的 401 响应：错误码 UNAUTHORIZED。
+ * @param {import('node:http').ServerResponse} res
+ * @returns {void}
+ */
 function mcpUnauthorized(res) {
   return sendJSON(res, 401, {
     ok: false,
@@ -67,10 +143,21 @@ function mcpUnauthorized(res) {
   })
 }
 
+/**
+ * 列出当前已连接的浏览器标签页，供 /api/mcp/tools 展示。
+ * @returns {{id:string,busy:boolean,connectedAt:number}[]}
+ */
 function mcpClientInfo() {
   return [...mcpClients.entries()].map(([id, c]) => ({ id, busy: c.busy, connectedAt: c.connectedAt }))
 }
 
+/**
+ * 调度器：把 mcpQueue 中的任务派发给空闲的浏览器标签页。
+ * 每个标签页同一时刻只处理一个任务（busy 标志）；派发用 SSE 事件 `job`，内容为
+ * { id, tool, arguments }。写失败时把任务放回队首并继续尝试下一个客户端。
+ * 优先选择最新连接的标签页：刷新/关闭页面后旧 SSE 条目可能残留，旧页面也可能跑着过期代码。
+ * @returns {void}
+ */
 function pumpMcpQueue() {
   if (!mcpQueue.length) return
   // Prefer the most recently connected tab: reloads/closed pages can leave stale SSE entries
@@ -97,6 +184,12 @@ function pumpMcpQueue() {
   }
 }
 
+/**
+ * 结束一个 MCP 任务：清定时器、释放标签页 busy 状态、把结果交付给等待的 Promise，并继续调度。
+ * @param {string} id 任务 id（形如 mcp_<base36 时间>_<序号>）
+ * @param {object} envelope 归一化结果 { ok, data?, error?, meta? }
+ * @returns {boolean} 该 id 是否存在（false 表示超时后迟到的结果，调用方应回 202）
+ */
 function finishMcpJob(id, envelope) {
   const job = mcpJobs.get(id)
   if (!job) return false
@@ -112,12 +205,23 @@ function finishMcpJob(id, envelope) {
  * Dispatch one normalized tool call to a connected browser client.
  * Resolves to the external envelope { ok, tool, data, meta } or { ok:false, error }.
  */
+/**
+ * 从工具定义里挑一个适合展示的调用示例（优先带参数的示例，get_thumbnail 首个示例为 {}）。
+ * @param {object} tool mcp-catalog 中的工具条目
+ * @returns {object|null} 示例参数对象
+ */
 function toolExample(tool) {
   const examples = Array.isArray(tool?.examples) ? tool.examples : []
   // Prefer an example that actually shows arguments (get_thumbnail's first example is {}).
   return examples.find((e) => e && typeof e === 'object' && Object.keys(e).length) || examples[0] || null
 }
 
+/**
+ * 给工具错误补充 details.example / details.tool 与 hint，便于 MCP 客户端自我修正参数。
+ * @param {unknown} error 原始错误对象或字符串
+ * @param {object} tool 工具定义
+ * @returns {object} 新错误对象（不修改入参）
+ */
 function enrichToolError(error, tool) {
   const e = error && typeof error === 'object' ? { ...error } : { code: ERROR_CODES.INTERNAL, message: String(error || 'Tool failed') }
   const specific = e.details && e.details.example
@@ -129,6 +233,16 @@ function enrichToolError(error, tool) {
   return e
 }
 
+/**
+ * 把一个工具调用规范化、校验、入队并等待浏览器执行结果。
+ * 流程：查工具 → validateArguments（失败返回 INVALID_ARGUMENT 并附示例）→ 计算超时
+ * → 建立 waiter 与定时器 → 入队并触发调度 → 无标签页时 2.5 秒后返回 APP_NOT_CONNECTED。
+ * @param {string} name 工具名（如 substrate_add_node）
+ * @param {object} [args] 参数对象
+ * @param {number} [requestedTimeout] 调用方希望的超时（会被 toolTimeout 收敛到合法范围）
+ * @returns {Promise<{apiVersion:string,ok:boolean,tool?:string,data?:any,error?:object,meta?:object}>}
+ *          超时错误码 TIMEOUT；未知工具 UNKNOWN_TOOL；参数非法 INVALID_ARGUMENT；无页面 APP_NOT_CONNECTED
+ */
 function dispatchMcpTool(name, args, requestedTimeout) {
   const tool = getTool(name)
   const base = { apiVersion: API_VERSION }
@@ -200,6 +314,16 @@ function dispatchMcpTool(name, args, requestedTimeout) {
   })
 }
 
+/**
+ * GET /api/mcp/events：浏览器端 SSE 长连接。
+ * 打开时下发 `ready`（clientId / apiVersion / serverTime），之后每 20 秒发一次 `ping`；
+ * 服务端通过此连接派发 `job` 事件。`close` 时清理心跳与客户端记录。
+ * 注意：SSE 事件不是 JSON-RPC，仅内部使用；鉴权可用 ?token=。
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @param {URL} url
+ * @returns {void}
+ */
 function handleMcpEvents(req, res, url) {
   if (!mcpAuthorized(req, url)) return mcpUnauthorized(res)
   const clientId = 'tab_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7)
@@ -230,6 +354,15 @@ function handleMcpEvents(req, res, url) {
   })
 }
 
+/**
+ * POST /api/mcp/result：浏览器回传工具执行结果。
+ * 请求体 { id, ok, data?, error?, durationMs?, clientId? }，上限 64 MB（缩略图/预览可能是大 base64）。
+ * 响应：200 { ok:true, accepted:true }；id 已超时不在表里时 202 { ok:true, accepted:false }；
+ * 请求体非法/JSON 解析失败 400（INVALID_ARGUMENT）；缺 id 400。
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @returns {void}
+ */
 function handleMcpResult(req, res) {
   if (!mcpAuthorized(req)) return mcpUnauthorized(res)
   return readBody(req, 64 * 1024 * 1024)
@@ -249,6 +382,14 @@ function handleMcpResult(req, res) {
     .catch((e) => sendJSON(res, 400, { ok: false, error: { code: ERROR_CODES.INVALID_ARGUMENT, message: e.message } }))
 }
 
+/**
+ * POST /api/mcp/call：同步调用单个工具（mcp/server.mjs 与内部助手都走这里）。
+ * 请求体 { name|tool, arguments|args, timeoutMs? }，上限 8 MB。
+ * 响应恒为 200 的归一化 envelope；缺工具名返回 INVALID_ARGUMENT；请求体解析失败 400。
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @returns {void}
+ */
 function handleMcpCall(req, res) {
   if (!mcpAuthorized(req)) return mcpUnauthorized(res)
   return readBody(req, 8 * 1024 * 1024)
@@ -269,6 +410,12 @@ function handleMcpCall(req, res) {
     .catch((e) => sendJSON(res, 400, { ok: false, apiVersion: API_VERSION, error: { code: ERROR_CODES.INVALID_ARGUMENT, message: e.message } }))
 }
 
+/**
+ * 把内部 envelope 转成 MCP `tools/call` 的 result 结构：
+ * { content:[{type:'text',text}], structuredContent, isError }。
+ * @param {object} envelope dispatchMcpTool 的结果
+ * @returns {object} MCP 工具结果
+ */
 function mcpToolResult(envelope) {
   if (envelope.ok) {
     return {
@@ -284,6 +431,15 @@ function mcpToolResult(envelope) {
   }
 }
 
+/**
+ * POST /mcp：MCP JSON-RPC 2.0 over HTTP（无状态，单次请求/响应）。
+ * 支持 initialize、ping、tools/list、tools/call、resources/*、prompts/*；notifications/* 回 202 空体。
+ * 错误码遵循 JSON-RPC：-32700 解析失败、-32600 非法请求、-32601 方法不存在、-32603 内部错误。
+ * 请求体上限 8 MB，鉴权同 mcpAuthorized。
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @returns {void}
+ */
 function handleMcpJsonRpc(req, res) {
   if (!mcpAuthorized(req)) return mcpUnauthorized(res)
   return readBody(req, 8 * 1024 * 1024)
@@ -374,16 +530,35 @@ const MIME = {
   '.sbs': 'application/octet-stream'
 }
 
+/**
+ * 按扩展名查 MIME；未知扩展名回退 application/octet-stream。
+ * @param {string} file 文件名或路径
+ * @returns {string}
+ */
 function mimeOf(file) {
   return MIME[path.extname(file).toLowerCase()] || 'application/octet-stream'
 }
 
+/**
+ * 把用户提供的相对路径拼到受控根目录下，并做路径穿越防护。
+ * 先剥离开头的分隔符，再 path.resolve；若结果不在 base + sep 之下（且不等于 base）则判为非法。
+ * @param {string} base 受控根目录（绝对路径）
+ * @param {string} rel 用户输入（如 "exports/xxx/manifest.json" 的子路径）
+ * @returns {string|null} 绝对路径；非法路径返回 null（调用方应回 400）
+ */
 function safeJoin(base, rel) {
   const target = path.resolve(base, '.' + path.sep + String(rel || '').replace(/^[/\\]+/, ''))
   if (!target.startsWith(base + path.sep) && target !== base) return null
   return target
 }
 
+/**
+ * 生成只含 ASCII 的文件名片段：去掉非法字符、空格转连字符、转小写。
+ * 结果为空时用 fallback。
+ * @param {string} name 原始名称
+ * @param {string} [fallback='material']
+ * @returns {string}
+ */
 function slugify(name, fallback = 'material') {
   const clean = String(name || '')
     .replace(/[^A-Za-z0-9 _-]/g, '')
@@ -395,6 +570,13 @@ function slugify(name, fallback = 'material') {
 
 // Filenames must stay ASCII, but two different non-ASCII names must not collide,
 // so append a short stable hash whenever characters had to be stripped.
+/**
+ * 生成稳定的 ASCII 文件名 slug。若原文被剥离了非 ASCII 字符，则追加 6 位 SHA-1 短哈希，
+ * 避免「材质A」「材质B」都变成同一文件名而互相覆盖。
+ * @param {string} name 原始名称
+ * @param {string} [fallback='material']
+ * @returns {string} 形如 material 或 material-3f2a1b
+ */
 function nameSlug(name, fallback = 'material') {
   const base = slugify(name, fallback)
   const normalized = String(name || '')
@@ -406,21 +588,46 @@ function nameSlug(name, fallback = 'material') {
   return `${base}-${hash}`
 }
 
+/**
+ * 生成导出目录用时间戳：YYYYMMDD-HHMMSS（本地时区）。
+ * @returns {string}
+ */
 function stamp() {
   const d = new Date()
   const p = (n) => String(n).padStart(2, '0')
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
 }
 
+/**
+ * 发送原始响应体，默认禁用缓存（no-store）。
+ * @param {import('node:http').ServerResponse} res
+ * @param {number} status HTTP 状态码
+ * @param {string|Buffer} body 响应体
+ * @param {Record<string,string>} [headers] 额外响应头（如 Content-Type）
+ * @returns {void}
+ */
 function send(res, status, body, headers = {}) {
   res.writeHead(status, { 'Cache-Control': 'no-store', ...headers })
   res.end(body)
 }
 
+/**
+ * 发送 JSON 响应（自动序列化并设置 UTF-8 Content-Type）。
+ * @param {import('node:http').ServerResponse} res
+ * @param {number} status
+ * @param {unknown} obj
+ * @returns {void}
+ */
 function sendJSON(res, status, obj) {
   send(res, status, JSON.stringify(obj), { 'Content-Type': 'application/json; charset=utf-8' })
 }
 
+/**
+ * 读取完整请求体，超出 limit 立即 reject 并销毁连接（防内存耗尽）。
+ * @param {import('node:http').IncomingMessage} req
+ * @param {number} [limit=BODY_LIMIT] 字节上限（默认 320 MB）
+ * @returns {Promise<Buffer>} 失败时 reject Error('Request body too large') 或底层错误
+ */
 function readBody(req, limit = BODY_LIMIT) {
   return new Promise((resolve, reject) => {
     const chunks = []
@@ -450,18 +657,34 @@ const CRC_TABLE = (() => {
   return table
 })()
 
+/**
+ * 计算 ZIP 所需的 CRC-32（IEEE 多项式，反射实现）。
+ * @param {Buffer|Uint8Array} buf
+ * @returns {number} 无符号 32 位校验值
+ */
 function crc32(buf) {
   let c = 0xffffffff
   for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8)
   return (c ^ 0xffffffff) >>> 0
 }
 
+/**
+ * 把 Date 转成 ZIP 头使用的 DOS 日期/时间（秒精度为 2 秒，年份基准 1980）。
+ * @param {Date} [date=new Date()]
+ * @returns {{time:number,day:number}} 16 位时间字与日期字
+ */
 function dosTime(date = new Date()) {
   const time = ((date.getHours() & 0x1f) << 11) | ((date.getMinutes() & 0x3f) << 5) | ((date.getSeconds() / 2) & 0x1f)
   const day = (((date.getFullYear() - 1980) & 0x7f) << 9) | (((date.getMonth() + 1) & 0x0f) << 5) | (date.getDate() & 0x1f)
   return { time, day }
 }
 
+/**
+ * 在内存里拼出一个标准 ZIP 包（写入本地文件头 + 中央目录 + EOCD）。
+ * 仅支持 deflate 与 store 两种方式，不写加密/zip64，足够导出材质包使用。
+ * @param {{name:string,data:Buffer,compress?:boolean}[]} entries 条目列表；compress=false 时原样存储
+ * @returns {Buffer} 完整 zip 字节
+ */
 function zipStore(entries) {
   // entries: [{ name, data: Buffer, compress?: boolean }]
   const localParts = []
@@ -526,11 +749,21 @@ function zipStore(entries) {
 // the material currently open in the editor: it cannot be deleted until another one is opened
 let activeProject = ''
 
+/**
+ * 记录「编辑器中当前打开」的材质名；该材质受删除保护（除非 force）。
+ * @param {string} name 材质/工程显示名
+ * @returns {string} 记录后的名称
+ */
 function setActiveProject(name) {
   activeProject = String(name || '')
   return activeProject
 }
 
+/**
+ * 扫描 projects/ 下所有 *.json，返回按保存时间倒序的摘要列表。
+ * 损坏的工程文件会被跳过（不影响其余条目）。
+ * @returns {{name:string,file:string,savedAt:number,resolution:number,nodes:number,bytes:number,active:boolean}[]}
+ */
 function projectList() {
   const out = []
   for (const file of readdirSync(PROJECTS_DIR)) {
@@ -556,6 +789,14 @@ function projectList() {
   return out.sort((a, b) => b.savedAt - a.savedAt)
 }
 
+/**
+ * POST /api/projects/save：把工程 JSON 写入 projects/<slug>.json。
+ * 请求体：工程对象，必须含 graph；name 截断到 120 字符；服务端补 savedAt。
+ * 响应 200 { ok:true, file, name, path }；非法负载 400 { ok:false, error }。
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @returns {void}
+ */
 function handleProjectSave(req, res) {
   readBody(req)
     .then((buf) => {
@@ -570,6 +811,13 @@ function handleProjectSave(req, res) {
     .catch((e) => sendJSON(res, 400, { ok: false, error: e.message }))
 }
 
+/**
+ * GET /api/projects/load?name=：读取工程文件（支持显示名或已哈希的文件 slug）。
+ * 先试 nameSlug，再回退 slugify；两处都找不到回 404；命中后把该材质设为 active（受删除保护）。
+ * @param {import('node:http').ServerResponse} res
+ * @param {string} name 工程显示名或文件名（不含 .json）
+ * @returns {void}
+ */
 function handleProjectLoad(res, name) {
   // accept either the display name or the already-hashed file slug returned by /api/projects
   let file = `${nameSlug(name, 'untitled')}.json`
@@ -597,6 +845,16 @@ function handleProjectLoad(res, name) {
 }
 
 // -------------------------------------------------------------------- exports
+/**
+ * POST /api/export：写出一次材质导出包。
+ * 请求体 { materialName, files:[{path,data(base64)}], manifest?, readme? }。
+ * 每个文件路径都会拒绝 ".."、绝对路径并通过 safeJoin 二次校验；目录名带时间戳且自动去重。
+ * 输出 <dir>/manifest.json、README.md 与 <slug>.zip，并触发 pruneExports 保留最近 40 个包。
+ * 响应 200 { ok, dir, url, zip, zipBytes, files }；非法负载 400。
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @returns {void}
+ */
 function handleExport(req, res) {
   readBody(req)
     .then((buf) => {
@@ -646,6 +904,10 @@ function handleExport(req, res) {
     })
 }
 
+/**
+ * 列出 exports/ 下的导出目录（按目录 mtime 倒序），附带 manifest 与文件清单。
+ * @returns {{dir:string,url:string,zip:string|null,mtime:number,manifest:object|null, files:string[]}[]}
+ */
 function exportList() {
   const out = []
   if (!existsSync(EXPORTS_DIR)) return out
@@ -672,6 +934,12 @@ function exportList() {
   return out.sort((a, b) => b.mtime - a.mtime)
 }
 
+/**
+ * 只保留最近 max 个导出目录，删除更早的（按目录 mtime 排序）。
+ * 失败静默忽略：清理失败不应让导出请求失败。
+ * @param {number} [max=40]
+ * @returns {void}
+ */
 function pruneExports(max = 40) {
   try {
     const dirs = readdirSync(EXPORTS_DIR, { withFileTypes: true })
@@ -693,6 +961,13 @@ const VENDOR_FILES = {
   'json-formatter.umd.js': 'vendor/json-formatter.umd.js'
 }
 
+/**
+ * 以流的方式返回一个磁盘文件；目录或不存在时回 404。
+ * @param {import('node:http').ServerResponse} res
+ * @param {string} file 绝对路径
+ * @param {boolean} [download=false] 为 true 时加 Content-Disposition: attachment
+ * @returns {void}
+ */
 function serveFile(res, file, download = false) {
   if (!existsSync(file) || statSync(file).isDirectory()) {
     return send(res, 404, 'Not found', { 'Content-Type': 'text/plain' })
@@ -703,6 +978,13 @@ function serveFile(res, file, download = false) {
   createReadStream(file).pipe(res)
 }
 
+/**
+ * 解析 /vendor/ 请求：白名单文件直接映射，addons/* 走 three/examples/jsm 并经 safeJoin 防护。
+ * 未命中回 404 text/plain。
+ * @param {import('node:http').ServerResponse} res
+ * @param {string} rel /vendor/ 之后的相对路径
+ * @returns {void}
+ */
 function serveVendor(res, rel) {
   const clean = rel.replace(/^[/\\]+/, '')
   if (VENDOR_FILES[clean]) return serveFile(res, path.join(ROOT, VENDOR_FILES[clean]))
@@ -714,6 +996,16 @@ function serveVendor(res, rel) {
   send(res, 404, 'vendor not found', { 'Content-Type': 'text/plain' })
 }
 
+/**
+ * 静态托管主流程：
+ *   /vendor/…   → serveVendor（始终从 node_modules 取，源码与 dist 模式一致）
+ *   /exports/…  → 导出包目录浏览、zip 下载（attachment）或单文件
+ *   其他路径    → 相对 WWW 解析；命中文件即返回，否则回退 index.html（SPA 路由）
+ * 路径非法（safeJoin 返回 null）回 400；不存在的文件回 404（SPA 回退除外）。
+ * @param {import('node:http').ServerResponse} res
+ * @param {string} urlPath 已解码的 pathname
+ * @returns {void}
+ */
 function serveApp(res, urlPath) {
   // vendor always resolves from node_modules (works for source and dist builds alike)
   if (urlPath.startsWith('/vendor/')) return serveVendor(res, urlPath.slice('/vendor/'.length))
@@ -744,10 +1036,24 @@ function serveApp(res, urlPath) {
 }
 
 // ----------------------------------------------------------------------- main
+/**
+ * GET /api/llm/models：返回公开模型/供应商信息（只含 hasKey 布尔，绝不含密钥）。
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @returns {void}
+ */
 function handleLlmModels(req, res) {
   return sendJSON(res, 200, publicModels())
 }
 
+/**
+ * POST /api/llm/providers：新增或更新供应商配置（写入 llm.config.local.json，权限 0600）。
+ * 请求体 { id?, label?, baseUrl?, apiKey?, models? }，上限 1 MB。
+ * 成功响应 200 { ok:true, ...publicModels() }；校验失败 400，错误码 LLM_CONFIG_ERROR。
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @returns {void}
+ */
 function handleLlmProviderSave(req, res) {
   return readBody(req, 1024 * 1024)
     .then((buf) => {
@@ -758,6 +1064,13 @@ function handleLlmProviderSave(req, res) {
     .catch((e) => sendJSON(res, 400, { ok: false, error: { code: 'LLM_CONFIG_ERROR', message: String(e.message || e) } }))
 }
 
+/**
+ * POST /api/llm/providers/delete：删除供应商。请求体 { id }，上限 256 KB。
+ * 缺 id 或找不到供应商均回 400，错误码 LLM_CONFIG_ERROR。
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @returns {void}
+ */
 function handleLlmProviderDelete(req, res) {
   return readBody(req, 256 * 1024)
     .then((buf) => {
@@ -769,6 +1082,15 @@ function handleLlmProviderDelete(req, res) {
     .catch((e) => sendJSON(res, 400, { ok: false, error: { code: 'LLM_CONFIG_ERROR', message: String(e.message || e) } }))
 }
 
+/**
+ * POST /api/llm/chat：运行内置助手（OpenAI 兼容工具循环），工具执行复用 dispatchMcpTool，
+ * 因此助手与外部 MCP 客户端拥有完全相同的操作能力。请求体上限 4 MB。
+ * 响应 200 为 runAssistant 结果（ok/reply/toolCalls/reasoning/usage/vision/...）；
+ * 解析失败 400，错误码 INVALID_ARGUMENT。
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @returns {void}
+ */
 function handleLlmChat(req, res) {
   return readBody(req, 4 * 1024 * 1024)
     .then((buf) => {
@@ -778,6 +1100,13 @@ function handleLlmChat(req, res) {
     .catch((e) => sendJSON(res, 400, { ok: false, error: { code: 'INVALID_ARGUMENT', message: String(e.message || e) } }))
 }
 
+/**
+ * POST /api/llm/test：向指定模型发一条最短请求验证连通性。请求体 { modelKey|model }，上限 256 KB。
+ * 响应 200 为 testModel 结果（ok/reply/durationMs 或 error）；解析失败 400 INVALID_ARGUMENT。
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @returns {void}
+ */
 function handleLlmTest(req, res) {
   return readBody(req, 256 * 1024)
     .then((buf) => {
@@ -787,6 +1116,14 @@ function handleLlmTest(req, res) {
     .catch((e) => sendJSON(res, 400, { ok: false, error: { code: 'INVALID_ARGUMENT', message: String(e.message || e) } }))
 }
 
+/**
+ * GET /api/assets：列出素材库（隐藏回收站条目），并为每条附上 usage（被哪些工程/回收站材质引用）。
+ * usage 扫描失败时降级为空 Map，不影响列表本身。
+ * 响应 200 { ok:true, assets:[{...publicAsset, usage}], dir:'assets/' }。
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @returns {void}
+ */
 function handleAssetsList(req, res) {
   // annotate every asset with the saved projects that reference it (the UI locks those against deletion)
   let usage = new Map()
@@ -804,6 +1141,14 @@ function handleAssetsList(req, res) {
   return sendJSON(res, 200, { ok: true, assets, dir: 'assets/' })
 }
 
+/**
+ * POST /api/assets/import：导入一张位图。请求体 { name, dataUrl|data }（PNG/JPEG/WebP 的 data URL），
+ * 上限 40 MB（解码后单图上限 32 MB，由 assets.mjs 校验签名与大小）。
+ * 响应 200 { ok:true, asset }；失败 400，错误码 ASSET_IMPORT_FAILED。
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @returns {void}
+ */
 function handleAssetImport(req, res) {
   return readBody(req, 40 * 1024 * 1024)
     .then((buf) => {
@@ -814,6 +1159,14 @@ function handleAssetImport(req, res) {
     .catch((e) => sendJSON(res, 400, { ok: false, error: { code: 'ASSET_IMPORT_FAILED', message: String(e.message || e) } }))
 }
 
+/**
+ * POST /api/assets/import-sbsar：导入 .sbsar 归档（保留原文件、抽取内嵌位图、缓存检查报告）。
+ * 请求体 { name, data|dataUrl }（data URL 或裸 base64），上限 90 MB（解码后上限 64 MB）。
+ * 响应 200 { ok:true, asset, inspection }；失败 400，错误码 SBSAR_IMPORT_FAILED。
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @returns {void}
+ */
 function handleAssetImportSbsar(req, res) {
   return readBody(req, 90 * 1024 * 1024)
     .then((buf) => {
@@ -826,6 +1179,14 @@ function handleAssetImportSbsar(req, res) {
     )
 }
 
+/**
+ * GET /api/assets/sbsar?id=：返回归档的完整检查报告（缓存文件优先，缺失时回退索引摘要）。
+ * 缺 id 或读取失败回 400，错误码 SBSAR_INSPECT_FAILED。
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @param {URL} url
+ * @returns {void}
+ */
 function handleAssetSbsarInspect(req, res, url) {
   try {
     const id = url.searchParams.get('id')
@@ -836,6 +1197,14 @@ function handleAssetSbsarInspect(req, res, url) {
   }
 }
 
+/**
+ * GET /api/trash：回收站总览。
+ * 对每个已删除工程额外计算 boundAssets（其节点图仍引用的素材数——绑定在进回收站后依然生效）。
+ * 响应 200 { ok:true, projects, assets, projectBytes }。
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @returns {void}
+ */
 function handleTrashList(req, res) {
   const projects = listTrashedProjects().map((item) => {
     // bindings survive the bin: report how many assets this material still holds
@@ -859,6 +1228,13 @@ function handleTrashList(req, res) {
 }
 
 /** restore one binned item; kind picks the store (project file vs asset library entry) */
+/**
+ * POST /api/trash/restore：还原一项。请求体 { id, kind? }（kind='asset' 走素材库，否则按工程）。
+ * 响应 200 { ok:true, restored }；未知 id 404（NOT_FOUND），参数缺失/失败 400（INVALID_ARGUMENT/RESTORE_FAILED）。
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @returns {void}
+ */
 function handleTrashRestore(req, res) {
   return readBody(req, 1024 * 1024)
     .then((buf) => {
@@ -871,6 +1247,13 @@ function handleTrashRestore(req, res) {
     .catch((e) => sendJSON(res, e.code === 'NOT_FOUND' ? 404 : 400, { ok: false, error: { code: e.code || 'RESTORE_FAILED', message: String(e.message || e) } }))
 }
 
+/**
+ * POST /api/trash/purge：永久删除一项（唯一真正 unlink 字节的路径）。
+ * 请求体 { id, kind? }；响应 200 { ok:true, purged }；未知 id 404，其他失败 400（PURGE_FAILED）。
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @returns {void}
+ */
 function handleTrashPurge(req, res) {
   return readBody(req, 1024 * 1024)
     .then((buf) => {
@@ -884,6 +1267,13 @@ function handleTrashPurge(req, res) {
 }
 
 /** empty the whole bin: every binned project file and every soft-deleted asset */
+/**
+ * POST /api/trash/empty：清空回收站（所有工程文件与所有软删除素材）。
+ * 逐个删除并统计成功数量；响应 200 { ok:true, purged:{projects,assets} }，异常 500 EMPTY_FAILED。
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @returns {void}
+ */
 function handleTrashEmpty(req, res) {
   try {
     const projects = emptyProjectsTrash()
@@ -902,6 +1292,13 @@ function handleTrashEmpty(req, res) {
   }
 }
 
+/**
+ * GET /api/sbsar/bake/status：报告本机是否可用 Adobe SAT（sbsrender），以及 Player 探测结果。
+ * 响应 200 { ok:true, ...bakeStatus() }（available/sbsrender/source/player/platform/installUrl/reason）。
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @returns {void}
+ */
 function handleSbsarBakeStatus(req, res) {
   return sendJSON(res, 200, { ok: true, ...bakeStatus() })
 }
@@ -910,6 +1307,17 @@ function handleSbsarBakeStatus(req, res) {
  * Bake a stored .sbsar through the locally installed Adobe engine (SAT) and import the resulting maps
  * into the asset library. Nothing is emulated: if the engine is absent this returns SAT_MISSING with
  * install guidance instead of pretending to bake.
+ */
+/**
+ * POST /api/sbsar/bake：调用本机 sbsrender 烘焙归档，并把产出的 PNG 逐张导入素材库。
+ * 请求体 { assetId, res?(256..4096，默认 2048), graph?, params? }，上限 1 MB。
+ * 参数覆盖会先用归档解析出的 parameters 做校验，非法值跳过而非报错。
+ * 响应 200 { ok:true, resolution, assets, log, applied, skipped }；
+ *   SAT 缺失 503（错误码 SAT_MISSING，附 install.url）；素材/文件不存在 404（NOT_FOUND）；其他 500（BAKE_FAILED）。
+ * 烘焙用的临时目录在 finally 中清理，避免残留。
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @returns {Promise<void>}
  */
 function handleSbsarBake(req, res) {
   return readBody(req, 1024 * 1024)
@@ -958,12 +1366,29 @@ function handleSbsarBake(req, res) {
     })
 }
 
+/**
+ * GET /api/assets/search?q=&limit=：在线图库搜索（limit 收敛到 1..24，默认 12）。
+ * 响应 200 为 searchAssets 结果（可能带 fallback 标记）；失败 400（ASSET_SEARCH_FAILED）。
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @param {URL} url
+ * @returns {void}
+ */
 function handleAssetSearch(req, res, url) {
   return searchAssets(url.searchParams.get('q') || '', Math.min(24, Math.max(1, Number(url.searchParams.get('limit')) || 12)))
     .then((result) => sendJSON(res, 200, result))
     .catch((e) => sendJSON(res, 400, { ok: false, error: { code: e.code || 'ASSET_SEARCH_FAILED', message: String(e.message || e) } }))
 }
 
+/**
+ * POST /api/assets/import-url：从公网 URL 下载图片并入库（含 SSRF 防护：仅 http(s)、禁止内网/回环
+ * 主机，重定向后的最终地址会二次校验）。请求体 { url|downloadUrl, name?, provider?, creator?,
+ * license?, licenseUrl?, sourceUrl? }，上限 1 MB。
+ * 响应 200 { ok:true, asset }；失败 400，错误码 ASSET_IMPORT_FAILED。
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @returns {void}
+ */
 function handleAssetImportUrl(req, res) {
   return readBody(req, 1024 * 1024)
     .then((buf) => {
@@ -973,6 +1398,15 @@ function handleAssetImportUrl(req, res) {
     .catch((e) => sendJSON(res, 400, { ok: false, error: { code: 'ASSET_IMPORT_FAILED', message: String(e.message || e) } }))
 }
 
+/**
+ * POST /api/assets/delete：把素材移入回收站（软删除，文件仍留在磁盘）。
+ * 请求体 { id, force? }，上限 256 KB。
+ * 若素材仍被工程（含回收站中的工程）引用且未 force，返回 409 ASSET_IN_USE 并附 usage 明细；
+ * 成功 200 { ok:true, ...trashAsset(id), usedBy }；失败 400 ASSET_DELETE_FAILED。
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @returns {void}
+ */
 function handleAssetDelete(req, res) {
   return readBody(req, 256 * 1024)
     .then((buf) => {
@@ -1004,6 +1438,12 @@ function handleAssetDelete(req, res) {
     .catch((e) => sendJSON(res, 400, { ok: false, error: { code: 'ASSET_DELETE_FAILED', message: String(e.message || e) } }))
 }
 
+/**
+ * GET /api/mcp/selfcheck：自检报告，用于排查 MCP 集成问题。
+ * 检查项：工具目录（apiVersion/数量/重名/schema/命名规范）、参数校验是否真的拒绝缺参、
+ * 未知工具是否被拒、是否有标签页连接，以及一次真实的 get_state 往返。
+ * @returns {Promise<{ok:boolean,apiVersion:string,generatedAt:string,checks:{name:string,ok:boolean,info:string}[],totals:{passed:number,failed:number},bridge:{connectedClients:number},auth:string}>}
+ */
 async function mcpSelfcheckReport() {
   const checks = []
   const add = (name, ok, info = '') => checks.push({ name, ok: !!ok, info: ok ? '' : String(info) })
@@ -1041,6 +1481,8 @@ async function mcpSelfcheckReport() {
   }
 }
 
+// 路由总入口：先解析 URL 与 pathname，再按「精确 /api/* 接口 → /mcp → /assets/* → 静态资源」顺序匹配。
+// 未匹配的 /api/* 统一回 404 JSON；非 GET/HEAD 的静态请求回 405；其余交给 serveApp（含 SPA 回退）。
 const server = http.createServer((req, res) => {
   let url
   try {
@@ -1198,6 +1640,7 @@ const server = http.createServer((req, res) => {
   return serveApp(res, p)
 })
 
+// 只监听回环地址：本服务无鉴权即可写本地文件，绝不能暴露到局域网/公网。
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`[substrate] http://127.0.0.1:${PORT}  (${USE_DIST ? 'dist' : 'source'}, node ${process.version})`)
   console.log('[mcp] gateway ready — POST /mcp (JSON-RPC) · POST /api/mcp/call · GET /api/mcp/tools · GET /api/mcp/selfcheck')

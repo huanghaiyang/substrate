@@ -1,23 +1,26 @@
-// SBSAR (.sbsar / Substance Archive) inspector — zero dependencies.
+// SBSAR（.sbsar / Substance Archive）检查器 — 零依赖。
 //
-// A real .sbsar is a **7-Zip archive**. Adobe's publishing docs give the layout and say a reader
-// should "open the archive with the LZMA decoder of your choice":
-//   assemblies/content/<n>/<Graph>.xml      graph descriptor — this is the XML tools parse
-//   assemblies/content/<n>/<Graph>.sbsasm   engine bytecode (magic "SBAM"), platform builds
-//   assemblies/content/<n>/metadata.json    package metadata (JSON, not XML)
-//   assemblies/content/<n>/resources/<id>/  generic resources (images, text, …)
+// 真实 .sbsar 是 7-Zip 归档。Adobe 发布文档给出的布局，并说明读取方应「用任意 LZMA 解码器打开」：
+//   assemblies/content/<n>/<Graph>.xml      图描述 —— 工具真正解析的 XML
+//   assemblies/content/<n>/<Graph>.sbsasm   引擎字节码（magic "SBAM"），按平台构建
+//   assemblies/content/<n>/metadata.json    包元数据（JSON，不是 XML）
+//   assemblies/content/<n>/resources/<id>/  通用资源（图片、文本等）
 //
-// What this importer can and cannot do:
-//   1. read the archive (metadata, graphs, input parameters with ranges/defaults, output usages,
-//      embedded bitmaps) and expose the bitmaps as ordinary texture assets;
-//   2. explain precisely why the graph cannot be *evaluated* here: the .sbsasm is Adobe Substance
-//      Engine bytecode, so baking at another resolution needs Adobe's engine, not a browser.
+// 本导入器能做与不能做的事：
+//   1. 读取归档（元数据、图、带范围/默认值的输入参数、输出 usage、内嵌位图），并把位图作为普通
+//      贴图素材交出去；
+//   2. 明确解释为什么这里**无法求值**：.sbsasm 是 Adobe Substance Engine 的私有字节码，
+//      换分辨率烘焙必须用 Adobe 引擎，浏览器做不到（报告里 canEvaluate 恒为 false）。
 //
-// Container handling is layered:
-//   * 7z     — the real format (./sevenzip.mjs + ./lzma.mjs decode LZMA/LZMA2/Copy). Authoritative.
-//   * zip    — some tools repackage archives as plain zip; the entry table is authoritative too.
-//   * scan   — an opaque/obfuscated container: recover descriptor XML (also zlib-compressed) and image
-//              blobs, and mark everything found that way as heuristic.
+// 容器处理分三层：
+//   * 7z     —— 真实格式（sevenzip.mjs + lzma.mjs 解码 LZMA/LZMA2/Copy），结果可信。
+//   * zip    —— 某些工具会把归档重打包成普通 zip，此时中央目录同样可信。
+//   * scan   —— 不透明/混淆容器：用扫描方式恢复描述 XML（含 zlib 压缩的）与图片块，
+//              所有由此发现的条目都标记 confidence='heuristic'。
+//
+// 对外接口：inspectSbsar(buf, options)（被 server/assets.mjs 与 SBSAR 检查接口调用）、SBSAR_LIMITS。
+// 安全边界：XML 最多 4 MB 字符、单图最多 24 MB、最多 24 张图；扫描用 zlib 试探时捕获所有异常，
+// 不会因畸形归档崩溃；最终若既无 XML/元数据又无位图/汇编，则判定「不是 Substance 归档」并抛错。
 import { createHash } from 'node:crypto'
 import zlib from 'node:zlib'
 import { is7z, read7z } from './sevenzip.mjs'
@@ -26,9 +29,22 @@ const MAX_XML_CHARS = 4 * 1024 * 1024
 const MAX_IMAGE_BYTES = 24 * 1024 * 1024
 const MAX_IMAGES = 24
 
+/**
+ * 计算 SHA-256 十六进制摘要（用于图片去重与归档指纹）。
+ * @param {Buffer|Uint8Array} buf
+ * @returns {string}
+ */
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex')
 
 // ---------------------------------------------------------------------------- container: zip
+/**
+ * 把普通 ZIP 当作归档读取（用于被重打包的 .sbsar）。
+ * 从 EOCD（0x06054b50）反查中央目录，逐条读取方法/压缩大小/原始大小/局部头偏移；
+ * method=0 直接取字节，method=8 用 zlib.inflateRawSync 解压；其他方法或解压失败只记录 error 不中断。
+ * ZIP64（count/offset 为 0xFFFF/0xFFFFFFFF）只返回空表并给出提示，不做完整支持。
+ * @param {Buffer} buf 归档字节
+ * @returns {{entries:object[],zip64:boolean}|null} 未找到 EOCD 时返回 null
+ */
 function readZip(buf) {
   const eocd = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]))
   if (eocd < 0 || eocd + 22 > buf.length) return null
@@ -74,6 +90,13 @@ function readZip(buf) {
 }
 
 // ---------------------------------------------------------------------------- XML: tiny tolerant parser
+/**
+ * 极简容错 XML 解析器：只用正则扫描，不依赖任何库，也不做 DTD/实体展开。
+ * 产出 { name, attrs, children, text } 树；支持注释/处理指令/DOCTYPE 跳过、CDATA、自闭合标签。
+ * 关闭标签只弹栈而不校验名字，遇到不配对文档也能得到近似树（导入场景够用）。
+ * @param {string} text XML 文本
+ * @returns {{name:string,attrs:object,children:object[],text:string}} 根节点（#root）
+ */
 function parseXml(text) {
   const root = { name: '#root', attrs: {}, children: [], text: '' }
   const stack = [root]
@@ -99,17 +122,34 @@ function parseXml(text) {
   return root
 }
 
+/**
+ * 深度优先遍历所有节点（含自身）。
+ * @param {object} node 起始节点
+ * @param {(node:object)=>void} visit 回调
+ * @returns {void}
+ */
 function walk(node, visit) {
   visit(node)
   for (const c of node.children) walk(c, visit)
 }
 
+/**
+ * 取标签/属性的本地名（去掉命名空间前缀并转小写）。
+ * @param {string} n
+ * @returns {string}
+ */
 function localName(n) {
   const i = String(n || '').indexOf(':')
   return (i >= 0 ? String(n).slice(i + 1) : String(n || '')).toLowerCase()
 }
 
 // ---------------------------------------------------------------------------- bitmap blobs
+/**
+ * 识别 PNG 并取宽高/位深/颜色类型；用尾部 IEND 标记裁掉多余尾随字节。
+ * @param {Buffer|Uint8Array} buf 可能是从更大缓冲区切出的片段
+ * @returns {{mime:string,width:number,height:number,bitDepth:number,colorType:number,bytes:Buffer}|null}
+ *          不是 PNG 时返回 null
+ */
 function pngInfo(buf) {
   if (buf.length < 33) return null
   if (!(buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47)) return null
@@ -122,6 +162,11 @@ function pngInfo(buf) {
   return { mime: 'image/png', width, height, bitDepth, colorType, bytes: buf.subarray(0, size) }
 }
 
+/**
+ * 识别 JPEG，扫描 SOF 段取宽高，用尾部 EOI(0xFFD9) 裁剪数据。
+ * @param {Buffer|Uint8Array} buf
+ * @returns {{mime:string,width:number|null,height:number|null,bitDepth:number,colorType:number,bytes:Buffer}|null}
+ */
 function jpegInfo(buf) {
   if (buf.length < 4 || buf[0] !== 0xff || buf[1] !== 0xd8 || buf[2] !== 0xff) return null
   let i = 2
@@ -144,6 +189,13 @@ function jpegInfo(buf) {
 }
 
 /** Scan a buffer for image blobs; `zlibProbe` also tries compressed streams. */
+/**
+ * 在不透明容器里扫描图片：先按 PNG/JPEG 魔数顺序查找，再（可选）遍历疑似 zlib 头尝试 inflate。
+ * 用「字节数 + 宽高」去重，最多返回 max 张。
+ * @param {Buffer} buf 容器字节
+ * @param {{zlibProbe:boolean,max:number}} opts zlibProbe 是否尝试解压流，max 结果上限
+ * @returns {object[]} pngInfo/jpegInfo 结果 + via('raw'|'zlib')
+ */
 function scanImages(buf, { zlibProbe, max }) {
   const found = []
   const seen = new Set()
@@ -189,6 +241,12 @@ const ATTR_ALIASES = {
   step: ['step', 'increment']
 }
 
+/**
+ * 按别名顺序找第一个存在的属性值（大小写/命名空间不敏感）。
+ * @param {Record<string,string>} attrs 属性表
+ * @param {string[]} keys 本地名别名列表
+ * @returns {string|undefined}
+ */
 function firstAttr(attrs, keys) {
   for (const k of keys) {
     for (const name of Object.keys(attrs)) {
@@ -199,6 +257,13 @@ function firstAttr(attrs, keys) {
 }
 
 /** pull numeric hints out of child <gui*-like> elements: attributes first (real SBSAR), then text */
+/**
+ * 从子级 <gui*> 元素提取数值提示：min/max/step/default。
+ * 真实 SBSAR 把范围放在属性（<guislider min="1" max="64" step="1"/>），旧格式放在文本节点。
+ * 同时收集 combo 的枚举项与 toggle 的布尔标签。
+ * @param {object} node 参数节点
+ * @returns {{min?:number,max?:number,step?:number,default?:any,enumItems?:string[],hasCombo?:boolean,boolLabels?:string[]}}
+ */
 function guiHints(node) {
   const out = {}
   const num = (v) => (v == null || v === '' || Number.isNaN(Number(v)) ? undefined : Number(v))
@@ -234,6 +299,16 @@ function guiHints(node) {
 }
 
 /** map a real-SBSAR widget/type pair to a friendly parameter kind */
+/**
+ * 把真实 SBSAR 的 widget/showAs/type 映射成前端使用的参数 kind：
+ * bool / enum / angle / float / color / image / vector2 / output / other。
+ * 优先看 widget，其次 showAs，最后用数字化 type（'4'=float，'8'=vector2，'5'=output）。
+ * @param {string} widget
+ * @param {string} showAs
+ * @param {string|null} typeRaw
+ * @param {object} hints guiHints() 结果
+ * @returns {string}
+ */
 function paramKind(widget, showAs, typeRaw, hints) {
   const w = String(widget || '').toLowerCase()
   const s2 = String(showAs || '').toLowerCase()
@@ -250,6 +325,14 @@ function paramKind(widget, showAs, typeRaw, hints) {
   return 'other'
 }
 
+/**
+ * 从一段 XML 字节里提取图、参数、输出、通道与元数据。
+ * 容错策略：使用多个标签别名（input/param/parameter/compinput/graphinput），
+ * 参数的范围/枚举既支持属性也支持嵌套 <gui*> 文本；同名元数据保留首个值。
+ * @param {Buffer} buf XML 字节
+ * @returns {{rootName:string,graphs:object[],parameters:object[],outputs:object[],channels:object[],metadata:object}|null}
+ *          文本不像 XML 时返回 null
+ */
 function collectFromXml(buf) {
   const text = buf.toString('utf8')
   if (!/^[\s\uFEFF]*(<\?xml|<\w)/.test(text)) return null
@@ -339,15 +422,24 @@ function collectFromXml(buf) {
 
 // ---------------------------------------------------------------------------- public entry
 /**
- * Inspect a .sbsar buffer.
- * @returns {{container:'zip'|'native'|'unknown', ...}} inspection report (no bytes of images inline
- *          unless `includeImageBytes` — the server stores them separately).
+ * 按归档内路径判断图片角色：含 thumb/icon/preview 记为 'preview'，否则 'resource'。
+ * @param {string} name
+ * @returns {'preview'|'resource'}
  */
-/** image role from its path inside a substance package */
 function imgRole(name) {
   return /thumb|icon|preview|.png$/i.test(name) && /thumb|icon|preview/i.test(name) ? 'preview' : 'resource'
 }
 
+/**
+ * 检查一个 .sbsar 缓冲区，返回完整报告（默认不内联图片字节，服务端另行存盘）。
+ * 容器识别顺序：7z（权威）→ zip（权威）→ 扫描（启发式）。报告包含 container/containerConfidence、
+ * graphs、parameters、outputs、channels、images、assemblies、entries、warnings/notes，
+ * 以及固定为 false 的 canEvaluate 与原因 evaluateBlockedReason。
+ * @param {Buffer} buf 归档字节
+ * @param {{includeImageBytes?:boolean,maxImages?:number}} [options]
+ * @returns {object} 检查报告；imagePayloads 保留原始图片 Buffer 供导入器落盘
+ * @throws {Error} 文件过小，或既无描述 XML/元数据又无位图/SBAM 汇编（判定为非 Substance 归档）
+ */
 export function inspectSbsar(buf, { includeImageBytes = false, maxImages = MAX_IMAGES } = {}) {
   if (!Buffer.isBuffer(buf) || buf.length < 16) throw new Error('File is too small to be a Substance archive')
   const warnings = []
@@ -359,6 +451,7 @@ export function inspectSbsar(buf, { includeImageBytes = false, maxImages = MAX_I
   let assemblies = []
   const metadataFromJson = {}
 
+  // 第一优先：标准 7z 容器。中央目录/文件头是权威来源，解析失败时仍继续尝试其它路径。
   if (is7z(buf)) {
     container = '7z'
     try {
@@ -387,6 +480,7 @@ export function inspectSbsar(buf, { includeImageBytes = false, maxImages = MAX_I
     notes.push('7z archive read from its entry table (authoritative).')
   }
 
+  // 第二优先：被工具重打包成普通 zip 的归档。
   const zip = container === 'unknown' ? readZip(buf) : null
   if (zip && zip.entries.length) {
     container = 'zip'
@@ -404,6 +498,8 @@ export function inspectSbsar(buf, { includeImageBytes = false, maxImages = MAX_I
       }
     }
   } else if (container === 'unknown') {
+    // 第三优先：不透明原生容器。没有公开的目录结构，只能做启发式扫描，
+    // 结果可能不完整，因此报告中所有条目都标 confidence='heuristic'。
     // opaque container: scan for what we can recognise
     container = 'native'
     notes.push('Native Substance container: the archive table is undocumented, so contents were recovered by scanning (tolerant, may be partial).')
@@ -512,6 +608,11 @@ export function inspectSbsar(buf, { includeImageBytes = false, maxImages = MAX_I
 }
 
 /** find XML documents in a raw buffer (native containers, or resources inside them) */
+/**
+ * 从不透明容器里扫描 XML 描述：直接读取明文 XML；若失败，遍历疑似 zlib 头并尝试解压。
+ * @param {Buffer} buf 容器字节
+ * @returns {Buffer[]} 找到的 XML 字节（去重、最多 8 份）
+ */
 function scanXml(buf) {
   const out = []
   const needles = [Buffer.from('<?xml'), Buffer.from('<sbsar'), Buffer.from('<substance'), Buffer.from('<sbsdoc')]
@@ -542,6 +643,12 @@ function scanXml(buf) {
   return out
 }
 
+/**
+ * 在整个缓冲区里找最后一个可能的根闭合标签，返回其结束位置。
+ * 扫描得到的是近似片段，因此取「最后一个」而非配对扫描，容错性更好；找不到返回 0。
+ * @param {Buffer} buf 容器字节
+ * @returns {number} 片段结束下标（不含）；0 表示没找到
+ */
 function findXmlEnd(buf) {
   // last plausible closing tag of the outermost element we started at
   for (const tag of ['</sbsar>', '</substance>', '</sbsdoc>', '</package>']) {
@@ -551,4 +658,8 @@ function findXmlEnd(buf) {
   return 0
 }
 
+/**
+ * 对外暴露的资源限额（导入器与前端据此给出友好提示）。
+ * MAX_IMAGE_BYTES=24MB，MAX_IMAGES=24。
+ */
 export const SBSAR_LIMITS = { MAX_IMAGE_BYTES, MAX_IMAGES }

@@ -1,13 +1,26 @@
-// Canonical external tool catalog for the Substrate MCP gateway.
-//
-// This module is shared by the browser (command validation + execution), the HTTP gateway in
-// server/index.js and the stdio MCP server in mcp/server.mjs, so the external interface is
-// defined exactly once: stable snake_case tool names, JSON-Schema inputs, annotations,
-// timeout hints, an explicit API version and a normalized result envelope.
+/**
+ * Substrate MCP 网关的权威外部工具目录。
+ *
+ * 架构位置：本模块被三处共享——浏览器端（参数校验 + 工具执行）、server/index.js 的 HTTP
+ * 网关、以及 mcp/server.mjs 的 stdio MCP 服务。因此外部接口只在此定义一次：
+ * 稳定的 snake_case 工具名、JSON-Schema 输入、annotations 安全标注、超时提示、
+ * 显式 API 版本以及统一的返回信封结构。
+ *
+ * 注意：各工具的 title / description / inputSchema 会原样下发给外部代理（LLM），
+ * 属于对外契约文本，不要随意改写。
+ *
+ * 主要导出：API_VERSION、PROTOCOL_VERSION、ERROR_CODES、TOOLS、TOOL_EXAMPLES、
+ * TOOLS_BY_NAME、getTool、publicCatalog、validateArguments、toolTimeout。
+ */
 
+/** 本目录自身的接口版本号；服务端与客户端通过它判断兼容性。 */
 export const API_VERSION = '1.0.0'
+/** 对外暴露的 MCP 协议版本（与 API 版本独立演进）。 */
 export const PROTOCOL_VERSION = '2025-03-26'
 
+/**
+ * 全局错误码枚举。所有工具失败时都应使用这里的取值，外部客户端可据此做分支处理。
+ */
 export const ERROR_CODES = {
   APP_NOT_CONNECTED: 'APP_NOT_CONNECTED',
   INVALID_ARGUMENT: 'INVALID_ARGUMENT',
@@ -20,14 +33,20 @@ export const ERROR_CODES = {
   UNKNOWN_TOOL: 'UNKNOWN_TOOL'
 }
 
+// MCP 工具安全标注的三种预设（供各工具通过 annotations 字段复用）：
+// - readOnly：只读、幂等、不破坏数据（查询类工具）
+// - write：会修改图/文件，但不删除已有内容、且非幂等（新建、连线、设参数）
+// - destructive：会删除已有数据（删除节点/连线/项目、清空画笔层）
 const readOnly = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
 const write = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
 const destructive = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }
 
+// 供工具 schema 复用的枚举取值：文档分辨率档位、导出通道打包预设、内置示例材质 id
 const RESOLUTIONS = [256, 512, 1024, 2048, 4096]
 const PRESETS = ['gltf', 'unreal', 'unity', 'vray', 'substance']
 const DEMOS = ['weathered-steel', 'mossy-rock', 'painted-sign', 'blank']
 
+// 画笔轨迹的单个采样点 schema：x/y 为 0..1 的归一化画布坐标，p 为压感（0..1）
 const point = {
   type: 'object',
   properties: {
@@ -38,6 +57,22 @@ const point = {
   required: ['x', 'y']
 }
 
+/**
+ * 对外暴露的工具清单。
+ *
+ * 每一项的字段含义：
+ * - name：稳定的 snake_case 工具名，作为协议层唯一标识；
+ * - title：给人类看的短标题（可用于 UI 展示）；
+ * - description：下发给代理的自然语言说明，决定模型何时选用该工具；
+ * - inputSchema：仅使用一组受限 JSON-Schema 子集（type / properties / required /
+ *   additionalProperties / enum / minimum / maximum / minLength / maxLength /
+ *   minItems / maxItems / items），由下方 validateArguments 做零依赖校验；
+ * - annotations：MCP 安全标注，帮助客户端判断是否自动执行；
+ * - timeoutMs：该工具在网关侧的默认超时上限（求值/导出类工具更长）。
+ *
+ * 工具按用途大致分区：状态与查询 → 素材库 → 预览/评估 → 自检与审计 →
+ * 图编辑（节点/连线/参数）→ 绘制 → 导出与项目管理。
+ */
 export const TOOLS = [
   {
     name: 'substrate_get_state',
@@ -73,6 +108,7 @@ export const TOOLS = [
     annotations: readOnly,
     timeoutMs: 15000
   },
+  // —— 素材库：在线检索开放版权图片、导入 URL、列出/应用本地素材 ——
   {
     name: 'substrate_search_open_assets',
     title: 'Search Online Materials',
@@ -138,6 +174,7 @@ export const TOOLS = [
     annotations: write,
     timeoutMs: 60000
   },
+  // —— 视觉反馈：节点缩略图与 2D/3D 预览截图，让代理能“看见”结果 ——
   {
     name: 'substrate_get_thumbnail',
     title: 'Get Node Thumbnail',
@@ -182,6 +219,7 @@ export const TOOLS = [
     annotations: { ...readOnly, readOnlyHint: false, idempotentHint: true },
     timeoutMs: 60000
   },
+  // —— 自检与审计：引擎级自检、应用级审计，用于回归验证 ——
   {
     name: 'substrate_run_selftest',
     title: 'Run Engine Self-Test',
@@ -442,6 +480,7 @@ export const TOOLS = [
     annotations: destructive,
     timeoutMs: 30000
   },
+  // —— 导出与项目管理：烘焙导出、保存/载入/回收站 ——
   {
     name: 'substrate_export',
     title: 'Export Material',
@@ -503,8 +542,10 @@ export const TOOLS = [
 ]
 
 /**
- * Canonical argument examples shown to agents (in /api/mcp/tools and the LLM tool descriptions)
- * and attached to validation/not-found errors. Keep them copy-pasteable and internally consistent.
+ * 给代理看的规范参数示例（会出现在 /api/mcp/tools 响应与 LLM 工具说明中，
+ * 也会附加到参数校验失败/未找到目标的错误里作为提示）。
+ *
+ * 维护约定：示例必须可直接复制运行，且与 inputSchema 保持内部一致。
  */
 export const TOOL_EXAMPLES = {
   substrate_get_thumbnail: [{}, { nodeId: 'material_output-xxxxx' }],
@@ -546,16 +587,30 @@ export const TOOL_EXAMPLES = {
   substrate_apply_asset: [{ assetId: 'a1b2c3d4e5f6', target: 'texture' }]
 }
 
+// 把示例挂到对应工具条目上（未提供示例的工具默认为空数组，便于统一序列化）
 for (const tool of TOOLS) {
   tool.examples = TOOL_EXAMPLES[tool.name] || []
 }
 
+/** 工具名 → 工具定义的索引表，供执行侧 O(1) 查找。 */
 export const TOOLS_BY_NAME = new Map(TOOLS.map((t) => [t.name, t]))
 
+/**
+ * 按名称取工具定义。
+ *
+ * @param {string} name 工具名
+ * @returns {object|null} 工具定义；未知工具返回 null
+ */
 export function getTool(name) {
   return TOOLS_BY_NAME.get(name) || null
 }
 
+/**
+ * 生成对外公开的目录快照（剥离内部字段，只保留协议需要的信息）。
+ *
+ * @param {object} [extra] 需要合并进响应的附加字段（例如 gateways、server 信息）
+ * @returns {object} 形如 { ok, apiVersion, protocolVersion, service, ...extra, tools }
+ */
 export function publicCatalog(extra = {}) {
   return {
     ok: true,
@@ -575,13 +630,24 @@ export function publicCatalog(extra = {}) {
   }
 }
 
+// JSON-Schema 里的 "integer" 不能直接用 typeof 判断，故单独把数组/null 归一化后再比较
 function typeOf(value) {
   if (Array.isArray(value)) return 'array'
   if (value === null) return 'null'
   return typeof value
 }
 
-/** Strict, dependency-free validation of the small JSON-Schema subset used above. */
+/**
+ * 严格、零依赖地校验上面用到的 JSON-Schema 子集（递归处理嵌套对象与数组元素）。
+ *
+ * 之所以不引入 ajv 等库：浏览器与服务端都要用，且 schema 子集很小，自己实现可避免打包体积
+ * 与版本不一致问题。失败时抛出带 INVALID_ARGUMENT 错误码的 Error，消息包含出错路径与工具名。
+ *
+ * @param {any} value 待校验值
+ * @param {object} schema 目标 schema
+ * @param {string} path 当前路径（用于错误提示，如 "points[0].x"）
+ * @param {string} name 工具名（用于错误提示）
+ */
 function validateNestedValue(value, schema, path, name) {
   if (!schema) return
   const fail = (message) => {
@@ -630,6 +696,18 @@ function validateNestedValue(value, schema, path, name) {
   }
 }
 
+/**
+ * 校验一次工具调用的参数（入口函数）。
+ *
+ * 分两遍处理：
+ * 1. 先做顶层必填、未知字段、基础类型与取值范围/枚举检查（错误信息更直观）；
+ * 2. 再递归校验嵌套对象与数组元素（例如画笔 points 的每个采样点）。
+ *
+ * @param {string} name 工具名
+ * @param {object} args 调用参数
+ * @returns {object} 校验通过的参数对象（便于调用方直接使用）
+ * @throws {Error} 工具不存在（UNKNOWN_TOOL）或参数非法（INVALID_ARGUMENT）
+ */
 export function validateArguments(name, args) {
   const tool = getTool(name)
   if (!tool) {
@@ -725,7 +803,7 @@ export function validateArguments(name, args) {
       throw err
     }
   }
-  // Validate nested object properties and array item schemas (e.g. paint points).
+  // 递归校验嵌套对象属性与数组元素 schema（例如画笔轨迹点）。
   for (const [key, value] of Object.entries(args)) {
     if (value === undefined) continue
     const prop = (schema.properties || {})[key]
@@ -739,6 +817,17 @@ export function validateArguments(name, args) {
   return args
 }
 
+/**
+ * 计算某次调用的实际超时时间。
+ *
+ * 规则：以工具自带的 timeoutMs 为上限（缺省 30 秒），把客户端请求值限制在 [1000ms, 上限]
+ * 区间；请求值缺失或非法时直接使用工具默认上限。这样可以防止调用方传入过长超时把网关挂住，
+ * 同时也给慢工具（导出、自检）留出足够时间。
+ *
+ * @param {string} name 工具名
+ * @param {number} [requested] 调用方请求的超时（毫秒）
+ * @returns {number} 最终生效的超时毫秒数
+ */
 export function toolTimeout(name, requested) {
   const tool = getTool(name)
   const max = tool?.timeoutMs || 30000

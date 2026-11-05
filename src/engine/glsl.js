@@ -1,6 +1,23 @@
-// Shared GLSL chunks for the node compiler.
-// All processing happens in linear light, textures are RGBA16F render targets.
+/**
+ * 节点编译器共享的 GLSL 代码块。
+ *
+ * 整体约定：所有处理都在线性光空间完成，中间纹理为 RGBA16F；
+ * 只有导出颜色贴图或显示时才转换成 sRGB。
+ *
+ * 导出内容：
+ * - VERTEX_SRC   —— 全屏 quad 的顶点着色器；
+ * - COMMON_GLSL  —— 所有节点共用的工具函数（噪声、哈希、混合模式、色彩空间转换）；
+ * - SMOOTH_MIN_GLSL / SHAPE_GLSL —— 特定节点类别使用的小型工具库；
+ * - PREVIEW_GLSL —— 材质球预览着色函数。
+ *
+ * 注意：着色器字符串内部只允许 ASCII 英文注释，中文说明写在这段字符串之外。
+ */
 
+/**
+ * 全屏四边形顶点着色器。
+ * 顶点位置直接写入裁剪空间（xy 已是 -1..1），因此不需要任何矩阵 uniform；
+ * 同时把 uv 原样传给片元着色器。
+ */
 export const VERTEX_SRC = /* glsl */ `
 precision highp float;
 in vec3 position;
@@ -12,6 +29,19 @@ void main() {
 }
 `
 
+/**
+ * 所有节点共用的 GLSL 工具库，内容依次为：
+ * - 常量 PI/TAU 与引擎传入的 uRes（分辨率）、uPx（单像素步长）；
+ * - sat / sat3：把值截断到 0..1；
+ * - hash1/hash2/hash3：基于正弦的确定性哈希，把二维坐标映射为随机数（相同输入永远得到相同结果）；
+ * - rot2：二维旋转；
+ * - luma：Rec.709 亮度权重；
+ * - linearToSRGB / srgbToLinear：精确的分段幂函数色彩空间转换；
+ * - gnoise / fbmTiled / fbmBillowTiled / worleyTiled / worleyCell：可平铺噪声族；
+ * - blendMode：与 UI 下拉选项序号一一对应的混合模式实现。
+ *
+ * 所有噪声都以「周期哈希」实现，因此输出天然无缝，可平铺贴图不会出现接缝。
+ */
 export const COMMON_GLSL = /* glsl */ `
 #define PI 3.141592653589793
 #define TAU 6.283185307179586
@@ -21,6 +51,7 @@ uniform vec2 uPx;
 float sat(float x) { return clamp(x, 0.0, 1.0); }
 vec3 sat3(vec3 x) { return clamp(x, 0.0, 1.0); }
 
+// Deterministic sin-based hashes: same input always yields the same value on the same driver.
 float hash1(vec2 p, float seed) {
   p = mod(p, 4096.0);
   return fract(sin(dot(p, vec2(127.1, 311.7)) + seed * 71.13) * 43758.5453123);
@@ -39,11 +70,13 @@ vec3 hash3(vec2 p, float seed) {
   return fract(vec3(a, b, c) * 43758.5453123);
 }
 
+// Standard 2D rotation (a in radians).
 vec2 rot2(vec2 p, float a) {
   float c = cos(a), s = sin(a);
   return vec2(c * p.x - s * p.y, s * p.x + c * p.y);
 }
 
+// Rec.709 luminance weights.
 float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 vec3 linearToSRGB(vec3 c) {
   c = max(c, vec3(0.0));
@@ -55,6 +88,7 @@ vec3 srgbToLinear(vec3 c) {
 }
 
 // ---- tileable gradient noise -------------------------------------------------
+// Tileable gradient noise: periodic lattice hash + quintic interpolation.
 float gnoise(vec2 p, vec2 period, float seed) {
   vec2 i = floor(p);
   vec2 f = fract(p);
@@ -70,6 +104,7 @@ float gnoise(vec2 p, vec2 period, float seed) {
   return mix(mix(v00, v10, u.x), mix(v01, v11, u.x), u.y);
 }
 
+// Plain tileable fBm: octaves are summed and normalized back to 0..1.
 float fbmTiled(vec2 uv, float baseFreq, int octaves, float persistence, float lacunarity, float seed) {
   float freq = max(1.0, floor(baseFreq + 0.5));
   float sum = 0.0, amp = 1.0, norm = 0.0;
@@ -85,7 +120,7 @@ float fbmTiled(vec2 uv, float baseFreq, int octaves, float persistence, float la
 
 // Per-octave folded fBm ("billow"/ridged family). Folding |noise| at *every* octave keeps granular
 // detail alive at all scales, instead of producing smooth clouds that only carry one dominant
-// frequency — this is the primitive organic granular surfaces (moss, lichen, bark, rock) are made of.
+// frequency - this is the primitive organic granular surfaces (moss, lichen, bark, rock) are made of.
 // The result is re-shaped so that, like fbmTiled, it is centred on 0.5 and safe to feed into any
 // blend mode (raw |fBm| has a mean near 0.15, which would quietly darken every Overlay it touches).
 // Tileability is inherited from gnoise (periodic hash), so billow output stays seamless.
@@ -145,6 +180,7 @@ vec2 worleyCell(vec2 uv, float cells, float jitter, float seed) {
 }
 
 // ---- blend modes -------------------------------------------------------------
+// Mode index must match the "mode" option list of the blend node definition.
 vec3 blendMode(int m, vec3 a, vec3 b) {
   if (m == 0) return b;
   if (m == 1) return a + b;
@@ -176,7 +212,10 @@ vec3 blendMode(int m, vec3 a, vec3 b) {
 }
 `
 
-// Smooth minimum (polynomial)
+/**
+ * 多项式平滑最小值（smooth min）：k 越大过渡越柔和。
+ * 供「合并形状 / 距离场」类节点使用，避免 min() 产生硬边。
+ */
 export const SMOOTH_MIN_GLSL = /* glsl */ `
 float smin(float a, float b, float k) {
   float h = clamp(0.5 + 0.5 * (b - a) / max(k, 1e-4), 0.0, 1.0);
@@ -185,6 +224,13 @@ float smin(float a, float b, float k) {
 `
 
 // Regular polygon / star SDF helpers used by the shape node
+/**
+ * 形状节点使用的二维有符号距离场（SDF）工具：
+ * - sdRoundBox：圆角矩形；
+ * - sdPolygon：正多边形；
+ * - sdStar：星形（inner 控制内半径，sharpness 控制锐度）。
+ * 返回值为「点到边界的最短距离」，负值表示在形状内部。
+ */
 export const SHAPE_GLSL = /* glsl */ `
 float sdRoundBox(vec2 p, vec2 b, float r) {
   vec2 q = abs(p) - b + r;
@@ -206,7 +252,16 @@ float sdStar(vec2 p, float radius, float sides, float inner, float sharpness, fl
 }
 `
 
-// Shaded material-ball preview used for the output node thumbnail / map previews.
+/**
+ * 「材质球」预览着色函数：把 7 张 PBR 贴图合成为一个带两个方向光 + 简易环境光的球体，
+ * 用于输出节点的缩略图和各通道预览。
+ *
+ * 关键做法：
+ * - 由缩略图 UV 推导球面法线，并把贴图法线以 0.55 的强度叠加，使凹凸可见但不夸张；
+ * - 金属度决定漫反射衰减与 F0（菲涅尔反射率）；
+ * - 粗糙度同时控制高光指数与高光强度；
+ * - 最后统一做 linearToSRGB，输出可直接显示的颜色。
+ */
 export const PREVIEW_GLSL = /* glsl */ `
 uniform sampler2D uBaseColor;
 uniform sampler2D uNormal;

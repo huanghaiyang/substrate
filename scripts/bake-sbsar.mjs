@@ -1,32 +1,39 @@
-// Bake a .sbsar into real PBR maps by driving Adobe's Substance Automation Toolkit (SAT).
-//
-// Why this exists: a .sbsar has no pixels. It ships a graph descriptor (.xml) plus compiled engine
-// bytecode (.sbsasm); the PBR outputs only exist after Adobe's Substance Engine *evaluates* the graph.
-// SAT is the supported, batchable way to do that from a script (it bundles the engine + sbsrender).
-//
-//   npm run bake:sbsar -- path/to/asset.sbsar [--out baked/name] [--res 2048] [--graph "pkg://…"]
-//
-// Then import the produced PNGs with the studio's "Import PBR set" button (Material Library), which
-// recognises basecolor/normal/roughness/metallic/height/ao by file name and wires them into a material.
-//
-// Finding SAT: --sbsrender <path>, or env SBSRENDER / SUBSTANCE_SAT_HOME, or `sbsrender` on PATH.
-// Install: https://helpx.adobe.com/substance-3d-sat/ (requires a Substance 3D subscription).
+/**
+ * 通过 Adobe Substance Automation Toolkit（SAT）把 .sbsar 烘焙成真实的 PBR 贴图。
+ *
+ * 为什么需要这一步：.sbsar 本身不含像素。它只发布「图描述(.xml) + 已编译的引擎字节码(.sbsasm)」，
+ * 只有经过 Adobe Substance Engine 真正「求值」之后才会产生 PBR 输出。
+ * SAT 是官方支持的批处理途径（其中包含引擎与 sbsrender 命令行工具）。
+ *
+ *   npm run bake:sbsar -- path/to/asset.sbsar [--out baked/name] [--res 2048] [--graph "pkg://…"]
+ *
+ * 烘焙完成后，用工作台的「Import PBR set」（素材库）导入这些 PNG：
+ * 它会按文件名识别 basecolor/normal/roughness/metallic/height/ao，并自动接好材质节点。
+ *
+ * 查找 SAT 的顺序：--sbsrender <路径> → 环境变量 SBSRENDER / SUBSTANCE_SAT_HOME → PATH 中的 sbsrender。
+ * 安装说明：https://helpx.adobe.com/substance-3d-sat/（需要 Substance 3D 订阅）。
+ */
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 
 const argv = process.argv.slice(2)
+/** 读取 --name 形式的参数值；未出现时返回 def。 */
 const flag = (name, def = null) => {
   const i = argv.indexOf('--' + name)
   return i >= 0 ? argv[i + 1] : def
 }
+/** 判断命令行是否包含某个 --name 开关。 */
 const has = (name) => argv.includes('--' + name)
+// 识别第一个「不是选项值」的位置参数作为输入文件
 const input = argv.find((a, i) => !a.startsWith('--') && (i === 0 || !argv[i - 1].startsWith('--')))
 if (!input) {
   console.error('usage: node scripts/bake-sbsar.mjs <asset.sbsar> [--out dir] [--res 2048] [--graph url] [--sbsrender path]')
   process.exit(2)
 }
 
+// 常见安装位置（Windows 默认两处、macOS 与 Linux 各一处），另加 Node 可执行文件同目录，
+// 方便把 SAT 直接放到便携包旁边
 const SAT_HINTS = [
   path.resolve(path.dirname(process.execPath), 'sbsrender.exe'),
   'C:/Program Files/Allegorithmic/Substance Automation Toolkit/sbsrender.exe',
@@ -35,6 +42,15 @@ const SAT_HINTS = [
   '/opt/Substance Automation Toolkit/sbsrender'
 ]
 
+/**
+ * 按优先级查找 sbsrender 可执行文件：
+ * 1. 显式参数 --sbsrender 或环境变量 SBSRENDER；
+ * 2. SUBSTANCE_SAT_HOME 下的常见相对路径（根目录 / bin 子目录 / 无扩展名）；
+ * 3. 各平台的默认安装位置；
+ * 4. 最后尝试从 PATH 中查找（Windows 用 where，其他平台用 which）。
+ *
+ * @returns {string|null} 可执行文件路径；找不到返回 null
+ */
 function findSbsrender() {
   const explicit = flag('sbsrender') || process.env.SBSRENDER
   if (explicit && existsSync(explicit)) return explicit
@@ -55,7 +71,7 @@ function findSbsrender() {
     const first = out.split(/\r?\n/).map((l) => l.trim()).find(Boolean)
     if (first && existsSync(first)) return first
   } catch (e) {
-    /* not on PATH */
+    /* PATH 中没有找到，属于预期情况 */
   }
   return null
 }
@@ -83,6 +99,7 @@ if (!sbsrender) {
 }
 
 const res = Number(flag('res', 1024)) || 1024
+// 输出目录默认放在 baked/<材质名>-<分辨率>/，便于一次烘焙多个分辨率而不互相覆盖
 const outDir = path.resolve(flag('out', path.join('baked', path.basename(input).replace(/\.sbsar$/i, '') + '-' + res)))
 const graph = flag('graph')
 mkdirSync(outDir, { recursive: true })
@@ -92,7 +109,7 @@ console.log('input     :', input)
 console.log('resolution:', res + '×' + res)
 console.log('output    :', outDir)
 
-// 1) describe the asset (graphs, inputs, outputs) — helps confirm output names before rendering
+// 步骤 1：先描述资产（图、输入、输出），确认输出名称后再渲染，避免白白等待一次高分辨率烘焙
 try {
   const info = execFileSync(sbsrender, ['info', '--input', input], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   const start = info.indexOf('{')
@@ -112,7 +129,7 @@ try {
   console.warn('warning: `sbsrender info` failed, continuing to render:', (e.stdout || e.message || '').toString().split('\n')[0])
 }
 
-// 2) render every output to PNG, one file per output node name
+// 步骤 2：把每个输出节点渲染成一张 PNG（文件名由「输入名_输出节点名」组合而成）
 const args = [
   'render',
   '--input', input,
@@ -123,7 +140,7 @@ const args = [
   '--no-report'
 ]
 if (graph) args.push('--input-graph', graph)
-// graph-level resolution input (the descriptor exposes $outputsize as a vector2)
+// 图级分辨率参数：描述文件把输出尺寸暴露为 $outputsize（vector2），这里按 <res>,<res> 传入
 args.push('--set-value', `$outputsize@${res},${res}`)
 
 console.log('\n$', path.basename(sbsrender), args.join(' '))

@@ -1,7 +1,13 @@
-// Unit tests for the approximate-reconstruction builder (src/engine/reconstruct.js).
-// The builder is pure: it takes measured preview statistics and returns a graph, so it can be checked
-// without a browser. We validate that every generated connection targets a port that actually exists
-// on the node definition — the failure mode that silently produces a black material.
+/**
+ * 近似重建构建器（src/engine/reconstruct.js）的单元测试。
+ *
+ * 该构建器是纯函数：输入「预览图统计值」与接口信息，输出一个节点图，因此无需浏览器即可测试。
+ * 重点验证「每一条连线都指向节点定义中真实存在的输入口」——
+ * 这正是最容易出现的故障模式：端口名写错会静默产出全黑材质。
+ *
+ * 另外还检查：节点类型/ID 合法性、输出通道齐全、参数落在合理区间、
+ * 同一随机种子结果可复现、不同调色板产生不同图。
+ */
 import { buildReconstructionProject } from '../src/engine/reconstruct.js'
 
 import { generatorDefs } from '../src/engine/nodes/generators.js'
@@ -24,6 +30,7 @@ const ok = (label, cond, info = '') => {
   }
 }
 
+// 用一组「类似真实石材」的统计值作为固定输入，保证测试结果可复现
 const stats = {
   coverage: 0.67,
   meanColor: '#403f31',
@@ -48,6 +55,7 @@ ok('no duplicate node ids', new Set(graph.nodes.map((n) => n.id)).size === graph
 
 console.log('\n2. connections are valid')
 const broken = graph.connections.filter((c) => {
+  // 逐条连线检查：目标节点必须存在，且其定义里必须真的有这个输入口名
   const target = graph.nodes.find((n) => n.id === c.to.node)
   const def = target && byType.get(target.type)
   if (!def) return true

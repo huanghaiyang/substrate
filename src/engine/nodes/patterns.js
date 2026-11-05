@@ -1,10 +1,32 @@
-// Pattern generators: material-specific procedural surfaces (wood, fur, grass, plastic,
-// woven cloth, leather, concrete). Every pattern is periodic so it tiles exactly.
-//
-// These nodes are colour sources by default. Their optional Height mode makes the same
-// pattern usable as a bump/height source without another conversion node.
-
+/**
+ * 材质图案节点定义：面向具体材质的程序化表面（木板、毛皮、草地、塑料、麻布、织物、
+ * 皮革、混凝土）。所有图案都用可平铺（periodic）的噪声实现，因此 UV 0~1 边界处
+ * 能精确无缝拼接。
+ *
+ * 这些节点默认输出颜色（space: 'color'）。同一套图案还提供 Height 模式，
+ * 可直接作为凹凸 / 高度源使用，无需再额外接一个转换节点。
+ *
+ * 约定：GLSL 源码保持英文注释，节点定义的 JS 侧用中文说明算法与参数范围。
+ */
 export const patternDefs = [
+  /**
+   * 木板（错缝拼接）。
+   *
+   * 算法：把 UV 按 rows × columns 分成板格并做行间错位；每块板用哈希取颜色差异，
+   * 再用两层 fbm 扭曲生成顺纹木纹，叠加正弦环纹与随机节疤；板缝用 SDF 软边留出。
+   *
+   * 参数：
+   *  - rows / columns：纵向板数（2~12）/ 横向板数（1~8）；
+   *  - gap：板缝宽度（0~0.08）；
+   *  - bevel：板边倒角，仅 Height 模式有意义（0.01~0.25）；
+   *  - grain：木纹频率（1~12）；
+   *  - rings：环纹强度（0~1）；
+   *  - knots：节疤出现概率（0~1）；
+   *  - variation：每块板颜色随机差异（0~1）；
+   *  - mode：Color 颜色 / Height 高度；
+   *  - colorA / colorB / gapColor：浅木色 / 深木色 / 板缝颜色；
+   *  - seed：随机种子。
+   */
   {
     type: 'wood_planks',
     name: 'Wood Planks',
@@ -75,6 +97,22 @@ export const patternDefs = [
       }`
   },
 
+  /**
+   * 毛皮。
+   *
+   * 算法：沿指定方向（Vertical / Horizontal）用 fbm 扭曲坐标，生成两套不同宽度的
+   * 周期性条纹作为「毛束」与「细毛」；再按纵向渐变混入尖端亮色，形成有方向的毛发。
+   *
+   * 参数：
+   *  - scale：毛束数量（12~96）；
+   *  - density：单位面积毛的密度（0.15~1，越大毛束越细越密）；
+   *  - length：毛长对颜色/高度的影响强度（0.1~1）；
+   *  - clump：毛束成团程度（0~1）；
+   *  - direction：毛发生长方向；
+   *  - mode：Color / Height；
+   *  - colorA / colorB / tipColor：根色 / 中段色 / 毛尖色；
+   *  - seed：随机种子。
+   */
   {
     type: 'fur',
     name: 'Fur',
@@ -123,6 +161,22 @@ export const patternDefs = [
       }`
   },
 
+  /**
+   * 草地。
+   *
+   * 算法：与毛皮类似，用 fbm 扭曲的周期性条纹生成草叶；另叠加大尺度斑块噪声，
+   * 按 dryness 混入枯草色，草尖位置提亮，形成自然草地。
+   *
+   * 参数：
+   *  - scale：草叶数量（12~96）；
+   *  - density：草叶宽度 / 密度（0.15~1）；
+   *  - clump：草丛聚集程度（0~1）；
+   *  - dryness：枯草比例（0~1）；
+   *  - direction：草叶朝向；
+   *  - mode：Color / Height；
+   *  - colorA / colorB / dryColor：深绿 / 鲜绿 / 枯草色；
+   *  - seed：随机种子。
+   */
   {
     type: 'grass',
     name: 'Grass',
@@ -169,6 +223,20 @@ export const patternDefs = [
       }`
   },
 
+  /**
+   * 塑料表面（注塑件）。
+   *
+   * 算法：Worley 噪声生成「橘皮」起伏，fbm 生成色斑与细微噪声，再用高频正弦相位
+   * 叠加低频噪声生成随机划痕。
+   *
+   * 参数：
+   *  - scale：橘皮单元数量（4~64）；
+   *  - peel：橘皮强度（0~1）；
+   *  - scratches：划痕强度（0~1）；
+   *  - mode：Color / Height；
+   *  - colorA / colorB：主色 / 暗部色；
+   *  - seed：随机种子。
+   */
   {
     type: 'plastic',
     name: 'Plastic Surface',
@@ -208,6 +276,21 @@ export const patternDefs = [
       }`
   },
 
+  /**
+   * 麻布（黄麻编织袋）。
+   *
+   * 算法：UV 乘以编织密度后用 fbm 扰动，得到不规则的经纬线；按格子奇偶交替决定经线
+   * 在上还是纬线在上（平纹组织），再叠加纤维噪声与逐格颜色抖动。
+   *
+   * 参数：
+   *  - weave：编织密度（6~64）；
+   *  - irregularity：经纬线不规则程度（0~1）；
+   *  - fiber：纤维粗糙度（0~1）；
+   *  - gap：线间缝隙比例（0~0.6）；
+   *  - mode：Color / Height；
+   *  - colorA / colorB / gapColor：亮线 / 暗线 / 缝隙颜色；
+   *  - seed：随机种子。
+   */
   {
     type: 'burlap',
     name: 'Burlap',
@@ -252,6 +335,22 @@ export const patternDefs = [
       }`
   },
 
+  /**
+   * 织物（平纹 / 斜纹 / 缎纹）。
+   *
+   * 算法：按 threads 密度建立经纬线，用 fbm 抖动模拟纤维；weave 决定经纬交叠规律：
+   *  - Plain：奇偶交替（隔一压一）；
+   *  - Twill：每 4 格一个斜向循环；
+   *  - Satin：每 5 格循环，浮线更长、更光滑。
+   *
+   * 参数：
+   *  - threads：纱线密度（16~128）；
+   *  - weave：Plain / Twill / Satin；
+   *  - fuzz：表面绒毛感（0~1）；
+   *  - mode：Color / Height；
+   *  - colorA / colorB：经线色 / 纬线色；
+   *  - seed：随机种子。
+   */
   {
     type: 'fabric',
     name: 'Fabric',
@@ -295,6 +394,20 @@ export const patternDefs = [
       }`
   },
 
+  /**
+   * 皮革。
+   *
+   * 算法：Worley 生成鹅卵石状皮纹单元，F2-F1 差值形成颗粒边缘；多层 fbm 分别模拟
+   * 大皱纹、细凹凸与裂纹，颗粒边缘混入高光色。
+   *
+   * 参数：
+   *  - scale：皮纹单元数量（6~48）；
+   *  - wrinkle：皱纹强度（0~1）；
+   *  - cracks：裂纹强度（0~1）；
+   *  - mode：Color / Height；
+   *  - colorA / colorB / tipColor：暗部 / 亮部 / 高光色；
+   *  - seed：随机种子。
+   */
   {
     type: 'leather',
     name: 'Leather',
@@ -335,6 +448,21 @@ export const patternDefs = [
       }`
   },
 
+  /**
+   * 混凝土（浇筑面）。
+   *
+   * 算法：多尺度 fbm 作为水泥底色，Worley 噪声产生骨料颗粒与气孔，
+   * 再用低频 fbm 加阈值形成潮湿污渍。
+   *
+   * 参数：
+   *  - scale：骨料单元数量（3~32）；
+   *  - aggregate：骨料颗粒强度（0~1）；
+   *  - pores：气孔数量 / 强度（0~1）；
+   *  - stain：污渍强度（0~1）；
+   *  - mode：Color / Height；
+   *  - colorA / colorB：深色 / 浅色水泥；
+   *  - seed：随机种子。
+   */
   {
     type: 'concrete',
     name: 'Concrete',

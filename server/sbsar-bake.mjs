@@ -1,19 +1,25 @@
-// Local Substance bake bridge.
+// 本地 Substance 烘焙桥。
 //
-// Why this exists instead of a WebAssembly port of Adobe's engine:
-//   * The Blender add-on is a Python UI (Substance3DInBlender.zip) on top of the **Substance 3D
-//     Integration Tools** — per-platform *native* engine binaries (Windows DLL / macOS dylib / Linux
-//     .so). That engine is closed-source, GPU-backed (D3D11 / OpenGL / Vulkan) and licensed per user;
-//     downloadable only after an Adobe sign-in. It cannot be compiled to wasm (no sources), cannot be
-//     mechanically translated (x86-64 machine code + GPU API calls), and the EULA forbids
-//     reverse-engineering/redistribution.
-//   * So the only sane architecture is: keep the engine where it legally runs (locally installed SAT
-//     or Blender's integration tools) and stream the *results* into the browser. This module is that
-//     bridge: the studio server shells out to `sbsrender` (SAT) and imports the baked maps as normal
-//     library assets, which the app then wires into a material.
+// 为什么需要这个桥、而不是把 Adobe 引擎移植成 WebAssembly：
+//   * Blender 插件只是 Python UI（Substance3DInBlender.zip），底层是 **Substance 3D Integration Tools**，
+//     即各平台的原生引擎二进制（Windows DLL / macOS dylib / Linux .so）。该引擎闭源、依赖 GPU
+//     （D3D11 / OpenGL / Vulkan）、按用户授权，且只能在登录 Adobe 后下载；没有源码因此无法编译到
+//     wasm，x86-64 机器码 + GPU 调用也无法机械翻译，EULA 亦禁止逆向与再分发。
+//   * 因此唯一合理的架构是：让引擎留在它能合法运行的地方（本机 SAT 或 Blender 集成工具），
+//     只把**结果**流回浏览器。本模块就是这个桥：服务端调用 `sbsrender`，把烘焙出的贴图当作普通
+//     素材导入素材库，再由应用接线成材质。
 //
-// Everything degrades gracefully: with no SAT installed, `bakeStatus()` reports why and the UI explains
-// what to install; nothing crashes and nothing pretends to bake.
+// 优雅降级：没有 SAT 时 bakeStatus() 会说明原因、UI 提示安装什么，绝不崩溃，也绝不假装烘焙成功。
+//
+// 对外接口（server/index.js 挂载）：
+//   GET  /api/sbsar/bake/status → bakeStatus()
+//   POST /api/sbsar/bake        → bakeSbsar() + readBakedFile() + cleanupBake()
+//
+// 安全边界：
+//   * 只执行找到的 sbsrender 可执行文件，参数以数组形式传给 execFile（不经 shell，无注入面）；
+//   * 15 分钟超时、stdout/stderr 缓冲上限 8 MB、日志只保留尾部 8000 字符；
+//   * 参数覆盖先经 normalizeParamValue 校验类型/范围，非法值跳过而不写进命令行；
+//   * 临时目录使用 mkdtemp 创建，失败与无输出路径都会清理，调用方负责 finally 清理。
 import { execFile, execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -43,6 +49,11 @@ const PLAYER_HINTS = [
 ]
 
 /** locate a locally installed Substance 3D Player (information only, not a bake backend) */
+/**
+ * 查找本机安装的 Substance 3D Player（仅用于提示，不是烘焙后端）。
+ * 顺序：环境变量 SBSAR_PLAYER / SUBSTANCE_PLAYER / SUBSTANCE_PLAYER_DIR（可给目录）→ 已知安装路径。
+ * @returns {{path:string,source:string}|null}
+ */
 export function findPlayer() {
   for (const key of ['SBSAR_PLAYER', 'SUBSTANCE_PLAYER', 'SUBSTANCE_PLAYER_DIR']) {
     const value = process.env[key]
@@ -57,6 +68,11 @@ export function findPlayer() {
 }
 
 /** locate sbsrender: explicit env/config → known install dirs → PATH */
+/**
+ * 查找 sbsrender：显式环境变量 → SUBSTANCE_SAT_HOME → 已知安装目录 → PATH（where/which）。
+ * 只做文件存在性判断；找不到返回 null，由调用方给出安装提示。
+ * @returns {{path:string,source:string}|null}
+ */
 export function findSbsrender() {
   const explicit = process.env.SBSRENDER
   if (explicit && existsSync(explicit)) return { path: explicit, source: 'env:SBSRENDER' }
@@ -82,6 +98,10 @@ export function findSbsrender() {
 }
 
 /** what the UI needs to know before offering a bake button */
+/**
+ * 烘焙能力探测结果（UI 决定是否展示烘焙按钮、以及解释为何不可用）。
+ * @returns {{available:boolean,sbsrender:string|null,source:string|null,paramBake:boolean,player:{path:string,source:string,batch:boolean}|null,platform:string,installUrl:string,reason:string|null}}
+ */
 export function bakeStatus() {
   const found = findSbsrender()
   const player = findPlayer()
@@ -114,6 +134,12 @@ const CHANNEL_PATTERNS = [
   ['emissive', /(emiss|glow)/i],
   ['opacity', /(opacity|alpha|_mask\b)/i]
 ]
+/**
+ * 按文件名猜测 PBR 通道（去扩展名后匹配正则表），识别不出返回 null。
+ * 仅用于给烘焙产物打标签，最终以用户/图配置为准。
+ * @param {string} name 文件名
+ * @returns {string|null} basecolor/normal/roughness/metallic/height/ao/emissive/opacity
+ */
 export const detectChannel = (name) => {
   const base = String(name || '').replace(/\.[a-z0-9]+$/i, '')
   const hit = CHANNEL_PATTERNS.find(([, re]) => re.test(base))
@@ -123,6 +149,11 @@ export const detectChannel = (name) => {
 const VECTOR_KINDS = new Set(['vector2', 'vector3', 'vector4', 'color'])
 
 /** round a number for the command line without scientific notation */
+/**
+ * 为命令行格式化数字：保留最多 6 位小数并去掉科学计数法；非有限数返回 null。
+ * @param {number} n
+ * @returns {string|null}
+ */
 function fmtNumber(n) {
   if (!Number.isFinite(n)) return null
   const r = Math.round(n * 1e6) / 1e6
@@ -133,6 +164,14 @@ function fmtNumber(n) {
  * Turn one UI value into the string sbsrender expects in `--set-value <id>@<value>`.
  * Enum parameters take their index, booleans take 0/1, vectors a comma separated list.
  * Returns null when the value cannot be represented (caller skips it instead of writing garbage).
+ */
+/**
+ * 把 UI 值转成 sbsrender `--set-value <id>@<value>` 需要的字符串。
+ * bool → 1/0；enum → 索引（接受数字或枚举文案）；vector/color → 逗号分隔并夹到 min/max；
+ * 标量 → 数字并夹到 min/max。无法表示时返回 null（调用方跳过，避免把垃圾写进命令行）。
+ * @param {object} param 参数定义（kind/type、min、max、enumItems、default）
+ * @param {unknown} raw UI 原值
+ * @returns {string|null}
  */
 export function normalizeParamValue(param, raw) {
   if (raw === null || raw === undefined || raw === '') return null
@@ -170,11 +209,12 @@ export function normalizeParamValue(param, raw) {
 }
 
 /**
- * Build the `--set-value` argument list for a baked graph from UI parameter values.
- * `$outputsize` is deliberately excluded: it is driven by the requested resolution.
+ * 根据 UI 参数值生成烘焙图的 `--set-value` 参数列表。
+ * `$outputsize` 被刻意排除：它由请求的分辨率统一驱动，避免两者冲突。
+ * 与参数默认值相同的覆盖会被省略（不产生无意义参数）；未知 id 或非法值进入 skipped。
  *
- * @param {Record<string,any>|Array<{id:string,value:any}>} values
- * @param {Array<object>} parameters  the inspection's `parameters` array (id/kind/min/max/enumItems)
+ * @param {Record<string,any>|Array<{id:string,value:any}>} values 对象或 [{id,value}] 数组
+ * @param {Array<object>} parameters 检查结果中的 parameters（含 id/kind/min/max/enumItems/default）
  * @returns {{args:string[], applied:{id:string,value:string}[], skipped:string[]}}
  */
 export function buildSetValueArgs(values, parameters = []) {
@@ -198,6 +238,7 @@ export function buildSetValueArgs(values, parameters = []) {
       continue
     }
     const def = normalizeParamValue(param, param.default)
+    // 与烘焙时的默认值一致就不必传：既减少命令行长度，也避免某些版本的 sbsrender 报重复设置。
     if (def !== null && def === value) continue // already the cooked default: nothing to override
     args.push('--set-value', `${id}@${value}`)
     applied.push({ id, value })
@@ -206,14 +247,18 @@ export function buildSetValueArgs(values, parameters = []) {
 }
 
 /**
- * Bake every output of a .sbsar into PNG files inside a scratch directory.
+ * 把一个 .sbsar 的所有输出烘焙成临时目录里的 PNG 文件。
+ * 调用 `sbsrender render`：输出命名 {inputName}_{outputNodeName}、格式 png、位深 16、不生成报告；
+ * 用 `--set-value $outputsize@res,res` 控制分辨率，其余覆盖来自 buildSetValueArgs。
+ * 失败时清理临时目录并抛出带 code 的错误：SAT_MISSING / FILE_MISSING / BAKE_FAILED / NO_OUTPUT。
  * @param {object} opts
- * @param {string} opts.file      absolute path of the .sbsar on disk
- * @param {number} [opts.res]     resolution for $outputsize (default 2048)
- * @param {string} [opts.graph]   optional graph url to render only one graph
- * @param {Record<string,any>} [opts.params]  parameter overrides (id → value) applied with --set-value
- * @param {Array<object>} [opts.parameters]   the inspection parameter list used to validate overrides
+ * @param {string} opts.file      .sbsar 的绝对路径
+ * @param {number} [opts.res]     $outputsize 分辨率（默认 2048）
+ * @param {string} [opts.graph]   可选 graph url，只渲染指定图
+ * @param {Record<string,any>} [opts.params]  参数覆盖（id → value）
+ * @param {Array<object>} [opts.parameters]   用于校验覆盖的检查结果参数表
  * @returns {Promise<{files:{name:string,path:string,bytes:number,channel:string|null}[], log:string, dir:string, applied:{id:string,value:string}[], skipped:string[]}>}
+ *          成功时 dir 由调用方负责 cleanupBake
  */
 export function bakeSbsar({ file, res = 2048, graph = null, params = null, parameters = [] }) {
   const found = findSbsrender()
@@ -291,11 +336,21 @@ export function bakeSbsar({ file, res = 2048, graph = null, params = null, param
 }
 
 /** read one baked file back as a buffer (the API imports it into the asset library) */
+/**
+ * 读取一个烘焙产物（API 随后把它导入素材库）。
+ * @param {string} p 文件绝对路径
+ * @returns {Buffer}
+ */
 export function readBakedFile(p) {
   return readFileSync(p)
 }
 
 /** remove a bake scratch dir */
+/**
+ * 递归删除烘焙临时目录；失败静默忽略（清理不应影响主流程）。
+ * @param {string} dir 临时目录
+ * @returns {void}
+ */
 export function cleanupBake(dir) {
   try {
     rmSync(dir, { recursive: true, force: true })
@@ -305,6 +360,11 @@ export function cleanupBake(dir) {
 }
 
 /** mkdir helper used by the API for its own scratch space */
+/**
+ * 递归创建目录（已存在则忽略），返回同一路径便于链式调用。
+ * @param {string} p
+ * @returns {string}
+ */
 export function ensureDir(p) {
   mkdirSync(p, { recursive: true })
   return p

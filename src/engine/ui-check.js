@@ -1,4 +1,15 @@
-// Temporary deep UI check for the top toolbar and right panel (removed before commit).
+/**
+ * 深度 UI 检查（开发/自检用）：在真实页面上模拟操作，验证顶部工具栏、右侧面板、
+ * AI 助手与素材库等交互是否按预期工作。
+ *
+ * 架构位置：与 audit.js 的 DOM 分区互补——audit 侧重“无报错”，本模块侧重
+ * “逐个控件的行为是否正确”，通过真实 DOM 查询 + 事件派发驱动组件。
+ *
+ * 特点：测试期间强制切到英文（文案固定便于断言），结束时恢复用户语言与
+ * 图/项目/画笔/模型等全部现场；返回结构 { ok, passed, failed, failures, tests }。
+ *
+ * 主要导出：runUiCheck。
+ */
 import {
   state,
   nodeById,
@@ -23,6 +34,14 @@ import { previewStore } from './preview.js'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+/**
+ * 构造轻量测试报告收集器。
+ *
+ * add(name, pass, info)：info 只在失败时保留；result() 汇总通过/失败数量并返回全部用例，
+ * 便于上层（audit.js 的 ui 分区）直接转成统一格式。
+ *
+ * @returns {{tests: Array<object>, add: Function, result: Function}}
+ */
 function report() {
   const tests = []
   return {
@@ -37,6 +56,15 @@ function report() {
   }
 }
 
+/**
+ * 计算纹理像素的采样哈希，用于判断“预览内容是否真的变了”。
+ *
+ * 不逐像素比较（开销大），而是按步长采样最多约 2048 个点累加哈希，并附上总长度；
+ * 结果仅用于 A/B 对比，不要求抗碰撞。
+ *
+ * @param {ArrayLike<number>|null} arr 像素数组
+ * @returns {string} 形如 "<hash>:<length>"，空数组返回 'none'
+ */
 const texHash = (arr) => {
   if (!arr || !arr.length) return 'none'
   let h = 0
@@ -45,6 +73,22 @@ const texHash = (arr) => {
   return h + ':' + arr.length
 }
 
+/**
+ * 运行完整 UI 检查。
+ *
+ * 内部定义了一组 DOM 操作辅助函数：
+ * - q/qa/text：查询与取文本；
+ * - visible：用 offsetParent 判断真实可见性；
+ * - click：派发冒泡 click；
+ * - setInput：走原生 setter 再派发 input/change，确保 v-model 生效；
+ * - waitFor / waitPreview：轮询等待状态变化（默认超时 12s / 15s）；
+ * - snap：快照预览材质、各通道纹理哈希与贴图卡片，用于判断画面是否更新。
+ *
+ * 开头的 snapshot 记录图、项目名、分辨率、代理、语言、画笔、localStorage 关键项，
+ * 任何异常都会在 finally 中尽量恢复。
+ *
+ * @returns {Promise<object>} 报告对象 { ok, passed, failed, failures, tests }
+ */
 export async function runUiCheck() {
   const r = report()
   const q = (s) => document.querySelector(s)
@@ -95,12 +139,12 @@ export async function runUiCheck() {
   const { setLocale } = await import('../i18n/index.js')
 
   try {
-    // deterministic labels: run the English-locale pass, then restore the user's language at the end
+    // 固定为英文文案，便于断言；用户语言在收尾时恢复
     setLocale('en', false)
     await sleep(250)
 
-    // ============================ TOP TOOLBAR ============================
-    // project name input
+    // ============================ 顶部工具栏 ============================
+    // 项目名输入框：直接改值应写回 state.projectName
     const nameInput = q('.project-name')
     r.add('toolbar: project name input exists', !!nameInput)
     if (nameInput) {
@@ -109,7 +153,7 @@ export async function runUiCheck() {
       r.add('toolbar: project name edit', state.projectName === 'UI Check Material', state.projectName)
     }
 
-    // New
+    // 新建：应重置图、刷新预览并自动收起下拉菜单
     loadDemo('weathered-steel')
     await sleep(600)
     const beforeNew = snap()
@@ -122,7 +166,7 @@ export async function runUiCheck() {
     r.add('toolbar: New updates preview', beforeNew.map !== afterNew.map, JSON.stringify({ before: beforeNew.map, after: afterNew.map }))
     r.add('toolbar: New dropdown closed', !q('.dropdown-menu'))
 
-    // Demos dropdown: switch through all four, verify preview + project name
+    // 示例下拉：依次切换四个内置示例，验证菜单项、预览更新与项目名
     const normals = ['weathered-steel', 'mossy-rock', 'painted-sign', 'blank']
     let prevSnap = afterNew
     for (const id of normals) {
@@ -147,7 +191,7 @@ export async function runUiCheck() {
       prevSnap = s
     }
 
-    // Save / Open roundtrip through the UI
+    // 保存 / 打开往返：走真实 UI 按钮，验证 toast、服务端文件与载入结果
     const saveName = 'UI Check Save'
     state.projectName = saveName
     click(qa('.topbar .btn').find((b) => /Save|保存/.test(b.textContent)))
@@ -170,7 +214,7 @@ export async function runUiCheck() {
     }
     await fetch('/api/projects/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: saveName }) })
 
-    // undo / redo buttons
+    // 撤销/重做按钮（↺ / ↻）：只通过点击图标验证，不直接调用 store
     loadDemo('blank')
     await sleep(500)
     addNode('perlin', { x: 100, y: 100 })
@@ -184,7 +228,7 @@ export async function runUiCheck() {
     r.add('toolbar: redo button', state.graph.nodes.length === withNode, `${state.graph.nodes.length} vs ${withNode}`)
     r.add('toolbar: undo disabled state sane', qa('.topbar .icon-btn').filter((b) => ['↺', '↻'].includes(b.textContent.trim())).length === 2)
 
-    // auto layout button (one-click graph tidy)
+    // 自动整理按钮：节点应移动且不重叠，撤销后位置应完全复原
     const layoutBtn = qa('.topbar .icon-btn').find((b) => /自动整理|Auto-arrange/.test(b.getAttribute('title') || ''))
     r.add('toolbar: auto layout button', !!layoutBtn, 'layout button missing')
     if (layoutBtn) {
@@ -209,7 +253,7 @@ export async function runUiCheck() {
       r.add('toolbar: auto layout undo restores positions', restored)
     }
 
-    // resolution + proxy selects
+    // 分辨率与代理分辨率下拉：切换后预览应刷新，角标与尺寸标签同步变化
     loadDemo('weathered-steel')
     await sleep(600)
     const resSelect = qa('.top-select')[0]
@@ -232,7 +276,7 @@ export async function runUiCheck() {
     setInput(resSelect, '1024', 'change')
     await sleep(300)
 
-    // help modal
+    // 帮助弹窗：打开后应含“自检”按钮，关闭按钮能正常关闭
     click(qa('.topbar .icon-btn').find((b) => b.textContent.trim() === '?'))
     await sleep(300)
     r.add('toolbar: help modal', !!q('.modal'))
@@ -241,7 +285,7 @@ export async function runUiCheck() {
     await sleep(200)
     r.add('toolbar: help closes', !q('.modal'))
 
-    // language switch (toolbar + right panel labels)
+    // 语言切换：切中文/英文后，工具栏与属性面板文案应随之变化
     const langBtns = qa('.lang-switch button')
     const zh = langBtns.find((b) => b.textContent.trim() === '中文')
     const en = langBtns.find((b) => b.textContent.trim() === 'EN')
@@ -252,7 +296,7 @@ export async function runUiCheck() {
     await sleep(350)
     r.add('toolbar: en labels', /New/.test(text('.topbar')) && /Properties/.test(text('.inspector')), text('.topbar').slice(0, 40))
 
-    // export dialog integration
+    // 导出对话框：默认分辨率应跟随当前文档，五个预设卡片，文件名预填
     let tip = 'Export Material'
     click(qa('.topbar .btn').find((b) => /Export Material|导出材质/.test(b.textContent)))
     await sleep(400)
@@ -260,7 +304,7 @@ export async function runUiCheck() {
     r.add('toolbar: export default resolution matches doc', Number(q('.modal.wide select')?.value) === state.resolution, `${q('.modal.wide select')?.value} vs ${state.resolution}`)
     r.add('toolbar: export preset cards', qa('.preset-card').length === 5)
     r.add('toolbar: export name prefilled', (q('.modal.wide input')?.value || '').length > 0)
-    // height bit depth toggle reflected in table
+    // 高度图位深开关：取消 16 位后，文件表中的 Height 行应变成 8 位
     const heightRow = () => qa('.file-table tbody tr').find((tr) => /Height|高度/.test(tr.children[0]?.textContent || ''))
     const h16Text = heightRow()?.children[2]?.textContent || ''
     const h16Box = qa('.modal.wide input[type=checkbox]').find((c) => c.closest('label') && /16-bit|16 位/.test(c.closest('label').textContent || ''))
@@ -274,7 +318,7 @@ export async function runUiCheck() {
       h16Box.dispatchEvent(new Event('change', { bubbles: true }))
       await sleep(200)
     }
-    // quick export at 512
+    // 512 分辨率快速导出：等待结果框出现，并确认有输出路径
     setInput(q('.modal.wide select'), '512', 'change')
     await sleep(200)
     click(qa('.modal-foot .btn').find((b) => /Export 5|导出 5/.test(b.textContent)))
@@ -284,11 +328,11 @@ export async function runUiCheck() {
     await sleep(300)
     r.add('toolbar: export dialog closes', !q('.modal.wide'))
 
-    // ============================ RIGHT PANEL ============================
+    // ============================ 右侧面板 ============================
     loadDemo('weathered-steel')
     await sleep(800)
 
-    // tabs
+    // 标签页：2D 贴图页与 3D 预览页的显隐切换
     const tabs = qa('.right-tabs button')
     click(tabs[1])
     await sleep(400)
@@ -297,11 +341,11 @@ export async function runUiCheck() {
     await sleep(400)
     r.add('right: 3D tab', visible(q('.preview')))
 
-    // badges
+    // 角标：应显示已连接通道数量与材质名
     r.add('right: badge shows channels', /8/.test(badge()), badge())
     r.add('right: material name badge', qa('.badge').length >= 2 && qa('.badge')[1].textContent.trim().length > 0, qa('.badge').map((b) => b.textContent).join('|'))
 
-    // preview shape select
+    // 预览形状下拉：五种几何体都可切换且不报错
     const shape = q('.shape-select')
     r.add('right: shape select', !!shape && shape.options.length === 5, shape ? String(shape.options.length) : 'missing')
     if (shape) {
@@ -314,7 +358,7 @@ export async function runUiCheck() {
       await sleep(200)
     }
 
-    // tiling / displacement / spin / reset
+    // 平铺 / 位移 / 自转 / 重置：验证预览工具条的滑块与重置按钮
     const ranges = qa('.preview-tools input[type=range]')
     if (ranges.length >= 2) {
       setInput(ranges[0], '3', 'input')
@@ -338,7 +382,7 @@ export async function runUiCheck() {
     await sleep(200)
     r.add('right: reset button', !state.error, state.error)
 
-    // map panel contents, zoom, normal convention note
+    // 贴图面板：内容齐全、缩放可用、法线约定说明存在
     click(tabs[1])
     await sleep(700)
     r.add('right: 8 map cards', qa('.map-card').length === 8, String(qa('.map-card').length))
@@ -353,7 +397,7 @@ export async function runUiCheck() {
     click(q('.map-zoom'))
     await sleep(200)
     r.add('right: map zoom closes', !q('.map-zoom'))
-    // change normal convention and verify note updates
+    // 切换法线约定（GL/DX），右侧说明文字应同步更新
     const out = outputNode()
     const pvConv = state.previewVersion
     setParam(out.id, 'normalConvention', 1)
@@ -368,7 +412,7 @@ export async function runUiCheck() {
     click(tabs[0])
     await sleep(300)
 
-    // inspector basics
+    // 属性检查器基础项：选中节点后应显示参数、名称与类型
     state.selectedIds = []
     state.activeNodeId = null
     await sleep(300)
@@ -378,7 +422,7 @@ export async function runUiCheck() {
     await sleep(500)
     r.add('right: inspector select node', text('.insp-node').length > 0 && qa('.inspector .param').length > 0, text('.insp-node'))
     r.add('right: inspector title input', !!q('.title-input'))
-    // range + number sync on first param
+    // 滑块与数字输入框联动：拖滑块后数字框应同步更新
     const firstParam = qa('.inspector .param')[0]
     const range = firstParam?.querySelector('input[type=range]')
     const num = firstParam?.querySelector('input.num')
@@ -388,14 +432,14 @@ export async function runUiCheck() {
       r.add('right: slider updates number', num.value === '12' || Number(num.value) === 12, `${num.value}`)
       r.add('right: slider updates param', Number(perlin.params.scale) === 12 || Number(perlin.params.value) >= 0, JSON.stringify(perlin.params))
     } else r.add('right: numeric widget present', false)
-    // rename
+    // 重命名节点：标题输入框修改后写回 data.title
     const titleInput = q('.title-input')
     if (titleInput) {
       setInput(titleInput, 'Renamed Node', 'change')
       await sleep(200)
       r.add('right: rename node', nodeById(perlin.id)?.data?.title === 'Renamed Node', nodeById(perlin.id)?.data?.title)
     }
-    // bool checkbox
+    // 布尔复选框：切换后不应报错
     const invertNode = state.graph.nodes.find((n) => n.type === 'invert')
     if (invertNode) selectNode(invertNode.id)
     await sleep(400)
@@ -407,7 +451,7 @@ export async function runUiCheck() {
       await sleep(250)
       r.add('right: bool toggle', true)
     }
-    // gradient editor add/remove stop
+    // 渐变编辑器：在色条上点击应新增一个色标，点“−”应删除
     const gradNode = state.graph.nodes.find((n) => n.type === 'gradient_map')
     if (gradNode) {
       selectNode(gradNode.id)
@@ -426,7 +470,7 @@ export async function runUiCheck() {
         r.add('right: gradient remove stop', (nodeById(gradNode.id).params.gradient || []).length === stopsBefore, String((nodeById(gradNode.id).params.gradient || []).length))
       }
     }
-    // paint studio live result
+    // 画笔工作室：从属性面板打开后应能实时落笔并更新结果
     loadDemo('painted-sign')
     await sleep(900)
     const paintNode = state.graph.nodes.find((n) => n.type === 'paint')
@@ -436,7 +480,7 @@ export async function runUiCheck() {
     await sleep(600)
     r.add('right: paint studio opens from inspector', !!q('.paint-studio'))
     if (q('.paint-studio')) {
-      // ---- built-in brushes ----
+      // ---- 内置笔刷：数量、分组、缩略图与选中状态 ----
       const brushItems = qa('.brush-item')
       const { getBrushGroups } = await import('../engine/brushes.js')
       const totalBrushes = getBrushGroups().reduce((n, g) => n + g.items.length, 0)
@@ -461,7 +505,7 @@ export async function runUiCheck() {
         if (!selId) r.add('paint: brush selection ' + name, false, 'no brushId')
       }
       r.add('paint: brush selection changes state', !!state.paintBrush.brushId, String(state.paintBrush.brushId))
-      // draw with the chalk brush (select by its position in the list: id order matches BRUSHES)
+      // 用粉笔笔刷在画布上画一笔（按列表下标选中，列表顺序与 BRUSHES 定义一致）
       click(brushItems[6])
       await sleep(150)
       r.add('paint: chalk selected', state.paintBrush.brushId === 'chalk', state.paintBrush.brushId)
@@ -475,7 +519,7 @@ export async function runUiCheck() {
       r.add('paint: stroke committed', strokesB.length === strokeCount0 + 1, `${strokesB.length} vs ${strokeCount0 + 1}`)
       const savedBrush = (() => { try { return JSON.parse(localStorage.getItem('substrate.brush') || 'null') } catch (e) { return null } })()
       r.add('paint: brush setting persisted', savedBrush && savedBrush.brushId === 'chalk', JSON.stringify(savedBrush))
-      // brush rasterisation characteristics (headless canvas)
+      // 笔刷栅格化特性（用离屏 canvas 直接测量覆盖率，不依赖 GPU）
       const { drawStroke } = await import('../engine/paint.js')
       const { BRUSHES, brushPreview } = await import('../engine/brushes.js')
       const coverage = (opts) => {
@@ -492,7 +536,7 @@ export async function runUiCheck() {
       r.add('paint: every brush renders', perBrush.every((v) => v > 0.01), JSON.stringify(perBrush.map((v) => +v.toFixed(3))))
       r.add('paint: every brush differs', new Set(perBrush.map((v) => v.toFixed(3))).size >= 7, JSON.stringify(perBrush.map((v) => +v.toFixed(3))))
       r.add('paint: brush previews unique', new Set(BRUSHES.map((b) => brushPreview(b))).size === BRUSHES.length)
-      // eraser removes coverage
+      // 橡皮擦：应在已填充的白色画布上擦出透明像素
       const c3 = document.createElement('canvas')
       c3.width = c3.height = 96
       const cx3 = c3.getContext('2d')
@@ -503,7 +547,7 @@ export async function runUiCheck() {
       let transparent = 0
       for (let i = 3; i < d3.length; i += 4) if (d3[i] === 0) transparent++
       r.add('paint: eraser removes pixels', transparent > 100, String(transparent))
-      // cubic smoothing: a 3-point arc must bend away from the straight chord, while two points stay straight
+      // 三次样条平滑：三个点的弧线应偏离直线弦长，两个点必须保持直线
       const { strokeSamples } = await import('../engine/paint.js')
       const arcPts = [{ x: 0.2, y: 0.5, p: 1 }, { x: 0.5, y: 0.2, p: 1 }, { x: 0.8, y: 0.5, p: 1 }]
       const arc = strokeSamples(arcPts, 256, 256, 4, {})
@@ -512,13 +556,13 @@ export async function runUiCheck() {
       r.add('paint: cubic stroke smoothing bends the path', Math.abs(arcMid.y - chordMidY) > 4, JSON.stringify({ y: +arcMid.y.toFixed(1), chord: chordMidY }))
       const straight = strokeSamples([{ x: 0.2, y: 0.5, p: 1 }, { x: 0.8, y: 0.5, p: 1 }], 256, 256, 4, {})
       r.add('paint: two-point stroke stays straight', Math.max(...straight.samples.map((v) => Math.abs(v.y - 128))) < 0.01)
-      // pen taper: end stamps shrink, middle stamps stay full size
+      // 笔锋渐细：两端半径缩放应明显小于中点（中点接近满尺寸）
       const tapered = strokeSamples(arcPts, 256, 256, 4, { taper: true, taperLength: 0.5, size: 40 })
       const tFirst = tapered.samples[0].radiusScale
       const tLast = tapered.samples[tapered.samples.length - 1].radiusScale
       const tMid = tapered.samples[Math.floor(tapered.samples.length / 2)].radiusScale
       r.add('paint: pen taper shrinks the stroke ends', tFirst < 0.4 && tLast < 0.4 && tMid > 0.9, JSON.stringify({ first: +tFirst.toFixed(2), mid: +tMid.toFixed(2), last: +tLast.toFixed(2) }))
-      // painted coverage confirms the taper visually
+      // 用实际绘制覆盖率验证渐细效果：开启渐细后两端列的 alpha 总量应明显下降
       const taperCanvas = document.createElement('canvas')
       taperCanvas.width = taperCanvas.height = 128
       const tctx = taperCanvas.getContext('2d')
@@ -536,7 +580,7 @@ export async function runUiCheck() {
       const plain = drawTaper(false)
       const pen = drawTaper(true)
       r.add('paint: taper narrows painted ends', pen.start < plain.start * 0.9 && pen.end < plain.end * 0.9 && pen.mid >= plain.mid * 0.85, JSON.stringify({ plain, pen }))
-      // UI: taper toggle exists, writes to the brush and next stroke
+      // UI 层：渐细开关存在、能写入画笔参数，并在下一笔生效
       const taperToggle = [...qa('.paint-tools .check input[type=checkbox]')].find((c) => /渐细|Taper/i.test(c.closest('label')?.textContent || ''))
       r.add('paint: pen taper toggle present', !!taperToggle, 'missing')
       if (taperToggle && !taperToggle.checked) {
@@ -545,8 +589,8 @@ export async function runUiCheck() {
         await sleep(120)
       }
       r.add('paint: taper setting stored in brush', state.paintBrush.taper === true, String(state.paintBrush.taper))
-      // performance guard: a long smoothed stroke must rasterise fast (sprite stamps), otherwise
-      // live painting becomes janky
+      // 性能护栏：一笔长而平滑的笔迹必须快速栅格化（靠 sprite 印章），否则实时绘画会卡顿。
+      // 第二次绘制用同一画布测“缓存命中”后的耗时，验证 sprite 缓存确实生效。
       const perfCanvas = document.createElement('canvas')
       perfCanvas.width = perfCanvas.height = 1024
       const perfCtx = perfCanvas.getContext('2d')
@@ -570,7 +614,7 @@ export async function runUiCheck() {
           r.add('right: paint studio closes', !q('.paint-studio'))
   }
 
-    // ============================ AI assistant / MCP self-check / assets ============================
+    // ============================ AI 助手 / MCP 自检 / 素材库 ============================
     const aiBtn = q('.ai-btn')
     r.add('ai: topbar entry present', !!aiBtn)
     if (aiBtn) {
@@ -623,7 +667,8 @@ export async function runUiCheck() {
       r.add('ai: panel closes', !q('.ai-panel'))
     }
 
-    // material library: import a tiny texture through the API, use it as a paint-layer pattern
+    // 素材库：先通过 API 导入一张极小 PNG，再在素材库弹窗里把它“填入”画笔层作为图案；
+    // 结束后无论成败都调用删除接口清理测试素材
     const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAFUlEQVR42mP8z8BQz0AEYBxVSF+FABJADveWkH6oAAAAAElFTkSuQmCC'
     let assetId = null
     try {
@@ -655,7 +700,8 @@ export async function runUiCheck() {
       if (assetId) await fetch('/api/assets/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: assetId }) })
     }
 
-    // custom brush import through the Paint Studio file input
+    // 自定义笔刷导入：通过画笔工作室的文件输入导入 JSON 笔刷定义，
+    // 应出现“自定义”分组并自动选中新笔刷
     const paintNode2 = state.graph.nodes.find((n) => n.type === 'paint')
     if (paintNode2) {
       selectNode(paintNode2.id)
@@ -686,7 +732,7 @@ export async function runUiCheck() {
   } finally {
     try {
       setLocale(snapshot.locale, false)
-      // restore the user's brush choice (the brush tests select presets and toggle taper)
+      // 恢复用户的画笔选择（此前的笔刷测试会切换预设并改动渐细开关）
       Object.assign(state.paintBrush, brushSnapshot)
       savePaintBrush()
       try {
@@ -716,18 +762,18 @@ export async function runUiCheck() {
               for (const msg of parsed.messages || []) aiModule.aiChat.messages.push(msg)
             }
             aiModule.aiChat.modelKey = parsed.modelKey || aiModule.aiChat.modelKey
-          } catch (e) { /* ignore */ }
+          } catch (e) { /* 忽略：单个会话记录解析失败 */ }
         }
       } catch (e) {
-        /* ignore */
+        /* 忽略：恢复测试现场失败不应覆盖已收集的检查结论 */
       }
-      // restore the user's remembered language (the language-switch test really clicked the switch)
+      // 恢复用户记住的语言（语言切换测试真的点了切换按钮）
       try {
         if (savedLocale === null) localStorage.removeItem('substrate.locale')
         else localStorage.setItem('substrate.locale', savedLocale)
         history.replaceState(history.state, '', hrefBeforeLocaleTests)
       } catch (e) {
-        /* ignore */
+        /* 忽略：环境不允许修改 storage/URL */
       }
       setResolution(snapshot.resolution)
       setProxy(snapshot.proxy)
@@ -737,7 +783,7 @@ export async function runUiCheck() {
       state.activePaintId = null
       await sleep(500)
       doEval()
-        // ============================ AI chat persistence / floating window / rules ============================
+        // ============================ AI 对话持久化 / 浮动窗口 / 规则 ============================
     const realFetch = window.fetch
     let fakeFetchInstalled = false
     try {
@@ -749,7 +795,8 @@ export async function runUiCheck() {
         (rules.rules || []).some((x) => /source code/i.test(x)) && (rules.rules || []).some((x) => /API keys|environment/i.test(x)),
         JSON.stringify(rules.rules)
       )
-      // deterministic fake model reply: proves the request survives closing the panel
+      // 用假的 /api/llm/chat 响应（延迟 360ms）模拟模型回复，
+      // 目的是证明关闭面板后请求仍然继续、回复仍能落到会话里
       aiStore.clearChat()
       window.fetch = (url, opts) => {
         if (String(url).includes('/api/llm/chat')) {
@@ -804,7 +851,7 @@ export async function runUiCheck() {
         !!reasoningEl && /思考过程|Thinking process/.test(reasoningEl.textContent || '') && /测试思考/.test(reasoningEl.textContent || ''),
         'thinking block missing'
       )
-      // Conversation isolation: a new chat must start empty and switching must not mix transcripts.
+      // 会话隔离：新建会话必须为空；来回切换不能把两段记录混在一起
       const convBefore = aiStore.aiChat.activeConversationId
       const newConvBtn = q('.ai-new-conv')
       r.add('ai: new conversation button', !!newConvBtn, 'new conversation button missing')
@@ -859,12 +906,12 @@ export async function runUiCheck() {
             for (const msg of parsed.messages || []) aiStore.aiChat.messages.push(msg)
           }
           aiStore.aiChat.modelKey = parsed.modelKey || aiStore.aiChat.modelKey
-        } catch (e) { /* ignore */ }
+        } catch (e) { /* 忽略：会话快照格式不合法时保持现状 */ }
       }
       if (q('.ai-float')) q('.ai-float .icon-btn')?.click()
     }
 } catch (e) {
-      /* best effort */
+      /* 尽力而为：整体异常时返回已收集的部分结果 */
     }
   }
   return r.result()

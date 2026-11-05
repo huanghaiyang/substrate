@@ -1,3 +1,14 @@
+// ============================================================================
+// MapPanel —— 2D 贴图通道面板（「Maps」视图）
+//
+// 界面位置：主界面中可切换的 2D 输出页签。把引擎烘焙出的各个 PBR 通道（basecolor / normal /
+// roughness / metallic / height / ao / emissive / opacity）以缩略图卡片的形式平铺展示，
+// 点击任一张可打开放大预览。
+//
+// 与 engine 的交互：state（图、分辨率、showMaps 开关）来自 engine/store.js；
+// previewStore.maps 是 engine/preview.js 维护的 Uint8 像素缓冲，这里把它转成 PNG dataURL 显示。
+// 注意：像素缓冲是「上下翻转」的（WebGL 习惯），重建图片时需要按行倒序拷贝。
+// ============================================================================
 import { defineComponent, ref, watch, onMounted, computed } from 'vue'
 import { state, outputNode } from '../engine/store.js'
 import { previewStore } from '../engine/preview.js'
@@ -6,9 +17,16 @@ import { OUTPUT_CHANNELS } from '../engine/nodes/index.js'
 export default defineComponent({
   name: 'MapPanel',
   setup() {
+    /** 当前可展示的通道卡片列表（每项含 key/label/url/色彩空间等） */
     const items = ref([])
+    /** 点击缩略图后放大预览的通道对象；null 表示未打开大图 */
     const zoom = ref(null)
 
+    /**
+     * 把某个通道的像素缓冲编码成 PNG dataURL，供 <img>/CSS 背景使用。
+     * @param {string} key previewStore.maps 中的通道键名（如 'normal'）
+     * @returns {string|null} png dataURL；该通道不存在时返回 null
+     */
     function makeDataURL(key) {
       const m = previewStore.maps && previewStore.maps[key]
       if (!m) return null
@@ -19,6 +37,7 @@ export default defineComponent({
       const img = ctx.createImageData(m.width, m.height)
       const row = m.width * 4
       const src = m.data
+      // 逐行倒序拷贝：引擎的缓冲原点在左下角，而 canvas 的 ImageData 原点在左上角
       for (let y = 0; y < m.height; y++) {
         const srcRow = (m.height - 1 - y) * row
         img.data.set(src.subarray(srcRow, srcRow + row), y * row)
@@ -27,6 +46,10 @@ export default defineComponent({
       return canvas.toDataURL('image/png')
     }
 
+    /**
+     * 重建整份通道列表：只为有像素数据的通道生成卡片，normal 通道还会标注 OpenGL/DirectX 约定。
+     * @returns {void}
+     */
     function rebuild() {
       items.value = OUTPUT_CHANNELS.map((ch) => ({
         key: ch.key,
@@ -43,8 +66,10 @@ export default defineComponent({
       })).filter((i) => i.url)
     }
 
-    // Only rebuild the (expensive) PNG data URLs while the map panel is actually visible;
-    // rebuild once when the user switches to the 2D Maps tab so it is always current.
+    // 只在面板可见时重建（转 PNG 较昂贵）：
+    // 1) 每次烘焙版本变化时，如果当前正显示 Maps 页签就立即刷新；
+    // 2) 用户切到 Maps 页签时再重建一次，保证数据一定是最新的。
+    // flush: 'post' 让回调在 DOM 更新之后执行。
     watch(
       () => state.previewVersion,
       () => {
@@ -62,6 +87,7 @@ export default defineComponent({
       if (state.showMaps) rebuild()
     })
 
+    /** 面板头部的摘要信息：材质名、分辨率、节点数 */
     const meta = computed(() => {
       const out = outputNode()
       return {
@@ -75,16 +101,19 @@ export default defineComponent({
   },
   template: `
     <div class="maps panel">
+      <!-- 面板头：标题与说明 -->
       <div class="panel-head">
         <span>{{ $t('maps.title') }}</span>
         <span class="dim">{{ $t('maps.hint') }}</span>
       </div>
+      <!-- 摘要条：材质名 / 分辨率 / 节点数 / 无缝标记 -->
       <div class="maps-meta">
         <span class="chip">{{ $tr(meta.name) }}</span>
         <span class="chip">{{ meta.resolution }}²</span>
         <span class="chip">{{ $t('maps.nodes', { n: meta.nodes }) }}</span>
         <span class="chip">{{ $t('maps.seamless') }}</span>
       </div>
+      <!-- 通道卡片网格：点击卡片把该通道赋给 zoom，弹出居中大图 -->
       <div class="maps-grid">
         <button v-for="item in items" :key="item.key" class="map-card" @click="zoom = item">
           <span class="map-thumb" :style="{ backgroundImage: 'url(' + item.url + ')' }"></span>
@@ -92,6 +121,7 @@ export default defineComponent({
           <span class="map-sub">{{ $t(item.srgb ? 'maps.space.srgb' : 'maps.space.linear') }} · {{ item.single ? $t('maps.grey') : 'RGB' }}{{ item.note ? ' · ' + item.note : '' }}</span>
         </button>
       </div>
+      <!-- 放大预览遮罩：点击遮罩或关闭按钮都置空 zoom -->
       <div v-if="zoom" class="map-zoom" @click="zoom = null">
         <div class="zoom-caption">{{ $tr(zoom.label) }} — {{ $t(zoom.srgb ? 'maps.space.srgb' : 'maps.space.linear') }}</div>
         <img :src="zoom.url" :alt="$tr(zoom.label)" />

@@ -1,5 +1,11 @@
-// CLI: inspect a .sbsar and print what the importer sees. Useful for triaging "import failed" reports.
-//   node scripts/inspect-sbsar.mjs <file.sbsar> [--json]
+/**
+ * .sbsar 检查工具（CLI）：打印「导入器实际看到的内容」，方便排查「这文件为什么导入失败」。
+ *
+ * 用法：node scripts/inspect-sbsar.mjs <file.sbsar> [--json]
+ *   --json 时输出结构化结果（省略体积很大的图片二进制），便于脚本消费。
+ *
+ * 注意：这里只读取与解析，不执行烘焙；能否求值取决于本机是否安装 Substance Engine。
+ */
 import { readFileSync } from 'node:fs'
 import { inspectSbsar } from '../server/sbsar.mjs'
 
@@ -11,9 +17,11 @@ if (!file) {
 const buf = readFileSync(file)
 const r = inspectSbsar(buf)
 if (process.argv.includes('--json')) {
+  // imagePayloads 是原始图片字节，序列化后体积巨大且无调试价值，这里主动剔除
   console.log(JSON.stringify({ ...r, imagePayloads: undefined }, null, 2))
   process.exit(0)
 }
+// 把字节数格式化为 KB 字符串；0 或缺失显示为 '-'
 const kb = (n) => (n ? Math.round(n / 1024) + ' KB' : '-')
 console.log('file      ', file, '(' + buf.length + ' bytes)')
 console.log('container ', r.container, '· confidence', r.containerConfidence, '· header version', buf[6] + '.' + buf[7])

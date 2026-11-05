@@ -1,20 +1,39 @@
-// Built-in product manual + technical glossary.
+// 内置产品手册 + 技术术语表。
 //
-// This module is the single source for the in-app Help panel (`?` in the top bar). It is *not* a
-// translation key list: every entry carries its own {en, zh} pair, so the panel switches language
-// reactively and the content stays next to the thing it documents.
+// 本模块是应用内帮助面板（顶栏 `?`）的唯一内容来源。它不是翻译 key 表：每个条目自带 {en, zh}
+// 双语对，因此面板可以随语言实时切换，且文案始终紧挨着它所描述的界面对象。
 //
-// Shape:
-//   MANUAL_SECTIONS: [{ id, title:{en,zh}, blocks:[{ type:'p'|'ul'|'steps'|'code'|'table', ... }] }]
-//   GLOSSARY:        [{ id, term:{en,zh}, tag, desc:{en,zh}, app:{en,zh} }]
-// `app` answers "where do I meet this term in THIS application?" — that is the part a generic
-// glossary cannot tell you.
+// 数据结构：
+//   T(en, zh)                         双语字符串构造器，返回 { en, zh }
+//   MANUAL_TAGS:    [{ id, label:{en,zh} }]
+//                     id     术语表筛选用标签标识（与 GLOSSARY 条目的 tag 对应）
+//                     label  标签显示名
+//   MANUAL_SECTIONS:[{
+//                     id,                      章节标识（稳定，供锚点/跳转使用）
+//                     title:{en,zh},           章节标题
+//                     blocks:[...]             内容块数组，按顺序渲染
+//                   }]
+//                   block.type 取值：
+//                     'p'     段落 —— { type, en, zh }（字符串，支持 **粗体** 与 `代码`）
+//                     'ul'    无序列表 —— { type, en:string[], zh:string[] }
+//                     'steps' 编号步骤 —— { type, en:string[], zh:string[] }
+//                     'code'  代码块 —— { type, en, zh }（等宽展示，不执行）
+//                     'table' 表格 —— { type, head:[{en,zh},…], rows:[[{en,zh},…],…] }
+//                               head 为表头，rows 每行单元格数必须与 head 一致
+//   GLOSSARY:       [{
+//                     id,                      术语标识（稳定）
+//                     term:{en,zh},            术语名
+//                     tag,                     所属 MANUAL_TAGS id（color/data/node/pipeline/export）
+//                     desc:{en,zh},            定义（通用解释）
+//                     app:{en,zh}              在本应用里「在哪里遇到它」，这是通用术语表给不了的部分
+//                   }]
 //
-// Rules for editing: keep EN and ZH in sync, keep sections task-oriented (how to do X), and keep
-// every glossary `app` pointer anchored to a real node / parameter / channel / UI element name.
+// 编辑约定：EN 与 ZH 必须同步更新；章节保持「怎么做 X」的任务导向；术语表的 app 指针必须指向
+// 真实存在的节点 / 参数 / 通道 / 界面元素名，避免出现查不到的引用。
 
 const T = (en, zh) => ({ en, zh })
 
+// 术语表筛选标签：帮助面板顶部的分类按钮，GLOSSARY 条目通过 tag 归属到其中一项。
 export const MANUAL_TAGS = [
   { id: 'all', label: T('All', '全部') },
   { id: 'color', label: T('Colour', '颜色') },
@@ -24,6 +43,8 @@ export const MANUAL_TAGS = [
   { id: 'export', label: T('Export & packaging', '导出与打包') }
 ]
 
+// 手册正文：按主题分章节（overview / quickstart / nodes / pipeline / export / troubleshooting 等），
+// 每章由若干 block 组成；渲染顺序即数组顺序，与英文/中文切换无关。
 export const MANUAL_SECTIONS = [
   {
     id: 'overview',
@@ -350,7 +371,8 @@ export const MANUAL_SECTIONS = [
   }
 ]
 
-// tag: one of MANUAL_TAGS ids (colour / data / node / pipeline / export)
+// 术语表：按字母/主题顺序排列的术语条目；tag 必须是 MANUAL_TAGS 中的某个 id，
+// app 字段说明该术语在本应用的具体落点（节点、参数、通道或界面元素）。
 export const GLOSSARY = [
   {
     id: 'pbr',

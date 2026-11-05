@@ -1,10 +1,16 @@
-// Integration tests for the recycle bin (materials/projects + library assets).
-//
-// Runs against a live studio server (npm start). If the server is not reachable the suite reports SKIP
-// instead of failing, so it stays usable in a bare checkout.
-//
-//   npm run test:trash            # uses http://127.0.0.1:3000
-//   SUBSTRATE_URL=http://host:port npm run test:trash
+/**
+ * 回收站集成测试（覆盖材质工程与素材库资源）。
+ *
+ * 运行前提：需要已启动的设计器服务器（npm start）。如果服务器不可达，
+ * 整套测试会报告 SKIP 而不是 FAIL，这样在裸仓库中也不会误报。
+ *
+ * 用法：
+ *   npm run test:trash              # 默认访问 http://127.0.0.1:3000
+ *   SUBSTRATE_URL=http://host:port npm run test:trash
+ *
+ * 验证内容：删除→进回收站→恢复/彻底删除、素材软删除、清空回收站、
+ * 错误路径，以及「正在编辑的材质 / 被引用的素材」这两类删除保护。
+ */
 const BASE = process.env.SUBSTRATE_URL || 'http://127.0.0.1:3000'
 
 let pass = 0
@@ -20,6 +26,11 @@ const ok = (label, cond, info = '') => {
   }
 }
 
+/**
+ * 调用服务器 API。body 为 undefined 时发 GET，否则发 POST（JSON）。
+ * 响应即使不是 JSON 也返回空对象，避免测试因为一个解析异常而中断。
+ * @returns {Promise<{status: number, json: any}>}
+ */
 async function api(path, body) {
   const res = await fetch(BASE + path, body === undefined ? undefined : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
   const json = await res.json().catch(() => ({}))
@@ -33,8 +44,8 @@ if (!alive) {
 }
 
 const unique = 'trash-test-' + Date.now().toString(36)
-// the asset library is content-addressed, so every test needs *unique pixels* — otherwise a second
-// import just returns the first asset and the assertions get confusing.
+// 素材库按内容寻址，因此每个测试都需要「不同的像素」，否则第二次导入只会返回第一个素材，
+// 断言会变得混乱。这里每次生成都让 shade 递增，保证内容唯一。
 const { makePng } = await import('./sbsar-fixture.mjs')
 let seed = 1
 const png = () => 'data:image/png;base64,' + makePng(8, 8, seed++ * 37).toString('base64')
@@ -68,7 +79,7 @@ console.log('\n1. materials: delete → bin → restore')
   const listed2 = await api('/api/projects')
   ok('project is back in the material list', listed2.json.projects.some((p) => p.name === unique))
 
-  // second round: delete + purge
+  // 第二轮：删除后直接彻底清除，验证「清空后不会复活」
   const del2 = await api('/api/projects/delete', { name: unique })
   const purge = await api('/api/trash/purge', { kind: 'project', id: del2.json.trashed.id })
   ok('purge succeeds', purge.json.ok === true, JSON.stringify(purge.json))
@@ -133,7 +144,7 @@ console.log('\n4. error paths')
 
 console.log('\n5. deletion guards: open material + asset in use')
 {
-  // a material that is open in the editor cannot be deleted
+  // 正在编辑器中打开的材质不能被直接删除（需要 force）
   const guarded = unique + '-active'
   await api('/api/projects/save', { name: guarded, version: 1, app: 'substrate-texture-designer', resolution: 512, graph: { nodes: [{ id: 'material_output-x', type: 'material_output', x: 0, y: 0, params: {}, data: {} }], connections: [] } })
   await api('/api/projects/active', { name: guarded })
@@ -147,7 +158,7 @@ console.log('\n5. deletion guards: open material + asset in use')
   if (forcedDel.json.trashed) await api('/api/trash/purge', { kind: 'project', id: forcedDel.json.trashed.id })
   await api('/api/projects/active', { name: '' })
 
-  // an asset referenced by a saved material cannot be deleted
+  // 被已保存材质引用的素材不能被删除（要先解除引用）
   const usedImp = await api('/api/assets/import', { name: unique + '-used.png', dataUrl: png() })
   const usedId = usedImp.json.asset.id
   const consumer = unique + '-consumer'
@@ -172,7 +183,7 @@ console.log('\n5. deletion guards: open material + asset in use')
   const stillThere = await api('/api/assets')
   ok('the asset survives the refused deletion', stillThere.json.assets.some((a) => a.id === usedId))
 
-  // cleanup: bin the consumer, purge it (that is what releases the binding), then the asset can go
+  // 清理：先把引用者移入回收站并彻底删除（这一步才会解除绑定），之后素材就可以删除了
   const consumerBinned = await api('/api/projects/delete', { name: consumer, force: true })
   if (consumerBinned.json.trashed) await api('/api/trash/purge', { kind: 'project', id: consumerBinned.json.trashed.id })
   const afterConsumer = await api('/api/assets/delete', { id: usedId })
@@ -182,7 +193,7 @@ console.log('\n5. deletion guards: open material + asset in use')
 
 console.log('\n6. bindings survive the recycle bin')
 {
-  // an asset used by a material that is only *binned* must stay locked
+  // 被「已进入回收站但未彻底删除」的材质引用的素材，必须继续保持锁定
   const bindImp = await api('/api/assets/import', { name: unique + '-bind.png', dataUrl: png() })
   const bindAsset = bindImp.json.asset.id
   const holder = unique + '-binder'
@@ -209,7 +220,7 @@ console.log('\n6. bindings survive the recycle bin')
   const binList = await api('/api/trash')
   const binnedItem = (binList.json.projects || []).find((p) => p.name === holder)
   ok('bin reports how many assets the material still binds', binnedItem && binnedItem.boundAssets === 1, JSON.stringify(binnedItem && { boundAssets: binnedItem.boundAssets }))
-  // permanently deleting the material is the only thing that releases the binding
+  // 只有「彻底删除」这个材质，才会真正解除素材绑定
   const purge = await api('/api/trash/purge', { kind: 'project', id: binned.json.trashed.id })
   ok('purging the binned material succeeds', purge.json.ok === true)
   const released = await api('/api/assets/delete', { id: bindAsset })

@@ -1,11 +1,18 @@
-// Chinese translation tables, split by context so identical English words can differ
-// (e.g. "Blend" as a node name vs. a blend-mode option, "Normal" as a channel vs. a blend mode).
+// 中文翻译表（按上下文拆分，同一英文词在不同位置可译成不同中文）。
 //
-//  ZH_NODE    node names + category names + node descriptions
-//  ZH_LABEL   parameter labels
-//  ZH_INPUT   input-port labels
-//  ZH_OPTION  select-menu options
-//  ZH_GENERAL channels, export presets, demo materials, preview shapes
+// 为什么要拆分：英文里一个词可能有多义，例如 "Blend" 既是节点名又是混合模式选项，
+// "Normal" 既是通道名又是混合模式。若只维护一张扁平表，就无法在不同 UI 语境下给出不同译法。
+//
+// 数据表（均为英文原文 → 中文译文的扁平映射，key 必须与英文原文完全一致）：
+//   ZH_NODE    节点名 + 分类名 + 节点描述（界面中的节点库、检查器标题）
+//   ZH_LABEL   参数标签（节点属性面板中每个字段的显示名）
+//   ZH_INPUT   输入端口标签（节点左侧端口名）
+//   ZH_OPTION  下拉/选择菜单选项（参数取值）
+//   ZH_GENERAL 通道名、导出预设、示例材质、预览形状等通用文案
+//
+// 使用方式：src/i18n/index.js 按当前语言与上下文选取对应的表；查不到时回退英文原文。
+// 维护约定：只做「新增/修正译文」，绝不改动英文 key，否则会与 text.en.js / 节点定义失配。
+// 本文件不含界面长句（那些在 src/i18n/messages.js，用点分 key）。
 
 export const ZH_NODE = {
   // categories
@@ -114,6 +121,7 @@ export const ZH_NODE = {
   'Unsharp-mask sharpening.': 'USM 锐化。'
 }
 
+// 参数标签：节点属性面板里各字段的名字（如 Width、Scale、Blend Mode）。
 export const ZH_LABEL = {
   'Strands': '发丝数',
   'Density': '密度',
@@ -254,6 +262,7 @@ export const ZH_LABEL = {
   Weights: '权重'
 }
 
+// 输入端口标签：节点左侧各输入端口的显示名（用于检查器与连线提示）。
 export const ZH_INPUT = {
   Base: '基础',
   'Base Color': '基础色',
@@ -274,6 +283,7 @@ export const ZH_INPUT = {
 }
 
 // Select-menu options (context-aware; "Normal" here is the blend mode, not the normal map).
+// 下拉选项：参数取值（混合模式、拟合方式、映射模式等）的中文显示。
 export const ZH_OPTION = {
   'Data (RGB)': '数据（RGB）',
   Copy: '复制',
@@ -339,6 +349,7 @@ export const ZH_OPTION = {
   A: 'A'
 }
 
+// 通用文案：通道名、导出预设、示例材质说明、预览形状等零散但全局共享的术语。
 export const ZH_GENERAL = {
   // output channels / export file labels
   'Base Color': '基础色',
