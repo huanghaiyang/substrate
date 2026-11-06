@@ -620,17 +620,26 @@ export const patternDefs = [
   /**
    * 火焰噪声图（灰度数据）。
    *
-   * 算法：两套周期 fbm（第二套频率翻倍并偏移）按 warp 混合，等价于一次廉价的域扭曲，
-   * 产生卷曲、翻涌、向上的热流质感；坐标在纵向乘整数倍，因此上下也能无缝平铺。
-   * mask 参数可选地叠一层「自下而上渐隐」的火焰包络，方便直接当自发光噪声使用。
+   * 为什么之前的版本「不像火」：它只是各向同性的 fbm 云团——
+   *  - 横向与纵向频率相同，得到的是圆滚滚的斑块，而火焰纹理必须是纵向拉长的丝缕；
+   *  - 所谓 warp 只是把两套噪声线性混合，并没有真正扭曲采样坐标，所以没有卷曲的涡流；
+   *  - 输出保留了 fbm 的灰色中间调，看起来像雾，而不是有明确边缘的火舌；
+   *  - 默认没有火焰包络，整张图均匀铺满噪声，缺少「下密上疏」的方向感。
+   *
+   * 现在的做法：
+   *  1. 各向异性采样：横向格数 fy 倍于纵向（由 stretch 控制），特征是竖长的丝缕；
+   *  2. 真正的域扭曲：用两个周期噪声场位移采样坐标，得到上升热气特有的翻滚涡流；
+   *  3. smoothstep 锐化：把中间调压掉，留下清晰的火舌边缘，再叠 contrast；
+   *  4. 可选火焰包络：横向用 cos 衰减（首尾仍相接），纵向自下而上渐隐，
+   *     mask = 0 时保持完全可平铺的纯噪声，适合做扭曲图；调高后直接呈现火焰形状。
    *
    * 参数：
    *  - scale：基础频率（2~32）；
    *  - detail：叠加层数（1~6）；
-   *  - stretch：纵向重复次数（1~4），越大噪声越「细长」；
-   *  - warp：两套噪声的混合量（0~1），越大卷曲越明显；
+   *  - stretch：纵向拉伸倍数（1~4），越大丝缕越细长；
+   *  - warp：域扭曲强度（0~1），越大涡流越明显；
    *  - contrast：对比度（0.1~4）；
-   *  - mask：火焰包络强度（0~1），0 表示保持完全平铺的纯噪声；
+   *  - mask：火焰包络强度（0~1），0 = 纯可平铺噪声，1 = 完整火焰轮廓；
    *  - seed：随机种子。
    */
   {
@@ -638,37 +647,51 @@ export const patternDefs = [
     name: 'Flame Noise',
     category: 'Noise',
     space: 'data',
-    desc: 'Tileable heat-haze noise for fire distortion and emission breakup, with an optional rising envelope.',
+    desc: 'Anisotropic, domain-warped heat turbulence for fire distortion and emission breakup. Raise Flame Mask to reveal a flame silhouette.',
     inputs: [],
     params: [
       { key: 'scale', label: 'Scale', type: 'int', min: 2, max: 32, def: 6 },
       { key: 'detail', label: 'Detail', type: 'int', min: 1, max: 6, def: 5 },
       { key: 'stretch', label: 'Stretch', type: 'int', min: 1, max: 4, def: 2 },
-      { key: 'warp', label: 'Warp', type: 'float', min: 0, max: 1, step: 0.01, def: 0.45 },
-      { key: 'contrast', label: 'Contrast', type: 'float', min: 0.1, max: 4, step: 0.01, def: 1.2 },
-      { key: 'mask', label: 'Flame Mask', type: 'float', min: 0, max: 1, step: 0.01, def: 0 },
+      { key: 'warp', label: 'Warp', type: 'float', min: 0, max: 1, step: 0.01, def: 0.55 },
+      { key: 'contrast', label: 'Contrast', type: 'float', min: 0.1, max: 4, step: 0.01, def: 1.3 },
+      { key: 'mask', label: 'Flame Mask', type: 'float', min: 0, max: 1, step: 0.01, def: 1 },
       { key: 'seed', label: 'Seed', type: 'float', min: 0, max: 100, step: 1, def: 17 }
     ],
     body: /* glsl */ `
       vec4 nodeColor(vec2 uv) {
+        float t = sat(uv.y);
         float freq = max(2.0, float(u_scale));
         int oct = u_detail;
-        // Integer vertical repetition keeps the pattern seamless in both directions.
-        float sy = uv.y * float(u_stretch);
+        float stretch = float(max(1, u_stretch));
 
-        float a = fbmTiled(vec2(uv.x, sy), freq, oct, 0.55, 2.0, u_seed);
-        float b = fbmTiled(vec2(uv.x + 0.29, sy + 0.43), freq * 2.0, max(2, oct - 1), 0.5, 2.0, u_seed + 7.0);
+        // Anisotropic, seamless sampling: more cells horizontally than vertically,
+        // so features become tall filaments instead of round blobs.
+        float fx = max(2.0, floor(freq * 1.5 + 0.5));
+        float fy = max(1.0, floor(fx / stretch + 0.5));
+        vec2 q = vec2(uv.x, uv.y * (fy / fx));
 
-        // Mixing two periodic fields is a cheap domain warp that preserves tileability.
-        float v = mix(a, b, u_warp);
-        v = sat((v - 0.5) * u_contrast + 0.5);
+        // Mild, low-frequency domain warp: enough to curl the filaments,
+        // not enough to smear them into marble.
+        float wa = fbmTiled(q, fx, max(2, oct - 2), 0.55, 2.0, u_seed + 13.0);
+        float wb = fbmTiled(q + vec2(0.41, 0.0), fx, max(2, oct - 2), 0.55, 2.0, u_seed + 29.0);
+        vec2 qw = q + (vec2(wa, wb) - 0.5) * u_warp * 0.4;
 
-        if (u_mask > 0.0) {
-          // Rising envelope: dense near the bottom, dissolving towards the top (both edges are 0).
-          float env = smoothstep(0.0, 0.28, uv.y) * (1.0 - smoothstep(0.35, 1.0, uv.y));
-          v = mix(v, v * env, u_mask);
-        }
-        return vec4(vec3(v), 1.0);
+        // The warped lookup is still periodic in both axes, so tiling is preserved.
+        float fil = fbmTiled(qw, fx, oct, 0.55, 2.0, u_seed);
+        float turb = sat((smoothstep(0.25, 0.8, fil) - 0.5) * u_contrast + 0.5);
+
+        if (u_mask <= 0.0) return vec4(vec3(turb), 1.0);
+
+        // Flame body: a broad teardrop that dissolves at the tip, carved by the filaments.
+        float x = (uv.x - 0.5) * 2.0 + (fil - 0.5) * u_warp * 0.9 * mix(0.15, 1.0, t);
+        float w = max(0.55 * pow(max(1.0 - t, 0.0), 0.65) * (0.75 + 0.55 * fil), 0.02);
+        float body = pow(sat(1.0 - abs(x) / w), 1.15);
+        body *= sat(1.0 - pow(t, 0.95));
+        body *= clamp(0.15 + 1.3 * fil, 0.1, 1.3);
+        float fire = sat((body - 0.3) * u_contrast + 0.3);
+
+        return vec4(vec3(mix(turb, fire, u_mask)), 1.0);
       }`
   }
 ]
