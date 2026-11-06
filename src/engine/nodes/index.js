@@ -22,7 +22,7 @@ export const NODE_DEFS = [...generatorDefs, ...patternDefs, ...filterDefs, outpu
 export const NODE_MAP = Object.fromEntries(NODE_DEFS.map((d) => [d.type, d]))
 
 // 节点面板的分类显示顺序
-export const CATEGORIES = ['Input', 'Noise', 'Pattern', 'Shape', 'Color', 'Paint', 'Filter', 'Blend', 'Adjust', 'Normal', 'Output']
+export const CATEGORIES = ['Input', 'Noise', 'Pattern', 'Texture', 'Shape', 'Color', 'Paint', 'Filter', 'Blend', 'Adjust', 'Normal', 'Output']
 
 /**
  * 输出节点可用的 PBR 通道元数据。

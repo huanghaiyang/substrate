@@ -45,6 +45,12 @@ import { t } from '../i18n/index.js'
 const W = 200
 /** 节点标题栏高度 */
 const HEADER = 28
+/**
+ * 节点卡片的边框宽度（px）。
+ * 端口是绝对定位子元素，其包含块是节点的 padding box（比世界坐标原点多出这条边框），
+ * 所以连线的纵向端点必须加上这个补偿量，才会落在端口圆点的圆心上。
+ */
+const BORDER = 1
 /** SVG 画布的整体偏移量，使坐标系可以从负数开始 */
 const OFFSET = 40000
 /** SVG 画布边长 */
@@ -145,8 +151,19 @@ export default defineComponent({
     const pointer = reactive({ x: 0, y: 0 })
     /** 是否正在平移画布（模板用它切换光标样式） */
     const panning = ref(false)
-    /** 右键菜单状态：屏幕坐标 x/y、世界坐标 wx/wy、模式（'add' 添加 / 'node' 节点操作）、目标节点、搜索词 */
-    const menu = reactive({ open: false, x: 0, y: 0, wx: 0, wy: 0, mode: 'add', nodeId: null, filter: '' })
+    /** 右键菜单状态：屏幕坐标 x/y、世界坐标 wx/wy、模式（'add' 添加 / 'node' 节点 / 'edge' 连线 / 'port' 输入端口）、目标节点、目标连线、目标端口、搜索词 */
+    const menu = reactive({
+      open: false,
+      x: 0,
+      y: 0,
+      wx: 0,
+      wy: 0,
+      mode: 'add',
+      nodeId: null,
+      edgeId: null,
+      port: null,
+      filter: ''
+    })
     /** 当前进行中的拖拽操作：{ kind: 'pan'|'node'|'marquee'|'link', ... } */
     let inter = null
     /** 是否已经自动「适应视图」过一次，避免重复打断用户视角 */
@@ -189,9 +206,9 @@ export default defineComponent({
         const idx = (defB.inputs || []).findIndex((i) => i.name === c.to.port)
         if (idx < 0) continue
         const x1 = a.x + W + OFFSET
-        const y1 = a.y + outputYRel(a) + OFFSET
+        const y1 = a.y + BORDER + outputYRel(a) + OFFSET
         const x2 = b.x + OFFSET
-        const y2 = b.y + HEADER + portOffset(idx) + OFFSET
+        const y2 = b.y + BORDER + HEADER + portOffset(idx) + OFFSET
         out.push({ id: c.id, d: bezier(x1, y1, x2, y2), selected: state.selectedEdgeId === c.id, active: false })
       }
       return out
@@ -553,7 +570,7 @@ export default defineComponent({
       if (!def || def.isOutput) return
       const start = toWorld(e.clientX, e.clientY)
       const x1 = node.x + W
-      const y1 = node.y + outputYRel(node)
+      const y1 = node.y + BORDER + outputYRel(node)
       inter = { kind: 'link', fromNode: node.id, x1, y1 }
       linkSource.value = node.id
       invalidPort.value = null
@@ -617,7 +634,7 @@ export default defineComponent({
           if (!def) continue
           for (let i = 0; i < (def.inputs || []).length; i++) {
             const ix = node.x
-            const iy = node.y + HEADER + portOffset(i)
+            const iy = node.y + BORDER + HEADER + portOffset(i)
             const d = Math.hypot(ix - to.x, iy - to.y)
             if (d < 26 / view.scale + 10) {
               hit = portKey(node.id, def.inputs[i].name)
@@ -767,6 +784,8 @@ export default defineComponent({
       menu.open = true
       menu.mode = mode
       menu.nodeId = nodeId || null
+      menu.edgeId = null
+      menu.port = null
       menu.filter = ''
       menu.x = Math.min(e.clientX, window.innerWidth - 300)
       menu.y = Math.min(e.clientY, window.innerHeight - 440)
@@ -775,6 +794,52 @@ export default defineComponent({
       menu.wy = world.y
       // 等菜单渲染出来后再聚焦搜索框，用户可直接输入
       nextTick(() => menuInput.value?.focus())
+    }
+    /**
+     * 连线右键：打开「删除这条连线」菜单。
+     * 与「选中连线 + Delete」等价，但不用先精确点选（细线也能直接用右键命中）。
+     * @param {MouseEvent} e 右键事件
+     * @param {string} edgeId 连线 id
+     */
+    function onEdgeContext(e, edgeId) {
+      menu.open = true
+      menu.mode = 'edge'
+      menu.nodeId = null
+      menu.port = null
+      menu.edgeId = edgeId
+      menu.filter = ''
+      menu.x = Math.min(e.clientX, window.innerWidth - 300)
+      menu.y = Math.min(e.clientY, window.innerHeight - 220)
+    }
+    /**
+     * 输入端口右键：打开「断开该输入」菜单，只影响这一个端口上的连线。
+     * @param {MouseEvent} e 右键事件
+     * @param {object} node 端口所属节点
+     * @param {string} port 输入端口名
+     */
+    function onInputContext(e, node, port) {
+      selectNode(node.id)
+      menu.open = true
+      menu.mode = 'port'
+      menu.nodeId = node.id
+      menu.edgeId = null
+      menu.port = port
+      menu.filter = ''
+      menu.x = Math.min(e.clientX, window.innerWidth - 300)
+      menu.y = Math.min(e.clientY, window.innerHeight - 220)
+    }
+    /** 断开右键菜单指向的单条连线 */
+    function disconnectEdge() {
+      if (menu.edgeId) {
+        removeConnection(menu.edgeId)
+        if (state.selectedEdgeId === menu.edgeId) state.selectedEdgeId = null
+      }
+      closeMenu()
+    }
+    /** 断开右键菜单指向的单个输入端口（若该端口没有连线则什么都不做） */
+    function disconnectPort() {
+      if (menu.nodeId && menu.port) disconnectInput(menu.nodeId, menu.port)
+      closeMenu()
     }
     /** 关闭右键菜单 */
     function closeMenu() {
@@ -933,6 +998,10 @@ export default defineComponent({
       addAtCenter,
       onCanvasContext,
       onNodeContext,
+      onEdgeContext,
+      onInputContext,
+      disconnectEdge,
+      disconnectPort,
       addFromMenu,
       addFirst,
       nodeAction,
@@ -955,8 +1024,19 @@ export default defineComponent({
              每条连线由「加粗命中路径 + 可见路径」两条 path 组成，便于点击选中 -->
         <svg class="edges" :width="80000" :height="80000" :style="edgeSvgStyle">
           <g v-for="e in edges" :key="e.id">
-            <path class="edge-hit" :d="e.d" @pointerdown.stop="selectEdge(e.id)"></path>
-            <path class="edge" :class="{ selected: e.selected }" :d="e.d" @pointerdown.stop="selectEdge(e.id)"></path>
+            <path
+              class="edge-hit"
+              :d="e.d"
+              @pointerdown.stop="selectEdge(e.id)"
+              @contextmenu.stop.prevent="onEdgeContext($event, e.id)"
+            ></path>
+            <path
+              class="edge"
+              :class="{ selected: e.selected }"
+              :d="e.d"
+              @pointerdown.stop="selectEdge(e.id)"
+              @contextmenu.stop.prevent="onEdgeContext($event, e.id)"
+            ></path>
           </g>
           <!-- 拖拽中的橡皮筋曲线与端点圆点（吸附成功/非法时改变样式） -->
           <path v-if="rubber" class="edge rubber" :d="rubber.d"></path>
@@ -1002,6 +1082,7 @@ export default defineComponent({
               invalid: isInvalidPort(node.id, inp.name)
             }"
             :style="{ top: (HEADER + portOffset(i)) + 'px' }"
+            @contextmenu.stop.prevent="onInputContext($event, node, inp.name)"
           ></div>
           <span
             v-for="(inp, i) in defOf(node).inputs"
@@ -1108,7 +1189,7 @@ export default defineComponent({
             <div v-if="!menuGroups.length" class="menu-item dim">{{ $t('graph.noMatch') }}</div>
           </div>
         </template>
-        <template v-else>
+        <template v-else-if="menu.mode === 'node'">
           <div class="graph-menu-list">
             <div class="menu-section">{{ $t('graph.nodeActions') }}</div>
             <button v-if="menuNode && defOf(menuNode).paintInput" class="menu-item" @click="nodeAction('paint')">
@@ -1117,6 +1198,23 @@ export default defineComponent({
             <button class="menu-item" @click="nodeAction('duplicate')"><span>{{ $t('graph.duplicate') }}</span><span class="dim">Ctrl+D</span></button>
             <button class="menu-item" @click="nodeAction('disconnect')"><span>{{ $t('graph.disconnect') }}</span></button>
             <button class="menu-item" @click="nodeAction('delete')"><span style="color: var(--red)">{{ $t('graph.delete') }}</span></button>
+          </div>
+        </template>
+        <template v-else-if="menu.mode === 'edge'">
+          <div class="graph-menu-list">
+            <div class="menu-section">{{ $t('graph.edgeActions') }}</div>
+            <button class="menu-item" @click="disconnectEdge">
+              <span>{{ $t('graph.disconnectEdge') }}</span><span class="dim">Del</span>
+            </button>
+          </div>
+        </template>
+        <template v-else>
+          <div class="graph-menu-list">
+            <div class="menu-section">{{ $t('graph.inputActions') }}</div>
+            <button v-if="hasInput(menu.nodeId, menu.port)" class="menu-item" @click="disconnectPort">
+              <span>{{ $t('graph.disconnectPort') }}</span>
+            </button>
+            <div v-else class="menu-item"><span class="dim">{{ $t('graph.portEmpty') }}</span></div>
           </div>
         </template>
       </div>

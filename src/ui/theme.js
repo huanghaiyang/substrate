@@ -11,6 +11,7 @@ export const CAT_COLORS = {
   Input: '#4fb3d9',
   Noise: '#7b8cff',
   Pattern: '#9d7bff',
+  Texture: '#d97757',
   Shape: '#b06bd9',
   Color: '#e0679f',
   Paint: '#e0574a',

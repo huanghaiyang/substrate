@@ -1965,5 +1965,372 @@ export const generatorDefs = [
         else if (u_blend == 5) src = max(base.rgb, p.rgb);
         return vec4(mix(base.rgb, src, a), base.a);
       }`
+  },
+  // ------------------------------------------------------------- 成品纹理 ---
+  // 以下节点把噪声家族包装成“可直接当贴图用”的成品纹理：默认输出颜色，
+  // 同时提供 Color / Height 两种模式，切到 Height 即可当高度图使用。
+  // 所有图案都由整数周期的可平铺噪声构成，UV 0~1 无缝。
+  /**
+   * 岩石表面（Rock Surface）。
+   *
+   * 算法：低频 fBm 作为矿物底色，再用一层低频 fBm 扭曲 Worley 细胞边界，
+   * 细胞缝隙压暗成裂缝，细胞内部按 dome 提亮，形成风化的石板。
+   *
+   * 参数：scale/octaves（底色）、cells（石板数量）、crack（裂缝宽度）、
+   *       contrast、colorA/colorB、mode、seed。
+   */
+  {
+    type: 'rock_surface',
+    name: 'Rock Surface',
+    category: 'Texture',
+    space: 'color',
+    desc: 'Fractured stone plates with warped cracks, crevices and mineral mottling.',
+    inputs: [],
+    params: [
+      { key: 'scale', label: 'Scale', type: 'float', min: 1, max: 48, step: 1, def: 5 },
+      { key: 'octaves', label: 'Octaves', type: 'int', min: 1, max: 8, def: 5 },
+      { key: 'cells', label: 'Cells', type: 'float', min: 2, max: 16, step: 1, def: 5 },
+      { key: 'crack', label: 'Crack Width', type: 'float', min: 0.01, max: 0.3, step: 0.005, def: 0.08 },
+      { key: 'contrast', label: 'Contrast', type: 'float', min: 0.2, max: 3, step: 0.01, def: 1 },
+      { key: 'colorA', label: 'Color A', type: 'color', def: '#3b3a37' },
+      { key: 'colorB', label: 'Color B', type: 'color', def: '#8d8880' },
+      { key: 'mode', label: 'Output', type: 'select', options: ['Color', 'Height'], def: 0 },
+      { key: 'seed', label: 'Seed', type: 'float', min: 0, max: 100, step: 1, def: 11 }
+    ],
+    body: /* glsl */ `
+      vec4 nodeColor(vec2 uv) {
+        float base = fbmTiled(uv, u_scale, u_octaves, 0.55, 2.0, u_seed);
+        float warp = fbmTiled(uv + vec2(0.31, 0.17), 3.0, 3, 0.5, 2.0, u_seed + 5.0);
+        vec2 d = worleyTiled(uv + (warp - 0.5) * 0.1, u_cells, 0.95, u_seed + 7.0);
+        float edge = d.y - d.x;
+        float crev = 1.0 - smoothstep(0.0, max(u_crack, 0.001), edge);
+        float plate = smoothstep(0.0, 0.12, edge);
+        float m = sat((base - 0.5) * u_contrast + 0.5);
+        float h = sat(m * 0.6 + (warp - 0.5) * 0.2 + plate * 0.25 - crev * 0.4);
+        vec3 col = mix(u_colorA.rgb, u_colorB.rgb, sat(m * 0.9 + plate * 0.2));
+        col = mix(col, u_colorA.rgb * 0.45, crev * 0.8);
+        col *= 0.75 + 0.5 * h;
+        col = mix(vec3(luma(col)), col, 0.85);
+        if (u_mode == 1) return vec4(vec3(h), 1.0);
+        return vec4(col, 1.0);
+      }`
+  },
+  /**
+   * 卵石地（Pebble Field）。
+   *
+   * 算法：Worley F1/F2 差异给出石块边界，边界处压暗成缝隙；
+   * 每个 cell 用 hash1 取一块石头的固有色，dome 项模拟圆润的高光体积。
+   *
+   * 参数：cells（石块数量）、jitter（分布随机度）、gap（缝隙宽度）、
+   *       contrast、colorA/colorB、mode、seed。
+   */
+  {
+    type: 'pebble_field',
+    name: 'Pebble Field',
+    category: 'Texture',
+    space: 'color',
+    desc: 'Rounded pebbles packed with dark gaps, per-stone tint and domed shading.',
+    inputs: [],
+    params: [
+      { key: 'cells', label: 'Cells', type: 'float', min: 2, max: 32, step: 1, def: 9 },
+      { key: 'jitter', label: 'Jitter', type: 'float', min: 0, max: 1, step: 0.01, def: 0.9 },
+      { key: 'gap', label: 'Gap', type: 'float', min: 0.005, max: 0.2, step: 0.005, def: 0.08 },
+      { key: 'contrast', label: 'Contrast', type: 'float', min: 0.2, max: 3, step: 0.01, def: 1.1 },
+      { key: 'colorA', label: 'Color A', type: 'color', def: '#4b4742' },
+      { key: 'colorB', label: 'Color B', type: 'color', def: '#a49a8b' },
+      { key: 'mode', label: 'Output', type: 'select', options: ['Color', 'Height'], def: 0 },
+      { key: 'seed', label: 'Seed', type: 'float', min: 0, max: 100, step: 1, def: 13 }
+    ],
+    body: /* glsl */ `
+      vec4 nodeColor(vec2 uv) {
+        vec2 d = worleyTiled(uv, u_cells, u_jitter, u_seed);
+        vec2 id = worleyCell(uv, u_cells, u_jitter, u_seed);
+        float edge = d.y - d.x;
+        float inside = smoothstep(0.0, max(u_gap, 0.001), edge);
+        float dome = sqrt(sat(1.0 - d.x * d.x * 1.6));
+        float tint = hash1(id, u_seed + 3.0);
+        float shade = sat(tint * 0.55 + dome * 0.45);
+        vec3 col = mix(u_colorA.rgb, u_colorB.rgb, sat((shade - 0.5) * u_contrast + 0.5));
+        col = mix(u_colorA.rgb * 0.28, col, inside);
+        float h = inside * (0.45 + 0.55 * dome);
+        if (u_mode == 1) return vec4(vec3(h), 1.0);
+        return vec4(col, 1.0);
+      }`
+  },
+  /**
+   * 沙丘（Sand Dunes）。
+   *
+   * 算法：低频 fBm 塑形沙丘起伏，沿指定角度叠加整数频率的正弦波纹，
+   * 波纹相位再用 fBm 扭曲，最后混入高频值噪声模拟沙粒。
+   *
+   * 参数：scale/octaves（沙丘）、ripples（波纹条数）、angle（波纹方向）、
+   *       warp（扭曲量）、contrast、colorA/colorB、mode、seed。
+   */
+  {
+    type: 'sand_dunes',
+    name: 'Sand Dunes',
+    category: 'Texture',
+    space: 'color',
+    desc: 'Wind-rippled sand with fine grain: dune fields, beaches and desert ground.',
+    inputs: [],
+    params: [
+      { key: 'scale', label: 'Scale', type: 'float', min: 1, max: 32, step: 1, def: 6 },
+      { key: 'octaves', label: 'Octaves', type: 'int', min: 1, max: 8, def: 4 },
+      { key: 'ripples', label: 'Ripples', type: 'int', min: 2, max: 64, def: 18 },
+      { key: 'angle', label: 'Angle', type: 'float', min: 0, max: 180, step: 1, def: 90 },
+      { key: 'warp', label: 'Warp', type: 'float', min: 0, max: 1, step: 0.01, def: 0.5 },
+      { key: 'contrast', label: 'Contrast', type: 'float', min: 0.2, max: 3, step: 0.01, def: 1 },
+      { key: 'colorA', label: 'Color A', type: 'color', def: '#b08a55' },
+      { key: 'colorB', label: 'Color B', type: 'color', def: '#e0c191' },
+      { key: 'mode', label: 'Output', type: 'select', options: ['Color', 'Height'], def: 0 },
+      { key: 'seed', label: 'Seed', type: 'float', min: 0, max: 100, step: 1, def: 17 }
+    ],
+    body: /* glsl */ `
+      vec4 nodeColor(vec2 uv) {
+        float a = radians(u_angle);
+        float fx = floor(abs(cos(a)) * float(u_ripples) + 0.5);
+        float fy = floor(abs(sin(a)) * float(u_ripples) + 0.5);
+        if (fx + fy < 1.0) fx = 1.0;
+        float dune = fbmTiled(uv, u_scale, u_octaves, 0.5, 2.0, u_seed);
+        float phase = (uv.x * fx + uv.y * fy) * TAU + (dune - 0.5) * u_warp * TAU;
+        float ripple = 0.5 + 0.5 * sin(phase);
+        float grain = gnoise(uv * 96.0, vec2(96.0), u_seed + 11.0) * 0.5 + 0.5;
+        float h = sat(dune * 0.5 + ripple * 0.3 + grain * 0.2);
+        vec3 col = mix(u_colorA.rgb, u_colorB.rgb, sat((ripple * 0.35 + dune * 0.65 - 0.5) * u_contrast + 0.5));
+        col *= 0.78 + 0.35 * dune + 0.12 * grain;
+        if (u_mode == 1) return vec4(vec3(h), 1.0);
+        return vec4(col, 1.0);
+      }`
+  },
+  /**
+   * 烟雾贴图（Smoke Texture）。
+   *
+   * 算法：billow fBm 提供蓬松的云团主体，普通 fBm 细节做扰动，
+   * 再用 density / softness 做软阈值得到边缘柔和的烟团；
+   * Color 模式下 alpha 通道就是烟团遮罩，可直接当透明度贴图。
+   *
+   * 参数：scale/octaves、density（浓度阈值）、softness（边缘柔和度）、
+   *       swirl（细节扰动）、colorA/colorB、mode、seed。
+   */
+  {
+    type: 'smoke_texture',
+    name: 'Smoke Texture',
+    category: 'Texture',
+    space: 'color',
+    desc: 'Soft billowing smoke with density and softness control for cloud coverage.',
+    inputs: [],
+    params: [
+      { key: 'scale', label: 'Scale', type: 'float', min: 1, max: 32, step: 1, def: 4 },
+      { key: 'octaves', label: 'Octaves', type: 'int', min: 1, max: 8, def: 5 },
+      { key: 'density', label: 'Density', type: 'float', min: 0, max: 1, step: 0.01, def: 0.34 },
+      { key: 'softness', label: 'Softness', type: 'float', min: 0.02, max: 0.6, step: 0.01, def: 0.32 },
+      { key: 'swirl', label: 'Swirl', type: 'float', min: 0, max: 1, step: 0.01, def: 0.5 },
+      { key: 'colorA', label: 'Color A', type: 'color', def: '#1a1a1c' },
+      { key: 'colorB', label: 'Color B', type: 'color', def: '#d8d8dc' },
+      { key: 'mode', label: 'Output', type: 'select', options: ['Color', 'Height'], def: 0 },
+      { key: 'seed', label: 'Seed', type: 'float', min: 0, max: 100, step: 1, def: 19 }
+    ],
+    body: /* glsl */ `
+      vec4 nodeColor(vec2 uv) {
+        float n1 = fbmBillowTiled(uv, u_scale, u_octaves, 0.58, 2.0, u_seed);
+        float n2 = fbmTiled(uv + vec2(0.23, 0.41), u_scale * 2.0, max(2, u_octaves - 2), 0.5, 2.0, u_seed + 9.0);
+        float v = sat(n1 * 0.7 + n2 * 0.3);
+        v = sat(v + (n2 - 0.5) * u_swirl * 0.6);
+        float smoke = smoothstep(u_density, min(1.0, u_density + u_softness), v);
+        vec3 col = mix(u_colorA.rgb, u_colorB.rgb, smoke);
+        if (u_mode == 1) return vec4(vec3(smoke), 1.0);
+        return vec4(col, 1.0);
+      }`
+  },
+  /**
+   * 山地地形（Mountain Terrain）。
+   *
+   * 算法：8 层 ridged 噪声叠加（1-|g| 后平方、并与上一层相乘），
+   * 得到山脊尖锐的高度场；再按高度混合草地 / 岩石 / 雪线三层颜色。
+   *
+   * 参数：scale/octaves、snow（雪线覆盖量）、contrast、
+   *       colorA/colorB/colorC、mode、seed。
+   */
+  {
+    type: 'mountain_terrain',
+    name: 'Mountain Terrain',
+    category: 'Texture',
+    space: 'color',
+    desc: 'Ridged mountain terrain with grass, rock and snow altitude bands.',
+    inputs: [],
+    params: [
+      { key: 'scale', label: 'Scale', type: 'float', min: 1, max: 32, step: 1, def: 5 },
+      { key: 'octaves', label: 'Octaves', type: 'int', min: 1, max: 8, def: 6 },
+      { key: 'snow', label: 'Snow', type: 'float', min: 0, max: 1, step: 0.01, def: 0.35 },
+      { key: 'contrast', label: 'Contrast', type: 'float', min: 0.2, max: 3, step: 0.01, def: 1.1 },
+      { key: 'colorA', label: 'Color A', type: 'color', def: '#3e4a35' },
+      { key: 'colorB', label: 'Color B', type: 'color', def: '#7a705f' },
+      { key: 'colorC', label: 'Color C', type: 'color', def: '#eef2f5' },
+      { key: 'mode', label: 'Output', type: 'select', options: ['Color', 'Height'], def: 0 },
+      { key: 'seed', label: 'Seed', type: 'float', min: 0, max: 100, step: 1, def: 23 }
+    ],
+    body: /* glsl */ `
+      vec4 nodeColor(vec2 uv) {
+        float freq = max(1.0, floor(u_scale + 0.5));
+        float sum = 0.0, amp = 1.0, norm = 0.0, prev = 1.0;
+        for (int o = 0; o < 8; o++) {
+          if (o >= u_octaves) break;
+          float g = gnoise(uv * freq, vec2(freq), u_seed + float(o) * 17.0);
+          float rid = 1.0 - abs(g);
+          rid *= rid;
+          sum += amp * rid * (0.5 + 0.5 * prev);
+          prev = rid;
+          norm += amp;
+          amp *= 0.5;
+          freq *= 2.0;
+        }
+        float h = sat(sum / max(norm, 1e-5));
+        float alt = sat((h - 0.5) * u_contrast + 0.5);
+        vec3 col = mix(u_colorA.rgb, u_colorB.rgb, smoothstep(0.1, 0.7, alt));
+        col = mix(col, u_colorC.rgb, smoothstep(0.78, 1.0, alt) * u_snow);
+        col *= 0.75 + 0.45 * h;
+        if (u_mode == 1) return vec4(vec3(alt), 1.0);
+        return vec4(col, 1.0);
+      }`
+  },
+  /**
+   * 锈蚀贴图（Rust Texture）。
+   *
+   * 算法：fBm 与 billow fBm 混合出锈斑的大块分布，Worley F1 的低值区
+   * 作为点蚀坑压暗，叠加高频细节模拟起皮的粗糙感。
+   *
+   * 参数：scale/octaves、cells（蚀坑密度）、erosion（蚀坑强度）、contrast、
+   *       colorA/colorB/colorC、mode、seed。
+   */
+  {
+    type: 'rust_texture',
+    name: 'Rust Texture',
+    category: 'Texture',
+    space: 'color',
+    desc: 'Eroded corrosion with orange oxide, dark pits and rough flaking.',
+    inputs: [],
+    params: [
+      { key: 'scale', label: 'Scale', type: 'float', min: 1, max: 32, step: 1, def: 5 },
+      { key: 'octaves', label: 'Octaves', type: 'int', min: 1, max: 8, def: 5 },
+      { key: 'cells', label: 'Cells', type: 'float', min: 2, max: 24, step: 1, def: 8 },
+      { key: 'erosion', label: 'Erosion', type: 'float', min: 0, max: 1, step: 0.01, def: 0.5 },
+      { key: 'contrast', label: 'Contrast', type: 'float', min: 0.2, max: 3, step: 0.01, def: 1.1 },
+      { key: 'colorA', label: 'Color A', type: 'color', def: '#4a2412' },
+      { key: 'colorB', label: 'Color B', type: 'color', def: '#b4551f' },
+      { key: 'colorC', label: 'Color C', type: 'color', def: '#241209' },
+      { key: 'mode', label: 'Output', type: 'select', options: ['Color', 'Height'], def: 0 },
+      { key: 'seed', label: 'Seed', type: 'float', min: 0, max: 100, step: 1, def: 29 }
+    ],
+    body: /* glsl */ `
+      vec4 nodeColor(vec2 uv) {
+        float base = fbmTiled(uv, u_scale, u_octaves, 0.55, 2.0, u_seed);
+        float detail = fbmBillowTiled(uv, u_scale * 3.0, max(2, u_octaves - 1), 0.6, 2.0, u_seed + 7.0);
+        float pits = 1.0 - smoothstep(0.0, 0.28, worleyTiled(uv, u_cells, 1.0, u_seed + 11.0).x);
+        float m = sat(base * 0.6 + detail * 0.4);
+        vec3 col = mix(u_colorA.rgb, u_colorB.rgb, smoothstep(0.25, 0.8, sat((m - 0.5) * u_contrast + 0.5)));
+        col = mix(col, u_colorC.rgb, pits * u_erosion * 0.8);
+        col *= 0.8 + 0.35 * detail;
+        if (u_mode == 1) return vec4(vec3(m), 1.0);
+        return vec4(col, 1.0);
+      }`
+  },
+  /**
+   * 拉丝金属（Brushed Metal）。
+   *
+   * 算法：沿指定角度对可平铺 fBm 做多次微小平移采样并求平均，
+   * 等价于把噪声在该方向上拉长成细密条纹；再叠加频率更高的细划痕。
+   * 平移只改变采样相位，不破坏 UV 的 1 周期，因此仍然无缝。
+   *
+   * 参数：angle（拉丝方向）、scale（条纹密度）、stretch（拉丝长度）、
+   *       contrast、colorA/colorB、mode、seed。
+   */
+  {
+    type: 'brushed_metal',
+    name: 'Brushed Metal',
+    category: 'Texture',
+    space: 'color',
+    desc: 'Anisotropic brushed metal with directional streaks and fine scratches.',
+    inputs: [],
+    params: [
+      { key: 'angle', label: 'Angle', type: 'float', min: 0, max: 180, step: 1, def: 0 },
+      { key: 'scale', label: 'Scale', type: 'float', min: 1, max: 48, step: 1, def: 6 },
+      { key: 'stretch', label: 'Stretch', type: 'float', min: 4, max: 64, step: 1, def: 32 },
+      { key: 'contrast', label: 'Contrast', type: 'float', min: 0.2, max: 3, step: 0.01, def: 1.4 },
+      { key: 'colorA', label: 'Color A', type: 'color', def: '#6b6e73' },
+      { key: 'colorB', label: 'Color B', type: 'color', def: '#c4c7cc' },
+      { key: 'mode', label: 'Output', type: 'select', options: ['Color', 'Height'], def: 0 },
+      { key: 'seed', label: 'Seed', type: 'float', min: 0, max: 100, step: 1, def: 31 }
+    ],
+    body: /* glsl */ `
+      vec4 nodeColor(vec2 uv) {
+        float a = radians(u_angle);
+        vec2 dir = vec2(cos(a), sin(a));
+        float span = u_stretch / 256.0;
+        float streak = 0.0;
+        for (int i = 0; i < 8; i++) {
+          float t = (float(i) / 7.0 - 0.5) * span;
+          streak += fbmTiled(uv + dir * t, u_scale, 4, 0.5, 2.0, u_seed);
+        }
+        streak = sat(streak / 8.0);
+        float fine = 0.0;
+        for (int i = 0; i < 4; i++) {
+          float t = (float(i) / 3.0 - 0.5) * span * 0.2;
+          fine += fbmTiled(uv + dir * t, u_scale * 8.0, 2, 0.5, 2.0, u_seed + 21.0);
+        }
+        fine = sat(fine / 4.0);
+        float m = sat(streak * 0.78 + fine * 0.22);
+        vec3 col = mix(u_colorA.rgb, u_colorB.rgb, sat((m - 0.5) * u_contrast + 0.5));
+        col += pow(m, 6.0) * 0.12;
+        if (u_mode == 1) return vec4(vec3(m), 1.0);
+        return vec4(col, 1.0);
+      }`
+  },
+  /**
+   * 水面波纹（Water Ripples）。
+   *
+   * 算法：整数频率的相位场画出规则波纹，相位再被两层 fBm 扭曲成自然水波；
+   * 波峰用 pow 提亮成高光点。
+   *
+   * 参数：scale（波纹条数）、angle（波纹方向）、warp（扭曲量）、
+   *       glint（高光强度）、contrast、colorA/colorB、mode、seed。
+   */
+  {
+    type: 'water_ripples',
+    name: 'Water Ripples',
+    category: 'Texture',
+    space: 'color',
+    desc: 'Phase-controlled water ripples with noise warp and specular glints.',
+    inputs: [],
+    params: [
+      { key: 'scale', label: 'Scale', type: 'float', min: 1, max: 32, step: 1, def: 10 },
+      { key: 'angle', label: 'Angle', type: 'float', min: 0, max: 180, step: 1, def: 0 },
+      { key: 'warp', label: 'Warp', type: 'float', min: 0, max: 1, step: 0.01, def: 0.35 },
+      { key: 'glint', label: 'Glint', type: 'float', min: 0, max: 1, step: 0.01, def: 0.5 },
+      { key: 'contrast', label: 'Contrast', type: 'float', min: 0.2, max: 3, step: 0.01, def: 1 },
+      { key: 'colorA', label: 'Color A', type: 'color', def: '#123a52' },
+      { key: 'colorB', label: 'Color B', type: 'color', def: '#3f8fb0' },
+      { key: 'mode', label: 'Output', type: 'select', options: ['Color', 'Height'], def: 0 },
+      { key: 'seed', label: 'Seed', type: 'float', min: 0, max: 100, step: 1, def: 37 }
+    ],
+    body: /* glsl */ `
+      vec4 nodeColor(vec2 uv) {
+        float a = radians(u_angle);
+        float fx = floor(abs(cos(a)) * u_scale + 0.5);
+        float fy = floor(abs(sin(a)) * u_scale + 0.5);
+        if (fx + fy < 1.0) fx = 1.0;
+        float n1 = fbmTiled(uv, 4.0, 4, 0.5, 2.0, u_seed);
+        float n2 = fbmTiled(uv + vec2(0.37, 0.19), 9.0, 3, 0.5, 2.0, u_seed + 7.0);
+        float phase = (uv.x * fx + uv.y * fy) * TAU + (n1 - 0.5) * u_warp * TAU + (n2 - 0.5) * u_warp * 0.6 * TAU;
+        float gx = floor(abs(cos(a + 1.5708)) * u_scale * 0.6 + 0.5);
+        float gy = floor(abs(sin(a + 1.5708)) * u_scale * 0.6 + 0.5);
+        if (gx + gy < 1.0) gx = 1.0;
+        float phase2 = (uv.x * gx + uv.y * gy) * TAU + (n2 - 0.5) * u_warp * TAU * 1.2 + 1.7;
+        float wave = sat(0.5 + 0.34 * sin(phase) + 0.16 * sin(phase2));
+        float h = sat(wave * 0.65 + n1 * 0.35);
+        vec3 col = mix(u_colorA.rgb, u_colorB.rgb, sat((h - 0.5) * u_contrast + 0.5));
+        col += pow(wave, 10.0) * u_glint * 0.6;
+        if (u_mode == 1) return vec4(vec3(h), 1.0);
+        return vec4(col, 1.0);
+      }`
   }
 ]

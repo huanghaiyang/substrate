@@ -572,19 +572,24 @@ input[type='color']::-webkit-color-swatch {
 .port.connected {
   background: #56606e;
 }
+/* 圆点直径 11px，父节点有 1px 边框（绝对定位的包含块是 padding box），
+   因此偏移 -6.5px 才能让圆心正好落在节点左右边缘的 world 坐标上，
+   与 SVG 连线端点（x = node.x / node.x + W）严格对齐。 */
 .port.input {
-  left: -6px;
+  left: -6.5px;
   transform: translateY(-50%);
 }
 .port.input:hover {
   transform: translateY(-50%) scale(1.25);
 }
 .port.output {
-  right: -6px;
+  right: -6.5px;
+  transform: translateY(-50%);
   border-color: var(--accent);
   background: #3a2c17;
 }
 .port.output:hover {
+  transform: translateY(-50%) scale(1.25);
   border-color: #ffc169;
 }
 .port.input.hot {

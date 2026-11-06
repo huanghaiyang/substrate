@@ -429,7 +429,9 @@ const SEAMLESS = new Set([
   'white_noise', 'pink_noise', 'brown_noise', 'blue_noise', 'violet_noise',
   'directional', 'anisotropic', 'anisotropic_perlin', 'cylinders',
   'clouds', 'marble', 'wood', 'crack', 'speckle', 'stucci', 'voivoide',
-  'gabor', 'phasor', 'wavelet'
+  'gabor', 'phasor', 'wavelet',
+  'rock_surface', 'pebble_field', 'sand_dunes', 'smoke_texture',
+  'mountain_terrain', 'rust_texture', 'brushed_metal', 'water_ripples'
 ])
 
 /**

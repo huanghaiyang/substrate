@@ -141,6 +141,7 @@ export const MANUAL_SECTIONS = [
           [T('Input', '输入'), T('Texture Input (bitmap), Constant Value, Flat Color', '纹理输入（位图）、常量值、纯色')],
           [T('Noise', '噪声'), T('Perlin (fBm, Billow), Cellular (F1/F2/borders), Grunge', '柏林（fBm、团块折叠）、细胞（F1/F2/边界）、污渍')],
           [T('Pattern', '图案'), T('Waves, Checker, Brick Wall, Tile Generator, Wood Planks, Fur, Grass, Plastic, Burlap, Fabric, Leather, Concrete', '波纹、棋盘、砖墙、瓷砖生成器、木板、毛发、草地、塑料、麻布、布匹、皮革、混凝土')],
+          [T('Texture', '纹理'), T('Rock Surface, Pebble Field, Sand Dunes, Smoke, Mountain Terrain, Rust, Brushed Metal, Water Ripples (Color / Height)', '岩石表面、卵石地、沙丘、烟雾、山地地形、锈蚀、拉丝金属、水面波纹（颜色 / 高度）')],
           [T('Shape / Color', '形状 / 颜色'), T('SDF Shape, Gradient, Gradient Map, Channel Combine', 'SDF 形状、渐变、渐变映射、通道组合')],
           [T('Filter', '滤镜'), T('Blur, Directional Blur, Sharpen, High Pass, Emboss, Warp, Edge Detect, Morphology, Transform 2D', '模糊、方向模糊、锐化、高通、浮雕、扰动、边缘检测、形态学、2D 变换')],
           [T('Blend / Adjust', '混合 / 调整'), T('Blend (15 modes + mask), Levels, Histogram Scan, Invert, HSL, Desaturate, Threshold, Posterize', '混合（15 模式+遮罩）、色阶、直方图扫描、反相、HSL、去色、阈值、色调分离')],
