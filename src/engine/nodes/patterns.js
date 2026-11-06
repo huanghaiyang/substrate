@@ -499,5 +499,176 @@ export const patternDefs = [
         }
         return vec4(col, 1.0);
       }`
+  },
+
+  /**
+   * 火焰贴图（彩色 / 蒙版）。
+   *
+   * 算法：以「向上收窄的水滴形包络」为核心，用多套不同频率的 fbm 噪声做三件事：
+   * 1. 轮廓塑形：低频噪声调制火焰半宽，得到自然的起伏边缘，而不是一条完美的锥线；
+   * 2. 横向摆动：位移随高度增强，让火苗根部稳定、尖端飘动；
+   * 3. 纵向纹理：沿 Y 拉伸的高频噪声把火焰打散成丝缕状火舌。
+   * 亮度使用三段色带（外焰 / 中焰 / 焰心），并按高度衰减，避免整团火一样亮。
+   * 四种样式通过不同的基础半径、收窄指数与火焰高度实现，而不是四份独立代码：
+   * 篝火矮而宽、喷枪高而细、火炬居中；火球则使用椭圆距离场。
+   *
+   * 平铺性：横向（UV.x）严格无缝——噪声周期与火舌数量都取整数；
+   * 纵向刻意不做周期（火焰本身是自下而上的形状），适合贴花 / 粒子片 / 材质球局部。
+   *
+   * 参数：
+   *  - style：火焰形态（Torch 火炬 / Campfire 篝火 / Gas Jet 喷枪 / Fireball 火球）；
+   *  - tongues：横向火舌数量（1~8），仅柱状样式有效；
+   *  - scale：湍流噪声频率（1~12）；
+   *  - detail：噪声叠加层数（1~6），越高细节越碎；
+   *  - turbulence：横向摆动与侵蚀强度（0~1）；
+   *  - rise：噪声在纵向的抬升量（0~2），越大火舌越「拉长」；
+   *  - softness：火焰边缘羽化宽度（0.02~0.6）；
+   *  - intensity：整体密度增益（0.2~2）；
+   *  - mode：Color 输出彩色火焰 / Mask 输出灰度蒙版（可直接当不透明度或不透明度贴图）；
+   *  - colorCore / colorMid / colorEdge：焰心 / 中焰 / 外焰颜色；
+   *  - seed：随机种子。
+   *
+   * 输出：RGB 为火焰颜色，A 通道为火焰密度蒙版，因此同一节点可直接接
+   * Base Color + Opacity + Emissive（自发光用 Mask 模式或加一个乘算节点）。
+   */
+  {
+    type: 'flame',
+    name: 'Flame Texture',
+    category: 'Pattern',
+    space: 'color',
+    desc: 'Procedural fire with torch, campfire, gas jet and fireball shapes. Alpha carries the flame mask.',
+    inputs: [],
+    params: [
+      { key: 'style', label: 'Style', type: 'select', options: ['Torch', 'Campfire', 'Gas Jet', 'Fireball'], def: 0 },
+      { key: 'tongues', label: 'Tongues', type: 'int', min: 1, max: 8, def: 3 },
+      { key: 'scale', label: 'Scale', type: 'float', min: 1, max: 12, step: 1, def: 5 },
+      { key: 'detail', label: 'Detail', type: 'int', min: 1, max: 6, def: 4 },
+      { key: 'turbulence', label: 'Turbulence', type: 'float', min: 0, max: 1, step: 0.01, def: 0.55 },
+      { key: 'rise', label: 'Rise', type: 'float', min: 0, max: 2, step: 0.01, def: 0.4 },
+      { key: 'softness', label: 'Softness', type: 'float', min: 0.02, max: 0.6, step: 0.01, def: 0.2 },
+      { key: 'intensity', label: 'Intensity', type: 'float', min: 0.2, max: 2, step: 0.01, def: 1 },
+      { key: 'mode', label: 'Output', type: 'select', options: ['Color', 'Mask'], def: 0 },
+      { key: 'colorCore', label: 'Core Color', type: 'color', def: '#ffe9a8' },
+      { key: 'colorMid', label: 'Mid Color', type: 'color', def: '#ff8a12' },
+      { key: 'colorEdge', label: 'Edge Color', type: 'color', def: '#8f1d03' },
+      { key: 'seed', label: 'Seed', type: 'float', min: 0, max: 100, step: 1, def: 3 }
+    ],
+    body: /* glsl */ `
+      vec4 nodeColor(vec2 uv) {
+        float t = sat(uv.y);
+        float freq = max(1.0, u_scale);
+        int oct = u_detail;
+
+        // Two periodic noise fields: "rib" sculpts the silhouette, "fine" adds internal detail.
+        float rib = fbmTiled(vec2(uv.x, uv.y * 0.6 - u_rise * 0.22), freq, oct, 0.55, 2.0, u_seed);
+        float fine = fbmTiled(vec2(uv.x * 2.0 + 0.37, uv.y * 1.2 - u_rise * 0.35), freq * 1.5, max(2, oct - 1), 0.5, 2.0, u_seed + 11.0);
+
+        float mask;
+        if (u_style == 3) {
+          // Fireball: soft round blob, perturbed by both noise fields.
+          vec2 p = vec2((uv.x - 0.5) * 2.0, (t - 0.45) * 1.6);
+          p += (vec2(rib, fine) - 0.5) * 0.6 * u_turbulence;
+          float rad = 0.74 - 0.12 * (fine - 0.5) - 0.08 * (rib - 0.5);
+          mask = pow(sat(1.0 - length(p) / max(rad, 1e-3)), 1.4);
+        } else {
+          float x = (uv.x - 0.5) * 2.0;
+          // Lateral wobble grows with height: the base is anchored, the tip sways.
+          x += (rib - 0.5) * u_turbulence * mix(0.12, 0.70, t);
+
+          // Each style has its own width, taper and height: campfire is squat and broad,
+          // the gas jet is tall and thin, the torch sits in between.
+          float baseW;
+          float powW;
+          float height;
+          if (u_style == 0) { baseW = 0.62; powW = 0.65; height = 1.0; }
+          else if (u_style == 1) { baseW = 0.85; powW = 0.55; height = 0.78; }
+          else { baseW = 0.34; powW = 1.0; height = 1.15; }
+
+          float th = sat(t / height);
+          // Width profile: a broad teardrop that stays wide through the mid body.
+          float w = baseW * pow(max(1.0 - th, 0.0), powW);
+          w *= 0.75 + 0.55 * rib;
+
+          // Tongues scallop the outline instead of splitting it into thin needles.
+          float lobes = 0.78 + 0.22 * cos(uv.x * float(u_tongues) * TAU + rib * 6.2831853);
+          w *= mix(1.0, lobes, sat(1.0 - th * 1.5));
+          w = max(w, 0.015);
+
+          // Softness controls the lateral falloff exponent: larger = wider feathered rim.
+          float edgePow = mix(2.2, 0.9, sat(u_softness / 0.6));
+          float body = pow(sat(1.0 - abs(x) / w), edgePow);
+          // Vertical envelope: dense at the base, dissolving smoothly towards the tip.
+          body *= sat(1.0 - pow(th, 0.9));
+
+          // Vertical filaments: stretched noise breaks the body into flame-like streaks.
+          float streak = fbmTiled(vec2(uv.x * 6.0, uv.y * 1.4 - u_rise * 0.3), freq * 2.0, max(2, oct - 1), 0.5, 2.0, u_seed + 27.0);
+          body *= clamp(0.45 + 0.9 * streak, 0.35, 1.25);
+          mask = sat(body);
+        }
+
+        mask = sat(mask * u_intensity);
+        if (u_mode == 1) return vec4(vec3(mask), 1.0);
+
+        // Heat falls off with height: pale-yellow core at the base, orange body, deep red rim.
+        float heat = sat(pow(mask, 0.8) * (1.05 - 0.55 * t));
+        vec3 col = mix(u_colorEdge.rgb, u_colorMid.rgb, smoothstep(0.06, 0.5, heat));
+        col = mix(col, u_colorCore.rgb, smoothstep(0.55, 0.92, heat));
+        return vec4(col, mask);
+      }`
+  },
+
+  /**
+   * 火焰噪声图（灰度数据）。
+   *
+   * 算法：两套周期 fbm（第二套频率翻倍并偏移）按 warp 混合，等价于一次廉价的域扭曲，
+   * 产生卷曲、翻涌、向上的热流质感；坐标在纵向乘整数倍，因此上下也能无缝平铺。
+   * mask 参数可选地叠一层「自下而上渐隐」的火焰包络，方便直接当自发光噪声使用。
+   *
+   * 参数：
+   *  - scale：基础频率（2~32）；
+   *  - detail：叠加层数（1~6）；
+   *  - stretch：纵向重复次数（1~4），越大噪声越「细长」；
+   *  - warp：两套噪声的混合量（0~1），越大卷曲越明显；
+   *  - contrast：对比度（0.1~4）；
+   *  - mask：火焰包络强度（0~1），0 表示保持完全平铺的纯噪声；
+   *  - seed：随机种子。
+   */
+  {
+    type: 'flame_noise',
+    name: 'Flame Noise',
+    category: 'Noise',
+    space: 'data',
+    desc: 'Tileable heat-haze noise for fire distortion and emission breakup, with an optional rising envelope.',
+    inputs: [],
+    params: [
+      { key: 'scale', label: 'Scale', type: 'int', min: 2, max: 32, def: 6 },
+      { key: 'detail', label: 'Detail', type: 'int', min: 1, max: 6, def: 5 },
+      { key: 'stretch', label: 'Stretch', type: 'int', min: 1, max: 4, def: 2 },
+      { key: 'warp', label: 'Warp', type: 'float', min: 0, max: 1, step: 0.01, def: 0.45 },
+      { key: 'contrast', label: 'Contrast', type: 'float', min: 0.1, max: 4, step: 0.01, def: 1.2 },
+      { key: 'mask', label: 'Flame Mask', type: 'float', min: 0, max: 1, step: 0.01, def: 0 },
+      { key: 'seed', label: 'Seed', type: 'float', min: 0, max: 100, step: 1, def: 17 }
+    ],
+    body: /* glsl */ `
+      vec4 nodeColor(vec2 uv) {
+        float freq = max(2.0, float(u_scale));
+        int oct = u_detail;
+        // Integer vertical repetition keeps the pattern seamless in both directions.
+        float sy = uv.y * float(u_stretch);
+
+        float a = fbmTiled(vec2(uv.x, sy), freq, oct, 0.55, 2.0, u_seed);
+        float b = fbmTiled(vec2(uv.x + 0.29, sy + 0.43), freq * 2.0, max(2, oct - 1), 0.5, 2.0, u_seed + 7.0);
+
+        // Mixing two periodic fields is a cheap domain warp that preserves tileability.
+        float v = mix(a, b, u_warp);
+        v = sat((v - 0.5) * u_contrast + 0.5);
+
+        if (u_mask > 0.0) {
+          // Rising envelope: dense near the bottom, dissolving towards the top (both edges are 0).
+          float env = smoothstep(0.0, 0.28, uv.y) * (1.0 - smoothstep(0.35, 1.0, uv.y));
+          v = mix(v, v * env, u_mask);
+        }
+        return vec4(vec3(v), 1.0);
+      }`
   }
 ]
