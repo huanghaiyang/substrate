@@ -424,7 +424,12 @@ const SEAMLESS = new Set([
   'wood_planks', 'fur', 'grass', 'plastic', 'burlap', 'fabric', 'leather', 'concrete',
   'blur', 'directional_blur', 'sharpen', 'highpass', 'emboss', 'warp', 'levels', 'histogram_scan',
   'invert', 'hsl', 'normal', 'ao', 'curvature', 'edges', 'morphology', 'grayscale', 'threshold',
-  'posterize', 'transform', 'channels', 'blend', 'paint', 'flat_value', 'flat_color', 'constant_value'
+  'posterize', 'transform', 'channels', 'blend', 'paint', 'flat_value', 'flat_color', 'constant_value',
+  'value_noise', 'simplex', 'prime_gradient', 'turbulence', 'ridged', 'musgrave', 'ping_pong', 'distorted',
+  'white_noise', 'pink_noise', 'brown_noise', 'blue_noise', 'violet_noise',
+  'directional', 'anisotropic', 'anisotropic_perlin', 'cylinders',
+  'clouds', 'marble', 'wood', 'crack', 'speckle', 'stucci', 'voivoide',
+  'gabor', 'phasor', 'wavelet'
 ])
 
 /**

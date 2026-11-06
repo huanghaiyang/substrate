@@ -37,7 +37,7 @@ void main() {
  * - rot2：二维旋转；
  * - luma：Rec.709 亮度权重；
  * - linearToSRGB / srgbToLinear：精确的分段幂函数色彩空间转换；
- * - gnoise / fbmTiled / fbmBillowTiled / worleyTiled / worleyCell：可平铺噪声族；
+ * - gnoise / fbmTiled / fbmBillowTiled / worleyTiled / worleyTiled4 / worleyCell：可平铺噪声族；
  * - blendMode：与 UI 下拉选项序号一一对应的混合模式实现。
  *
  * 所有噪声都以「周期哈希」实现，因此输出天然无缝，可平铺贴图不会出现接缝。
@@ -157,6 +157,28 @@ vec2 worleyTiled(vec2 uv, float cells, float jitter, float seed) {
     }
   }
   return vec2(f1, f2);
+}
+
+// returns (F1, F2, F3, F4) in cell units, tileable
+vec4 worleyTiled4(vec2 uv, float cells, float jitter, float seed) {
+  float freq = max(1.0, floor(cells + 0.5));
+  vec2 p = uv * freq;
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  float f1 = 8.0, f2 = 8.0, f3 = 8.0, f4 = 8.0;
+  for (int y = -1; y <= 1; y++) {
+    for (int x = -1; x <= 1; x++) {
+      vec2 g = vec2(float(x), float(y));
+      vec2 o = hash2(mod(i + g, vec2(freq)), seed);
+      vec2 r = g + 0.5 + (o - 0.5) * jitter - f;
+      float d = length(r);
+      if (d < f1) { f4 = f3; f3 = f2; f2 = f1; f1 = d; }
+      else if (d < f2) { f4 = f3; f3 = f2; f2 = d; }
+      else if (d < f3) { f4 = f3; f3 = d; }
+      else if (d < f4) { f4 = d; }
+    }
+  }
+  return vec4(f1, f2, f3, f4);
 }
 
 // nearest cell id (for per-cell randomization)
