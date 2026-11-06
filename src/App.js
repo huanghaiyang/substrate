@@ -704,6 +704,8 @@ export default defineComponent({
               <div v-else-if="!projects.length" class="hint">{{ $t('projects.empty') }}</div>
               <div v-for="p in projects" :key="p.file" class="project-row">
                 <button class="pr-open" @click="openProject(p.name)">
+                  <!-- 封面：保存时写入的 192² JPEG；旧工程没有缩略图时显示棋盘格占位 -->
+                  <span class="pr-thumb" :class="{ empty: !p.thumbnail }" :style="p.thumbnail ? { backgroundImage: 'url(' + p.thumbnail + ')' } : null"></span>
                   <span class="pr-name">{{ p.name }}</span>
                   <span class="pr-meta">{{ $t('projects.meta', { res: p.resolution, nodes: p.nodes }) }}</span>
                   <span class="pr-meta">{{ new Date(p.savedAt).toLocaleString() }}</span>

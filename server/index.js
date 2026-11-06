@@ -762,7 +762,9 @@ function setActiveProject(name) {
 /**
  * 扫描 projects/ 下所有 *.json，返回按保存时间倒序的摘要列表。
  * 损坏的工程文件会被跳过（不影响其余条目）。
- * @returns {{name:string,file:string,savedAt:number,resolution:number,nodes:number,bytes:number,active:boolean}[]}
+ * 缩略图由客户端保存时写入（`thumbnail`，192² JPEG data URL）；旧工程没有该字段时返回空串，
+ * 由界面显示占位封面。
+ * @returns {{name:string,file:string,savedAt:number,resolution:number,nodes:number,bytes:number,thumbnail:string,active:boolean}[]}
  */
 function projectList() {
   const out = []
@@ -773,6 +775,9 @@ function projectList() {
       const data = JSON.parse(readFileSync(full, 'utf8'))
       const st = statSync(full)
       const displayName = data.name || file.replace(/\.json$/, '')
+      // 只把合法的 data:image 字符串透传给前端，避免被塞入任意 URL/脚本
+      const thumbnail =
+        typeof data.thumbnail === 'string' && data.thumbnail.startsWith('data:image/') ? data.thumbnail : ''
       out.push({
         name: displayName,
         file,
@@ -780,6 +785,7 @@ function projectList() {
         resolution: data.resolution || 1024,
         nodes: data.graph?.nodes?.length || 0,
         bytes: st.size,
+        thumbnail,
         active: !!activeProject && displayName === activeProject
       })
     } catch (e) {
@@ -805,6 +811,16 @@ function handleProjectSave(req, res) {
       const name = String(data.name || 'Untitled').slice(0, 120)
       const file = `${nameSlug(name, 'untitled')}.json`
       const payload = { ...data, name, savedAt: Date.now() }
+      // 校验封面缩略图：只允许 data:image 前缀且不超过 300 KB 的字符串；
+      // 不合法就删除该字段，避免把任意内容写进工程文件并被列表接口透传
+      const thumb =
+        typeof data.thumbnail === 'string' &&
+        data.thumbnail.startsWith('data:image/') &&
+        data.thumbnail.length <= 300 * 1024
+          ? data.thumbnail
+          : ''
+      if (thumb) payload.thumbnail = thumb
+      else delete payload.thumbnail
       writeFileSync(path.join(PROJECTS_DIR, file), JSON.stringify(payload, null, 2), 'utf8')
       sendJSON(res, 200, { ok: true, file, name, path: path.join('projects', file) })
     })

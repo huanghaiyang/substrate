@@ -23,6 +23,7 @@ import { PAINT_SIZE, createPaintCanvas, rasterizeAll, drawStroke, preloadPattern
 import { BRUSHES, DEFAULT_BRUSH_ID } from './brushes.js'
 import { hexToRgb } from './color.js'
 import { t, trNode, trLabel, trText, localizeDef } from '../i18n/index.js'
+import { previewStore } from './preview.js'
 
 let seq = 0
 // 节点 / 连线 id 生成器：前缀 + 36 进制自增序号 + 4 位随机串，保证同一会话内不重复。
@@ -1336,6 +1337,43 @@ export function serializeProject() {
 }
 
 /**
+ * 从预览数据生成工程缩略图（JPEG data URL），供「打开材质」面板显示封面。
+ *
+ * 取 basecolor 通道（没有则退回 height / emissive），它是引擎最近一次求值回读的 384² 缓冲。
+ * 注意该缓冲原点在左下角（WebGL 约定），必须先按行倒序翻转再缩放到 192²，
+ * 否则缩略图会上下颠倒。没有可用预览时返回 null，面板会显示占位底色。
+ *
+ * @param {number} [size=192] 输出缩略图的边长（JPEG 0.8 质量，约 5~15 KB）
+ * @returns {string|null} `data:image/jpeg;base64,...`；无预览数据时返回 null
+ */
+function projectThumbnail(size = 192) {
+  // 非浏览器环境（例如 Node 端的静态检查）没有 canvas，直接跳过
+  if (typeof document === 'undefined') return null
+  const maps = previewStore.maps
+  const m = maps && (maps.basecolor || maps.height || maps.emissive)
+  if (!m || !m.data) return null
+  const src = document.createElement('canvas')
+  src.width = m.width
+  src.height = m.height
+  const sctx = src.getContext('2d')
+  const img = sctx.createImageData(m.width, m.height)
+  const row = m.width * 4
+  for (let y = 0; y < m.height; y++) {
+    const srcRow = (m.height - 1 - y) * row
+    img.data.set(m.data.subarray(srcRow, srcRow + row), y * row)
+  }
+  sctx.putImageData(img, 0, 0)
+  const out = document.createElement('canvas')
+  out.width = size
+  out.height = size
+  const ctx = out.getContext('2d')
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
+  ctx.drawImage(src, 0, 0, size, size)
+  return out.toDataURL('image/jpeg', 0.8)
+}
+
+/**
  * 把工程 POST 到服务端保存。
  * @param {string} [name] 新工程名（省略则沿用当前名称）
  * @returns {Promise<Object>} 服务端返回的 JSON
@@ -1347,6 +1385,9 @@ export async function saveProject(name) {
     state.projectName = name
     payload.name = name
   }
+  // 附带封面缩略图：服务端只做基本的 data:image 校验，列表接口会原样返回
+  const thumb = projectThumbnail()
+  if (thumb) payload.thumbnail = thumb
   const res = await fetch('/api/projects/save', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

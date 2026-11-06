@@ -2280,7 +2280,8 @@ code {
 .pr-open {
   flex: 1 1 auto;
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr);
+  /* 第一列 56px 封面，后三列依次为名称 / 分辨率与节点数 / 保存时间 */
+  grid-template-columns: 56px minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr);
   gap: 10px;
   align-items: center;
   padding: 10px 12px;
@@ -2290,6 +2291,27 @@ code {
   cursor: pointer;
   color: inherit;
   font: inherit;
+}
+/* 工程封面缩略图：56px 正方形，cover 裁切；
+   旧工程没有 thumbnail 时用棋盘格表示「无封面」，而不是留一个黑块 */
+.pr-thumb {
+  width: 56px;
+  height: 56px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background-color: #0e1014;
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+.pr-thumb.empty {
+  background-image:
+    linear-gradient(45deg, #1b1f25 25%, transparent 25%),
+    linear-gradient(-45deg, #1b1f25 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #1b1f25 75%),
+    linear-gradient(-45deg, transparent 75%, #1b1f25 75%);
+  background-size: 12px 12px;
+  background-position: 0 0, 0 6px, 6px -6px, -6px 0;
 }
 .pr-open:hover {
   background: rgba(242, 165, 65, 0.07);
