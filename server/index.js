@@ -16,6 +16,7 @@
 //   GET  /api/projects                   工程列表（含 active 标记）
 //   POST /api/projects/active            设置当前打开的工程
 //   POST /api/projects/save             保存工程（body 为工程 JSON）
+//   POST /api/projects/thumbnail        为旧工程补写封面缩略图（静默生成后回写）
 //   GET  /api/projects/load?name=        读取工程 JSON
 //   POST /api/projects/delete            删除工程（进回收站，当前打开的可被 force 覆盖）
 //   POST /api/export                     导出材质包（base64 文件数组 + manifest + readme）
@@ -796,6 +797,71 @@ function projectList() {
 }
 
 /**
+ * 找出某个工程对应的磁盘文件。
+ * 优先使用客户端传来的 file 名（列表接口返回的精确文件名），做 safeJoin 防止路径穿越；
+ * 没有或不匹配时按工程显示名扫描所有 *.json，返回第一个名字匹配的文件。
+ * @param {string} file 列表接口返回的文件名（可空）
+ * @param {string} name 工程显示名（可空）
+ * @returns {string|null} 绝对路径；找不到返回 null
+ */
+function resolveProjectFile(file, name) {
+  if (file && file.endsWith('.json')) {
+    const full = safeJoin(PROJECTS_DIR, file)
+    if (full && existsSync(full)) return full
+  }
+  if (!name) return null
+  for (const entry of readdirSync(PROJECTS_DIR)) {
+    if (!entry.endsWith('.json')) continue
+    try {
+      const full = path.join(PROJECTS_DIR, entry)
+      const data = JSON.parse(readFileSync(full, 'utf8'))
+      if ((data.name || entry.replace(/\.json$/, '')) === name) return full
+    } catch (e) {
+      /* 跳过损坏文件 */
+    }
+  }
+  return null
+}
+
+/**
+ * POST /api/projects/thumbnail：为已存在的工程补写封面缩略图。
+ *
+ * 由「打开材质」面板的静默生成流程调用：客户端用临时引擎渲染出封面后回写，
+ * 服务端只负责校验与落盘，下次列表面板即可直接读取。
+ * 请求体：{ name, file?, thumbnail }；thumbnail 必须是 data:image 前缀且 ≤ 300 KB。
+ * 响应 200 { ok:true, file }；缩略图不合法 400 INVALID_THUMBNAIL；找不到工程 404 NOT_FOUND。
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @returns {void}
+ */
+function handleProjectThumbnail(req, res) {
+  readBody(req, 1024 * 1024)
+    .then((buf) => {
+      const data = JSON.parse(buf.toString('utf8') || '{}')
+      const thumb = data.thumbnail
+      if (typeof thumb !== 'string' || !thumb.startsWith('data:image/') || thumb.length > 300 * 1024) {
+        return sendJSON(res, 400, {
+          ok: false,
+          error: { code: 'INVALID_THUMBNAIL', message: 'thumbnail must be a data:image URL under 300 KB' }
+        })
+      }
+      const full = resolveProjectFile(data.file, data.name ? String(data.name).slice(0, 120) : '')
+      if (!full) {
+        return sendJSON(res, 404, {
+          ok: false,
+          error: { code: 'NOT_FOUND', message: 'Project not found: ' + (data.file || data.name || '') }
+        })
+      }
+      // 只改动 thumbnail 一个字段，其余内容（包括 savedAt）保持原样
+      const project = JSON.parse(readFileSync(full, 'utf8'))
+      project.thumbnail = thumb
+      writeFileSync(full, JSON.stringify(project, null, 2), 'utf8')
+      sendJSON(res, 200, { ok: true, file: path.basename(full) })
+    })
+    .catch((e) => sendJSON(res, 400, { ok: false, error: { code: 'THUMBNAIL_FAILED', message: String(e.message || e) } }))
+}
+
+/**
  * POST /api/projects/save：把工程 JSON 写入 projects/<slug>.json。
  * 请求体：工程对象，必须含 graph；name 截断到 120 字符；服务端补 savedAt。
  * 响应 200 { ok:true, file, name, path }；非法负载 400 { ok:false, error }。
@@ -1543,6 +1609,7 @@ const server = http.createServer((req, res) => {
       .catch((e) => sendJSON(res, 400, { ok: false, error: { code: 'INVALID_ARGUMENT', message: String(e.message || e) } }))
   }
   if (p === '/api/projects/save' && method === 'POST') return handleProjectSave(req, res)
+  if (p === '/api/projects/thumbnail' && method === 'POST') return handleProjectThumbnail(req, res)
   if (p === '/api/projects/load' && method === 'GET') return handleProjectLoad(res, url.searchParams.get('name') || '')
   if (p === '/api/projects/delete' && method === 'POST') {
     return readBody(req, 1024 * 1024)

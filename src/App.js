@@ -42,6 +42,7 @@ import {
   defOf
 } from './engine/store.js'
 import { buildPreview } from './engine/preview.js'
+import { fillMissingThumbnails, cancelThumbnails } from './engine/project-thumbs.js'
 import { RESOLUTIONS, PROXIES } from './ui/theme.js'
 import { locale, locales, setLocale, t, trText } from './i18n/index.js'
 import { MANUAL_SECTIONS, MANUAL_TAGS, GLOSSARY } from './manual.js'
@@ -203,7 +204,13 @@ export default defineComponent({
       }
     }
 
-    /** 打开工程列表弹窗并拉取服务端素材清单；拉取失败时展示空列表而不是让弹窗卡在加载态 */
+    /**
+     * 打开「打开材质」面板并拉取工程列表；拉取失败时展示空列表而不是让弹窗卡在加载态。
+     *
+     * 旧工程没有封面缩略图（thumbnail 为空）：列表显示后立刻启动静默生成——
+     * 临时引擎会逐个按小分辨率求值、生成材质球封面并回写服务端，
+     * 每完成一个就通过回调把缩略图补进对应列表项，用户无需任何操作即可看到封面。
+     */
     async function openProjects() {
       showProjects.value = true
       loadingProjects.value = true
@@ -213,7 +220,17 @@ export default defineComponent({
         projects.value = []
       }
       loadingProjects.value = false
+      // 后台补齐缺失封面：逐个替换列表项以触发响应式更新
+      fillMissingThumbnails(projects.value, (file, patch) => {
+        const index = projects.value.findIndex((p) => p.file === file)
+        if (index >= 0) projects.value[index] = { ...projects.value[index], ...patch }
+      })
     }
+
+    // 面板关闭时取消后台生成，避免用户继续编辑材质时还有一台引擎在跑 GPU 求值
+    watch(showProjects, (open) => {
+      if (!open) cancelThumbnails()
+    })
 
     /**
      * 把工程列表里的某项移入回收站（不强制删除）。
@@ -704,8 +721,12 @@ export default defineComponent({
               <div v-else-if="!projects.length" class="hint">{{ $t('projects.empty') }}</div>
               <div v-for="p in projects" :key="p.file" class="project-row">
                 <button class="pr-open" @click="openProject(p.name)">
-                  <!-- 封面：保存时写入的 192² JPEG；旧工程没有缩略图时显示棋盘格占位 -->
-                  <span class="pr-thumb" :class="{ empty: !p.thumbnail }" :style="p.thumbnail ? { backgroundImage: 'url(' + p.thumbnail + ')' } : null"></span>
+                  <!-- 封面：保存时写入的 192² JPEG；旧工程先显示棋盘格，静默生成完成后自动补上 -->
+                  <span
+                    class="pr-thumb"
+                    :class="{ empty: !p.thumbnail, pending: p.pending }"
+                    :style="p.thumbnail ? { backgroundImage: 'url(' + p.thumbnail + ')' } : null"
+                  ></span>
                   <span class="pr-name">{{ p.name }}</span>
                   <span class="pr-meta">{{ $t('projects.meta', { res: p.resolution, nodes: p.nodes }) }}</span>
                   <span class="pr-meta">{{ new Date(p.savedAt).toLocaleString() }}</span>

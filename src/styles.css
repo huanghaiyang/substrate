@@ -2313,6 +2313,19 @@ code {
   background-size: 12px 12px;
   background-position: 0 0, 0 6px, 6px -6px, -6px 0;
 }
+/* 静默生成中：棋盘格呼吸闪烁，提示封面正在后台渲染 */
+.pr-thumb.pending {
+  animation: thumb-pulse 1.2s ease-in-out infinite;
+}
+@keyframes thumb-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
 .pr-open:hover {
   background: rgba(242, 165, 65, 0.07);
 }
