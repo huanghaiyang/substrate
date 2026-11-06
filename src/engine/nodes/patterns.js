@@ -518,6 +518,8 @@ export const patternDefs = [
    * 参数：
    *  - style：火焰形态（Torch 火炬 / Campfire 篝火 / Gas Jet 喷枪 / Fireball 火球）；
    *  - tongues：横向火舌数量（1~8），仅柱状样式有效；
+   *  - spread：火舌横向扩展（0~1）。0 保持竖直收窄的水滴形，越大则火舌随高度
+   *    向两侧张开并左右舔舐，形成横向铺开的火舌而不再是一根窄锥；
    *  - scale：湍流噪声频率（1~12）；
    *  - detail：噪声叠加层数（1~6），越高细节越碎；
    *  - turbulence：横向摆动与侵蚀强度（0~1）；
@@ -541,6 +543,7 @@ export const patternDefs = [
     params: [
       { key: 'style', label: 'Style', type: 'select', options: ['Torch', 'Campfire', 'Gas Jet', 'Fireball'], def: 0 },
       { key: 'tongues', label: 'Tongues', type: 'int', min: 1, max: 8, def: 3 },
+      { key: 'spread', label: 'Spread', type: 'float', min: 0, max: 1, step: 0.01, def: 0.4 },
       { key: 'scale', label: 'Scale', type: 'float', min: 1, max: 12, step: 1, def: 5 },
       { key: 'detail', label: 'Detail', type: 'int', min: 1, max: 6, def: 4 },
       { key: 'turbulence', label: 'Turbulence', type: 'float', min: 0, max: 1, step: 0.01, def: 0.55 },
@@ -589,9 +592,19 @@ export const patternDefs = [
           float w = baseW * pow(max(1.0 - th, 0.0), powW);
           w *= 0.75 + 0.55 * rib;
 
+          // Horizontal spread: widen the body, fan it outwards with height and let each
+          // tongue lick sideways near the tip, so the fire spreads horizontally instead
+          // of staying a narrow upright cone.
+          float spread = sat(u_spread);
+          float fanT = sat(th);
+          w *= 1.0 + spread * 1.2;
+          w *= 1.0 + spread * 1.9 * fanT;
+          x += spread * 0.30 * sin(uv.x * float(u_tongues) * TAU + rib * 3.0) * fanT * fanT;
+
           // Tongues scallop the outline instead of splitting it into thin needles.
-          float lobes = 0.78 + 0.22 * cos(uv.x * float(u_tongues) * TAU + rib * 6.2831853);
-          w *= mix(1.0, lobes, sat(1.0 - th * 1.5));
+          float lobeAmp = 0.22 + 0.30 * spread;
+          float lobes = (1.0 - lobeAmp) + lobeAmp * cos(uv.x * float(u_tongues) * TAU + rib * 6.2831853);
+          w *= mix(1.0, lobes, sat(1.0 - th * 1.1 + spread * 0.7));
           w = max(w, 0.015);
 
           // Softness controls the lateral falloff exponent: larger = wider feathered rim.
@@ -620,22 +633,34 @@ export const patternDefs = [
   /**
    * 火焰噪声图（灰度数据）。
    *
-   * 为什么之前的版本「不像火」：它只是各向同性的 fbm 云团——
+   * 定位：它是「火焰贴图」的灰度版本，参数与火焰贴图对齐——style / tongues / spread /
+   * scale / detail / turbulence / rise / softness / intensity 的含义与取值范围完全相同，
+   * 只是把三段色带换成了单通道噪声，并额外保留三个噪声专用参数（stretch / warp / contrast）
+   * 与火焰包络开关 mask。因此两个节点可以互换着调，改参数时不必重新学习。
+   *
+   * 为什么早期的版本「不像火」：它只是各向同性的 fbm 云团——
    *  - 横向与纵向频率相同，得到的是圆滚滚的斑块，而火焰纹理必须是纵向拉长的丝缕；
    *  - 所谓 warp 只是把两套噪声线性混合，并没有真正扭曲采样坐标，所以没有卷曲的涡流；
    *  - 输出保留了 fbm 的灰色中间调，看起来像雾，而不是有明确边缘的火舌；
-   *  - 默认没有火焰包络，整张图均匀铺满噪声，缺少「下密上疏」的方向感。
+   *  - 没有火焰包络，整张图均匀铺满噪声，缺少「下密上疏」的方向感。
    *
    * 现在的做法：
    *  1. 各向异性采样：横向格数 fy 倍于纵向（由 stretch 控制），特征是竖长的丝缕；
    *  2. 真正的域扭曲：用两个周期噪声场位移采样坐标，得到上升热气特有的翻滚涡流；
    *  3. smoothstep 锐化：把中间调压掉，留下清晰的火舌边缘，再叠 contrast；
-   *  4. 可选火焰包络：横向用 cos 衰减（首尾仍相接），纵向自下而上渐隐，
-   *     mask = 0 时保持完全可平铺的纯噪声，适合做扭曲图；调高后直接呈现火焰形状。
+   *  4. 与火焰贴图相同的包络：水滴形宽度、火舌扇贝、横向扩展、按高度渐隐；
+   *     mask = 0 时退化为完全可平铺的纯噪声，适合做扭曲图；调高后直接呈现火焰形状。
    *
    * 参数：
-   *  - scale：基础频率（2~32）；
+   *  - style：火焰形态（Torch 火炬 / Campfire 篝火 / Gas Jet 喷枪 / Fireball 火球）；
+   *  - tongues：横向火舌数量（1~8）；
+   *  - spread：火舌横向扩展（0~1），含义与火焰贴图一致；
+   *  - scale：基础频率（1~12）；
    *  - detail：叠加层数（1~6）；
+   *  - turbulence：横向摆动强度（0~1）；
+   *  - rise：噪声纵向抬升（0~2）；
+   *  - softness：火焰边缘羽化宽度（0.02~0.6）；
+   *  - intensity：整体输出增益（0.2~2）；
    *  - stretch：纵向拉伸倍数（1~4），越大丝缕越细长；
    *  - warp：域扭曲强度（0~1），越大涡流越明显；
    *  - contrast：对比度（0.1~4）；
@@ -647,11 +672,18 @@ export const patternDefs = [
     name: 'Flame Noise',
     category: 'Noise',
     space: 'data',
-    desc: 'Anisotropic, domain-warped heat turbulence for fire distortion and emission breakup. Raise Flame Mask to reveal a flame silhouette.',
+    desc: 'Grayscale twin of the Flame Texture: same shape controls plus domain-warped heat turbulence. Turn Flame Mask down for tileable distortion noise.',
     inputs: [],
     params: [
-      { key: 'scale', label: 'Scale', type: 'int', min: 2, max: 32, def: 6 },
-      { key: 'detail', label: 'Detail', type: 'int', min: 1, max: 6, def: 5 },
+      { key: 'style', label: 'Style', type: 'select', options: ['Torch', 'Campfire', 'Gas Jet', 'Fireball'], def: 0 },
+      { key: 'tongues', label: 'Tongues', type: 'int', min: 1, max: 8, def: 3 },
+      { key: 'spread', label: 'Spread', type: 'float', min: 0, max: 1, step: 0.01, def: 0.4 },
+      { key: 'scale', label: 'Scale', type: 'int', min: 1, max: 12, def: 5 },
+      { key: 'detail', label: 'Detail', type: 'int', min: 1, max: 6, def: 4 },
+      { key: 'turbulence', label: 'Turbulence', type: 'float', min: 0, max: 1, step: 0.01, def: 0.55 },
+      { key: 'rise', label: 'Rise', type: 'float', min: 0, max: 2, step: 0.01, def: 0.4 },
+      { key: 'softness', label: 'Softness', type: 'float', min: 0.02, max: 0.6, step: 0.01, def: 0.2 },
+      { key: 'intensity', label: 'Intensity', type: 'float', min: 0.2, max: 2, step: 0.01, def: 1 },
       { key: 'stretch', label: 'Stretch', type: 'int', min: 1, max: 4, def: 2 },
       { key: 'warp', label: 'Warp', type: 'float', min: 0, max: 1, step: 0.01, def: 0.55 },
       { key: 'contrast', label: 'Contrast', type: 'float', min: 0.1, max: 4, step: 0.01, def: 1.3 },
@@ -661,7 +693,7 @@ export const patternDefs = [
     body: /* glsl */ `
       vec4 nodeColor(vec2 uv) {
         float t = sat(uv.y);
-        float freq = max(2.0, float(u_scale));
+        float freq = max(1.0, float(u_scale));
         int oct = u_detail;
         float stretch = float(max(1, u_stretch));
 
@@ -669,7 +701,8 @@ export const patternDefs = [
         // so features become tall filaments instead of round blobs.
         float fx = max(2.0, floor(freq * 1.5 + 0.5));
         float fy = max(1.0, floor(fx / stretch + 0.5));
-        vec2 q = vec2(uv.x, uv.y * (fy / fx));
+        // Rise: shift the lookup upwards so the heat pattern appears to drift up.
+        vec2 q = vec2(uv.x, uv.y * (fy / fx) - u_rise * 0.15);
 
         // Mild, low-frequency domain warp: enough to curl the filaments,
         // not enough to smear them into marble.
@@ -681,17 +714,53 @@ export const patternDefs = [
         float fil = fbmTiled(qw, fx, oct, 0.55, 2.0, u_seed);
         float turb = sat((smoothstep(0.25, 0.8, fil) - 0.5) * u_contrast + 0.5);
 
-        if (u_mask <= 0.0) return vec4(vec3(turb), 1.0);
+        if (u_mask <= 0.0) return vec4(vec3(sat(turb * u_intensity)), 1.0);
 
-        // Flame body: a broad teardrop that dissolves at the tip, carved by the filaments.
-        float x = (uv.x - 0.5) * 2.0 + (fil - 0.5) * u_warp * 0.9 * mix(0.15, 1.0, t);
-        float w = max(0.55 * pow(max(1.0 - t, 0.0), 0.65) * (0.75 + 0.55 * fil), 0.02);
-        float body = pow(sat(1.0 - abs(x) / w), 1.15);
-        body *= sat(1.0 - pow(t, 0.95));
-        body *= clamp(0.15 + 1.3 * fil, 0.1, 1.3);
+        float body;
+        if (u_style == 3) {
+          // Fireball: same elliptical falloff as the Flame Texture node.
+          vec2 p = vec2((uv.x - 0.5) * 2.0, (t - 0.45) * 1.6);
+          p += (vec2(wa, fil) - 0.5) * 0.6 * u_turbulence;
+          float rad = 0.74 - 0.12 * (fil - 0.5) - 0.08 * (wa - 0.5);
+          body = pow(sat(1.0 - length(p) / max(rad, 1e-3)), 1.4);
+          body *= clamp(0.35 + 1.1 * fil, 0.2, 1.3);
+        } else {
+          // Per-style width, taper and height, identical to the Flame Texture node.
+          float baseW;
+          float powW;
+          float height;
+          if (u_style == 0) { baseW = 0.62; powW = 0.65; height = 1.0; }
+          else if (u_style == 1) { baseW = 0.85; powW = 0.55; height = 0.78; }
+          else { baseW = 0.34; powW = 1.0; height = 1.15; }
+
+          float x = (uv.x - 0.5) * 2.0;
+          x += (wa - 0.5) * u_turbulence * mix(0.12, 0.70, t);
+
+          float th = sat(t / height);
+          float w = baseW * pow(max(1.0 - th, 0.0), powW);
+          // The noise field carves the silhouette instead of a low-frequency rib.
+          w *= 0.75 + 0.55 * fil;
+
+          // Horizontal spread: same three layers as the Flame Texture node.
+          float spread = sat(u_spread);
+          float fanT = sat(th);
+          w *= 1.0 + spread * 1.2;
+          w *= 1.0 + spread * 1.9 * fanT;
+          x += spread * 0.30 * sin(uv.x * float(u_tongues) * TAU + fil * 3.0) * fanT * fanT;
+
+          float lobeAmp = 0.22 + 0.30 * spread;
+          float lobes = (1.0 - lobeAmp) + lobeAmp * cos(uv.x * float(u_tongues) * TAU + fil * 6.2831853);
+          w *= mix(1.0, lobes, sat(1.0 - th * 1.1 + spread * 0.7));
+          w = max(w, 0.015);
+
+          float edgePow = mix(2.2, 0.9, sat(u_softness / 0.6));
+          body = pow(sat(1.0 - abs(x) / w), edgePow);
+          body *= sat(1.0 - pow(th, 0.9));
+          body *= clamp(0.15 + 1.3 * fil, 0.1, 1.3);
+        }
+
         float fire = sat((body - 0.3) * u_contrast + 0.3);
-
-        return vec4(vec3(mix(turb, fire, u_mask)), 1.0);
+        return vec4(vec3(sat(mix(turb, fire, u_mask) * u_intensity)), 1.0);
       }`
   }
 ]

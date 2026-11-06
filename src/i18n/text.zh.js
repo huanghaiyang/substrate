@@ -251,6 +251,8 @@ export const ZH_LABEL = {
   Sides: '边数',
   Size: '尺寸',
   Softness: '柔化',
+  Spread: '横向扩展',
+  Style: '样式',
   Tongues: '火舌数',
   Detail: '细节层数',
   Turbulence: '湍流强度',
